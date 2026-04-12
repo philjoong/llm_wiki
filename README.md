@@ -185,7 +185,7 @@ Not in the original. The system **automatically analyzes graph structure** to su
 
 ### 7. Optimized Query Retrieval Pipeline
 
-The original describes a simple query where the LLM reads relevant pages. We built a **multi-lane retrieval pipeline** with optional vector search and budget control:
+The original describes a simple query where the LLM reads relevant pages. We built a **multi-phase retrieval pipeline** with optional vector search and budget control:
 
 ```
 Phase 1: Tokenized Search

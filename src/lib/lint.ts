@@ -199,10 +199,14 @@ export async function runSemanticLint(
 
   activity.updateItem(activityId, { detail: "Running LLM semantic analysis..." })
 
+  // For auto-mode language detection, sample the concatenated summaries
+  // so non-English wikis get a matching language directive.
+  const summarySample = summaries.join("\n").slice(0, 2000)
+
   const prompt = [
     "You are a wiki quality analyst. Review the following wiki page summaries and identify issues.",
     "",
-    buildLanguageDirective(""),
+    buildLanguageDirective(summarySample),
     "",
     "For each issue, output exactly this format:",
     "",

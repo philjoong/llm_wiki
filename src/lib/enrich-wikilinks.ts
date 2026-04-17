@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "@/commands/fs"
 import { streamChat } from "./llm-client"
 import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
-import { LANGUAGE_RULE } from "./ingest"
+import { buildLanguageDirective } from "./output-language"
 import { normalizePath } from "@/lib/path-utils"
 
 /**
@@ -34,7 +34,7 @@ export async function enrichWithWikilinks(
           "You are a wiki cross-referencing assistant.",
           "Your ONLY job: add [[wikilinks]] to the text where entities or concepts from the wiki index are mentioned.",
           "",
-          LANGUAGE_RULE,
+          buildLanguageDirective(content),
           "",
           "Rules:",
           "- Return the COMPLETE text with [[wikilinks]] added.",

@@ -7,7 +7,7 @@ import { useActivityStore } from "@/stores/activity-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
 import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
-import { buildLanguageDirective, getOutputLanguage } from "@/lib/output-language"
+import { buildLanguageDirective } from "@/lib/output-language"
 
 const FILE_BLOCK_REGEX = /---FILE:\s*([^\n-]+?)\s*---\n([\s\S]*?)---END FILE---/g
 
@@ -18,9 +18,6 @@ const FILE_BLOCK_REGEX = /---FILE:\s*([^\n-]+?)\s*---\n([\s\S]*?)---END FILE---/
 export function languageRule(sourceContent: string = ""): string {
   return buildLanguageDirective(sourceContent)
 }
-
-/** @deprecated Use languageRule() instead — kept for backwards compat with enrich-wikilinks */
-export const LANGUAGE_RULE = buildLanguageDirective("")
 
 /**
  * Auto-ingest: reads source → LLM analyzes → LLM writes wiki pages, all in one go.
@@ -601,10 +598,18 @@ export async function executeIngestWrites(
 
   let accumulated = ""
 
+  // In auto mode, fall back to detecting language from the chat history
+  // (user's discussion messages) rather than the empty string, which would
+  // default to English regardless of the source content.
+  const historyText = conversationHistory
+    .map((m) => m.content)
+    .join("\n")
+    .slice(0, 2000)
+
   const systemPrompt = [
     "You are a wiki generation assistant. Your task is to produce structured wiki file contents.",
     "",
-    languageRule(""),
+    languageRule(historyText),
     schema ? `## Wiki Schema\n${schema}` : "",
   ]
     .filter(Boolean)

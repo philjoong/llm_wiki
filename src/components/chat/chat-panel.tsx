@@ -168,6 +168,7 @@ export function ChatPanel() {
       // Build system prompt with wiki context using graph-enhanced retrieval
       const systemMessages: LLMMessage[] = []
       let queryRefs: { title: string; path: string }[] = []
+      let langReminder: string | undefined
       if (project) {
         const pp = normalizePath(project.path)
         const dataVersion = useWikiStore.getState().dataVersion
@@ -317,9 +318,9 @@ export function ChatPanel() {
           ].filter(Boolean).join("\n"),
         })
 
-        // Stash language reminder to inject right before the user's current message
-        const langReminder = buildLanguageReminder(text)
-        ;(systemMessages as unknown as { __langReminder?: string }).__langReminder = langReminder
+        // Reminder injected later, right before the user's current message
+        // (after history so it's the last system instruction the LLM sees).
+        langReminder = buildLanguageReminder(text)
 
         lastQueryPages = relevantPages.map((p) => ({ title: p.title, path: p.path }))
         queryRefs = [...lastQueryPages]
@@ -332,7 +333,6 @@ export function ChatPanel() {
         .slice(-maxHistoryMessages)
 
       // Inject language reminder as system message between history and final user query
-      const langReminder = (systemMessages as unknown as { __langReminder?: string }).__langReminder
       const historyMessages = chatMessagesToLLM(activeConvMessages)
       const llmMessages = langReminder && historyMessages.length > 0
         ? [

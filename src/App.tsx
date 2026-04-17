@@ -162,11 +162,11 @@ function App() {
     }
   }
 
-  function handleSwitchProject() {
-    // Clear all per-project state so the welcome screen doesn't leak old data
-    import("@/lib/reset-project-state").then(({ resetProjectState }) => {
-      resetProjectState()
-    })
+  async function handleSwitchProject() {
+    // Clear all per-project state BEFORE flipping back to the welcome screen
+    // so old data cannot leak in via any async render pass.
+    const { resetProjectState } = await import("@/lib/reset-project-state")
+    resetProjectState()
     setProject(null)
     setFileTree([])
     setSelectedFile(null)

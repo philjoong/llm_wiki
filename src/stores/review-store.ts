@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { normalizeReviewTitle } from "@/lib/review-utils"
 
 export interface ReviewOption {
   label: string
@@ -49,24 +50,24 @@ export const useReviewStore = create<ReviewState>((set) => ({
 
   addItems: (items) =>
     set((state) => {
-      // De-dupe against pending items with same type + normalized title
-      // Merge affectedPages / searchQueries / sourcePath instead of creating duplicates
+      // De-dupe against pending items with same type + normalized title (all
+      // 5 types — bulk ingest can re-surface the same contradiction/confirm
+      // from multiple files).
+      // Merge affectedPages / searchQueries / sourcePath instead of duplicating.
       const result = [...state.items]
-      const keyFor = (t: string, title: string) => `${t}::${title.trim().toLowerCase()}`
+      const keyFor = (t: string, title: string) => `${t}::${normalizeReviewTitle(title)}`
 
       // Build index of existing pending items for fast lookup
       const pendingIndex = new Map<string, number>()
       result.forEach((it, idx) => {
-        if (!it.resolved && (it.type === "missing-page" || it.type === "duplicate" || it.type === "suggestion")) {
+        if (!it.resolved) {
           pendingIndex.set(keyFor(it.type, it.title), idx)
         }
       })
 
       for (const incoming of items) {
         const k = keyFor(incoming.type, incoming.title)
-        const existingIdx = (incoming.type === "missing-page" || incoming.type === "duplicate" || incoming.type === "suggestion")
-          ? pendingIndex.get(k)
-          : undefined
+        const existingIdx = pendingIndex.get(k)
 
         if (existingIdx !== undefined) {
           // Merge into existing
@@ -88,9 +89,7 @@ export const useReviewStore = create<ReviewState>((set) => ({
             createdAt: Date.now(),
           }
           result.push(newItem)
-          if (incoming.type === "missing-page" || incoming.type === "duplicate" || incoming.type === "suggestion") {
-            pendingIndex.set(k, result.length - 1)
-          }
+          pendingIndex.set(k, result.length - 1)
         }
       }
 

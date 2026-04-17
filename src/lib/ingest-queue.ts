@@ -25,6 +25,9 @@ let lastWrittenFiles: string[] = []  // track files written by current ingest fo
 // Track whether any task has been processed since the last drain.
 // Prevents the sweep from running on every idle/no-op call.
 let processedSinceDrain = false
+// Abort controller for the review-sweep LLM call so switching projects
+// cancels a long-running judgment instead of burning tokens.
+let sweepAbortController: AbortController | null = null
 
 // ── Persistence ───────────────────────────────────────────────────────────
 
@@ -209,10 +212,15 @@ export function clearQueueState(): void {
   if (currentAbortController) {
     currentAbortController.abort()
   }
+  // Abort any in-progress review sweep LLM call
+  if (sweepAbortController) {
+    sweepAbortController.abort()
+  }
   queue = []
   processing = false
   currentProjectPath = ""
   currentAbortController = null
+  sweepAbortController = null
   lastWrittenFiles = []
   processedSinceDrain = false
 }
@@ -265,11 +273,18 @@ async function onQueueDrained(projectPath: string): Promise<void> {
   if (!processedSinceDrain) return
   processedSinceDrain = false
 
+  sweepAbortController = new AbortController()
+  const signal = sweepAbortController.signal
+
   try {
     const { sweepResolvedReviews } = await import("@/lib/sweep-reviews")
-    await sweepResolvedReviews(projectPath)
+    await sweepResolvedReviews(projectPath, signal)
   } catch (err) {
     console.error("[Ingest Queue] Failed to load sweep-reviews:", err)
+  } finally {
+    if (sweepAbortController && sweepAbortController.signal === signal) {
+      sweepAbortController = null
+    }
   }
 }
 

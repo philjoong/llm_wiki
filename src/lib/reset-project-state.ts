@@ -38,10 +38,14 @@ export function resetProjectState() {
   // Ingest queue
   import("@/lib/ingest-queue").then(({ clearQueueState }) => {
     clearQueueState()
-  }).catch(() => {})
+  }).catch((err) => {
+    console.warn("[Reset Project State] Failed to clear ingest queue:", err)
+  })
 
   // Graph relevance cache
   import("@/lib/graph-relevance").then(({ clearGraphCache }) => {
     clearGraphCache()
-  }).catch(() => {})
+  }).catch((err) => {
+    console.warn("[Reset Project State] Failed to clear graph cache:", err)
+  })
 }

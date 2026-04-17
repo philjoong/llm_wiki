@@ -197,6 +197,22 @@ export function getQueueSummary(): { pending: number; processing: number; failed
   }
 }
 
+/**
+ * Clear all in-memory queue state without touching disk.
+ * Called when switching projects to prevent cross-project contamination.
+ */
+export function clearQueueState(): void {
+  // Abort any in-progress ingest
+  if (currentAbortController) {
+    currentAbortController.abort()
+  }
+  queue = []
+  processing = false
+  currentProjectPath = ""
+  currentAbortController = null
+  lastWrittenFiles = []
+}
+
 // ── Restore on startup ───────────────────────────────────────────────────
 
 /**
@@ -205,7 +221,13 @@ export function getQueueSummary(): { pending: number; processing: number; failed
  */
 export async function restoreQueue(projectPath: string): Promise<void> {
   const pp = normalizePath(projectPath)
+  // Always reset in-memory state FIRST to prevent cross-project contamination
+  queue = []
+  processing = false
+  currentAbortController = null
+  lastWrittenFiles = []
   currentProjectPath = pp
+
   const saved = await loadQueue(pp)
 
   if (saved.length === 0) return

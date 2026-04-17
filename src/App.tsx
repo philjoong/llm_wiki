@@ -72,9 +72,16 @@ function App() {
   }, [])
 
   async function handleProjectOpened(proj: WikiProject) {
+    // Clear all per-project state BEFORE loading new project data
+    // to prevent cross-project contamination
+    const { resetProjectState } = await import("@/lib/reset-project-state")
+    resetProjectState()
+
     setProject(proj)
     setSelectedFile(null)
     setActiveView("wiki")
+    // Bump data version so any cached graphs/views invalidate
+    useWikiStore.getState().bumpDataVersion()
     await saveLastProject(proj)
 
     // Restore ingest queue (resume interrupted tasks)
@@ -156,6 +163,10 @@ function App() {
   }
 
   function handleSwitchProject() {
+    // Clear all per-project state so the welcome screen doesn't leak old data
+    import("@/lib/reset-project-state").then(({ resetProjectState }) => {
+      resetProjectState()
+    })
     setProject(null)
     setFileTree([])
     setSelectedFile(null)

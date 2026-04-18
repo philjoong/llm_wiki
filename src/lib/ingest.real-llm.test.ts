@@ -23,6 +23,7 @@ import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useChatStore } from "@/stores/chat-store"
 import { detectLanguage } from "./detect-language"
+import { materializeRealContent } from "@/test-helpers/real-content"
 
 // ── Provider / model configuration ──────────────────────────────────────────
 const LLM_PROVIDER = (process.env.LLM_PROVIDER ?? "ollama") as "ollama" | "minimax"
@@ -33,10 +34,10 @@ const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-M2.7-highspeed"
 const MINIMAX_ENDPOINT = process.env.MINIMAX_ENDPOINT ?? "https://api.minimaxi.com/v1"
 const ENABLED = process.env.RUN_LLM_TESTS === "1"
 
-// Real content documents are checked into git under src/test-helpers/
-// (NOT tests/fixtures/ — that path is gitignored) so other developers can
-// reproduce these tests without regenerating content.
-const REAL_CONTENT_ROOT = path.join(process.cwd(), "src", "test-helpers", "real-content")
+// Real content docs live as TS string constants in src/test-helpers/
+// (tracked) and are materialized to this gitignored directory at test
+// startup so humans can inspect the actual paper text while debugging.
+const REAL_CONTENT_ROOT = path.join(process.cwd(), "tests", "fixtures", "real-content")
 
 // Generous timeout to accommodate peak-hour API latency.
 // Two LLM calls per ingest × 1-4 min each + IO overhead.
@@ -159,11 +160,14 @@ const scenarios: RealIngestScenario[] = [
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!ENABLED) return
   if (LLM_PROVIDER === "minimax" && !MINIMAX_API_KEY) {
     throw new Error("MINIMAX_API_KEY env var is required when LLM_PROVIDER=minimax")
   }
+  // Materialize the real-content TS strings onto disk (gitignored) for
+  // inspection + to give each test run a fresh, authoritative copy.
+  await materializeRealContent(REAL_CONTENT_ROOT)
   // eslint-disable-next-line no-console
   console.log(
     LLM_PROVIDER === "minimax"

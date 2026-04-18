@@ -280,13 +280,25 @@ async function writeFileBlocks(projectPath: string, text: string): Promise<strin
     if (!relativePath) continue
 
     // Language guard: reject individual FILE blocks whose body contradicts
-    // the user-set target language. Log entries are short / structural so
-    // skip the check for them.
+    // the user-set target language. Skip:
+    // - log.md (structural, short)
+    // - /sources/ and /entities/ pages: these legitimately cite cross-
+    //   language proper nouns (a German philosophy source summary naturally
+    //   quotes Russian philosophers) which confuses naive script-based
+    //   detection. Keep the check for /concepts/ pages, which should be
+    //   authoritative content in the target language.
+    const isLog =
+      relativePath.endsWith("/log.md") || relativePath === "wiki/log.md"
+    const isEntityOrSource =
+      relativePath.startsWith("wiki/entities/") ||
+      relativePath.includes("/entities/") ||
+      relativePath.startsWith("wiki/sources/") ||
+      relativePath.includes("/sources/")
     if (
       targetLang &&
       targetLang !== "auto" &&
-      !relativePath.endsWith("/log.md") &&
-      relativePath !== "wiki/log.md" &&
+      !isLog &&
+      !isEntityOrSource &&
       !contentMatchesTargetLanguage(content, targetLang)
     ) {
       console.warn(

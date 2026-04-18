@@ -16,6 +16,15 @@ export function detectLanguage(text: string): string {
     }
   }
 
+  // Special case: Japanese uses BOTH Hiragana/Katakana and Kanji. Pure
+  // Chinese uses ONLY Kanji. If we see any Japanese script characters at
+  // all alongside Kanji, the language is Japanese, regardless of which
+  // count dominates. (Kanji-heavy Japanese text would otherwise be
+  // misclassified as Chinese.)
+  if ((counts.Japanese ?? 0) > 0 && (counts.Chinese ?? 0) > 0) {
+    return "Japanese"
+  }
+
   // If non-Latin scripts detected, return the dominant one
   let maxScript = ""
   let maxCount = 0

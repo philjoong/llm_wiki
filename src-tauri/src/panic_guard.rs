@@ -44,3 +44,59 @@ fn report(label: &str, payload: Box<dyn Any + Send>) -> String {
     eprintln!("[panic_guard] command '{label}' panicked: {msg}");
     format!("Internal error in {label}: {msg}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_catches_string_panic() {
+        let result: Result<(), String> =
+            run_guarded("test", || panic!("boom from String"));
+        let err = result.expect_err("panic should produce Err");
+        assert!(err.contains("boom from String"), "got: {err}");
+        assert!(err.starts_with("Internal error in test"), "got: {err}");
+    }
+
+    #[test]
+    fn sync_catches_panic_with_non_string_payload() {
+        let result: Result<(), String> =
+            run_guarded("test", || std::panic::panic_any(42_u32));
+        let err = result.expect_err("panic should produce Err");
+        assert!(err.contains("non-string panic payload"), "got: {err}");
+    }
+
+    #[test]
+    fn sync_passes_through_err() {
+        let result: Result<i32, String> =
+            run_guarded("test", || Err("regular error".to_string()));
+        assert_eq!(result.unwrap_err(), "regular error");
+    }
+
+    #[test]
+    fn sync_passes_through_ok() {
+        let result = run_guarded("test", || Ok::<_, String>(7));
+        assert_eq!(result.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn async_catches_panic() {
+        let result: Result<(), String> = run_guarded_async("test", async {
+            panic!("async boom");
+        })
+        .await;
+        let err = result.expect_err("panic should produce Err");
+        assert!(err.contains("async boom"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn async_catches_panic_after_await_point() {
+        let result: Result<(), String> = run_guarded_async("test", async {
+            tokio::task::yield_now().await;
+            panic!("post-await boom");
+        })
+        .await;
+        let err = result.expect_err("panic should produce Err");
+        assert!(err.contains("post-await boom"), "got: {err}");
+    }
+}

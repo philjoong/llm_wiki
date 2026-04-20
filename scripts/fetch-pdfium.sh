@@ -44,13 +44,11 @@ DEST="$REPO_ROOT/src-tauri/pdfium"
 mkdir -p "$DEST"
 
 case "$PLATFORM" in
-  mac-arm64|mac-x64|linux-x64|linux-arm64)
+  mac-arm64|mac-x64|linux-x64|linux-arm64|win-x64|win-arm64)
+    # bblanchon/pdfium-binaries ships every platform as .tgz
+    # (including Windows — despite what older docs might say).
     ARCHIVE="pdfium-${PLATFORM}.tgz"
     EXTRACT_CMD="tar -xzf"
-    ;;
-  win-x64)
-    ARCHIVE="pdfium-${PLATFORM}.zip"
-    EXTRACT_CMD="unzip -o"
     ;;
   *)
     echo "Unsupported platform: $PLATFORM" >&2; exit 1 ;;

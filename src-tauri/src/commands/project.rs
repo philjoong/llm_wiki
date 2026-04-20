@@ -231,7 +231,8 @@ related: []
 
     Ok(WikiProject {
         name,
-        path: root.to_string_lossy().to_string(),
+        // Forward slashes for cross-platform consistency in the TS layer.
+        path: root.to_string_lossy().replace('\\', "/"),
     })
 }
 
@@ -268,7 +269,11 @@ pub fn open_project(path: String) -> Result<WikiProject, String> {
             .unwrap_or("Unknown")
             .to_string();
 
-        Ok(WikiProject { name, path })
+        Ok(WikiProject {
+            name,
+            // Forward slashes for cross-platform consistency in the TS layer.
+            path: path.replace('\\', "/"),
+        })
     })
 }
 

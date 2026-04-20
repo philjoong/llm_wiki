@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "@/commands/fs"
 import { autoIngest } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
-import { normalizePath } from "@/lib/path-utils"
+import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -155,7 +155,9 @@ export async function cancelTask(projectPath: string, taskId: string): Promise<v
       const { deleteFile } = await import("@/commands/fs")
       for (const filePath of lastWrittenFiles) {
         try {
-          const fullPath = filePath.startsWith("/") ? filePath : `${normalizePath(projectPath)}/${filePath}`
+          const fullPath = isAbsolutePath(filePath)
+            ? normalizePath(filePath)
+            : `${normalizePath(projectPath)}/${filePath}`
           await deleteFile(fullPath)
         } catch {
           // file may not exist
@@ -317,8 +319,8 @@ async function processNext(projectPath: string): Promise<void> {
     return
   }
 
-  const fullSourcePath = next.sourcePath.startsWith("/")
-    ? next.sourcePath
+  const fullSourcePath = isAbsolutePath(next.sourcePath)
+    ? normalizePath(next.sourcePath)
     : `${pp}/${next.sourcePath}`
 
   console.log(`[Ingest Queue] Processing: ${next.sourcePath} (${queue.filter((t) => t.status === "pending").length} remaining)`)

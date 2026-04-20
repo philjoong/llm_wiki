@@ -6,7 +6,7 @@ import {
 } from "lucide-react"
 import { useActivityStore, type ActivityItem } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
-import { normalizePath, getFileName } from "@/lib/path-utils"
+import { normalizePath, getFileName, isAbsolutePath } from "@/lib/path-utils"
 import { getQueue, getQueueSummary, retryTask, cancelTask, type IngestTask } from "@/lib/ingest-queue"
 
 const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
@@ -223,7 +223,9 @@ function ActivityRow({ item, onCancel }: { item: ActivityItem; onCancel?: () => 
   function handleFileClick(filePath: string) {
     if (!project) return
     const pp = normalizePath(project.path)
-    const fullPath = filePath.startsWith("/") ? normalizePath(filePath) : `${pp}/${filePath}`
+    const fullPath = isAbsolutePath(filePath)
+      ? normalizePath(filePath)
+      : `${pp}/${filePath}`
     setSelectedFile(fullPath)
   }
 

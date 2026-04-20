@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest"
-import { normalizePath, joinPath, getFileName, getFileStem, getRelativePath } from "./path-utils"
+import {
+  normalizePath,
+  joinPath,
+  getFileName,
+  getFileStem,
+  getRelativePath,
+  isAbsolutePath,
+} from "./path-utils"
 
 describe("normalizePath", () => {
   it("converts backslashes to forward slashes", () => {
@@ -108,5 +115,39 @@ describe("getRelativePath", () => {
     // '/projector' should NOT be considered a base of '/project...'
     // The impl adds '/' to base for matching, so this is handled.
     expect(getRelativePath("/projector/a", "/project")).toBe("/projector/a")
+  })
+})
+
+describe("isAbsolutePath", () => {
+  it("recognizes Unix absolute paths", () => {
+    expect(isAbsolutePath("/")).toBe(true)
+    expect(isAbsolutePath("/home/user")).toBe(true)
+    expect(isAbsolutePath("/a/b/c.md")).toBe(true)
+  })
+
+  it("recognizes Windows drive-letter paths with both separators", () => {
+    expect(isAbsolutePath("C:\\Users\\nash")).toBe(true)
+    expect(isAbsolutePath("C:/Users/nash")).toBe(true)
+    expect(isAbsolutePath("D:\\")).toBe(true)
+    expect(isAbsolutePath("z:/project/file.pdf")).toBe(true)
+  })
+
+  it("recognizes Windows UNC paths", () => {
+    expect(isAbsolutePath("\\\\server\\share")).toBe(true)
+    expect(isAbsolutePath("//server/share")).toBe(true)
+  })
+
+  it("rejects relative paths", () => {
+    expect(isAbsolutePath("")).toBe(false)
+    expect(isAbsolutePath("foo")).toBe(false)
+    expect(isAbsolutePath("foo/bar.md")).toBe(false)
+    expect(isAbsolutePath("./foo")).toBe(false)
+    expect(isAbsolutePath("../foo")).toBe(false)
+    expect(isAbsolutePath("wiki/concepts/attention.md")).toBe(false)
+  })
+
+  it("rejects drive-letter WITHOUT a separator (ambiguous)", () => {
+    // "C:foo" is a Windows drive-relative path, not absolute.
+    expect(isAbsolutePath("C:foo")).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
-import { normalizePath } from "@/lib/path-utils"
+import { normalizePath, getFileStem } from "@/lib/path-utils"
 
 export interface SearchResult {
   path: string
@@ -196,14 +196,15 @@ export async function searchWiki(
 
       let boosted = 0
       let added = 0
-      const existingPaths = new Set(results.map((r) => r.path))
+      // Normalize existing paths to forward slashes so Windows backslash
+      // paths from the filesystem match the forward-slash paths we
+      // construct for tryPath below.
+      const existingPaths = new Set(results.map((r) => normalizePath(r.path)))
 
       for (const vr of vectorResults) {
-        // Check if already in results
-        const existing = results.find((r) => {
-          const fileName = r.path.split("/").pop()?.replace(/\.md$/, "") ?? ""
-          return fileName === vr.id
-        })
+        // Check if already in results. getFileStem handles both / and \
+        // separators so this works on Windows.
+        const existing = results.find((r) => getFileStem(r.path) === vr.id)
 
         if (existing) {
           // Boost score of existing result

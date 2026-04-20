@@ -157,8 +157,13 @@ export function SourcesView() {
                     "csv", "json", "html", "htm", "rtf", "xml", "yaml", "yml"].includes(ext)
           })
           .map((filePath) => {
-            // Build folder context from relative path
-            const relPath = filePath.replace(destDir + "/", "")
+            // Build folder context from relative path. On Windows the
+            // Rust-returned filePath uses backslashes while destDir was
+            // composed with forward slashes — normalize both sides before
+            // the replace so this works on every platform.
+            const normFilePath = normalizePath(filePath)
+            const normDestDir = normalizePath(destDir)
+            const relPath = normFilePath.replace(normDestDir + "/", "")
             const parts = relPath.split("/")
             parts.pop() // remove filename
             const context = parts.length > 0

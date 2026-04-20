@@ -703,7 +703,12 @@ fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<Vec<FileNode
             .to_str()
             .unwrap_or("")
             .to_string();
-        let path_str = entry_path.to_string_lossy().to_string();
+        // Always return forward-slash paths so the TS layer can compare
+        // and compose paths consistently across Windows and Unix. Windows
+        // APIs accept forward slashes, so normalizing here is safe and
+        // prevents a whole class of bugs where TS-constructed `/` paths
+        // fail to match Rust-returned `\` paths.
+        let path_str = entry_path.to_string_lossy().replace('\\', "/");
         let is_dir = entry_path.is_dir();
 
         let children = if is_dir {
@@ -784,7 +789,9 @@ pub fn copy_directory(source: String, destination: String) -> Result<Vec<String>
                     fs::copy(&path, &dest_path).map_err(|e| {
                         format!("Failed to copy '{}': {}", path.display(), e)
                     })?;
-                    files.push(dest_path.to_string_lossy().to_string());
+                    // Normalize to forward slashes for consistent cross-
+                    // platform handling in the TS layer (see fs.rs build_tree).
+                    files.push(dest_path.to_string_lossy().replace('\\', "/"));
                 }
             }
             Ok(())
@@ -888,7 +895,9 @@ fn collect_related_pages(dir: &Path, source_name: &str, results: &mut Vec<String
                 };
 
                 if sources_match || is_source_summary || frontmatter_match {
-                    results.push(path.to_string_lossy().to_string());
+                    // Normalize to forward slashes — matches build_tree /
+                    // copy_directory so TS-side comparisons work on Windows.
+                    results.push(path.to_string_lossy().replace('\\', "/"));
                 }
             }
         }

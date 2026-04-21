@@ -94,8 +94,13 @@ function buildAnthropicBody(messages: ChatMessage[]): Record<string, unknown> {
 function requiresBearerAuth(url: string): boolean {
   const normalized = url.toLowerCase().replace(/\/+$/, "")
   return (
+    // MiniMax — CORS allow-headers doesn't include x-api-key
     normalized.startsWith("https://api.minimax.io/anthropic") ||
-    normalized.startsWith("https://api.minimaxi.com/anthropic")
+    normalized.startsWith("https://api.minimaxi.com/anthropic") ||
+    // Alibaba Bailian Coding Plan — issues sk-xxx bearer-style tokens
+    // on its /apps/anthropic gateway; behavior matches the other
+    // Chinese Anthropic-wire proxies above.
+    normalized.startsWith("https://coding.dashscope.aliyuncs.com/apps/anthropic")
   )
 }
 

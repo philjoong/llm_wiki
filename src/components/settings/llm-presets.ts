@@ -252,6 +252,55 @@ export const LLM_PRESETS: LlmPreset[] = [
     suggestedContextSize: 200000,
   },
   {
+    id: "bailian-coding-openai",
+    label: "阿里百炼 Coding Plan (OpenAI-compat)",
+    hint: "coding.dashscope.aliyuncs.com/v1",
+    provider: "custom",
+    baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+    apiMode: "chat_completions",
+    // Alibaba Bailian's subscription-only "Coding Plan" endpoint. Key
+    // must come from the Bailian console's Coding Plan tab — using a
+    // regular DashScope key here will 401. Order matches the docs'
+    // "recommended" section, then "additional".
+    defaultModel: "qwen3.6-plus",
+    suggestedModels: [
+      "qwen3.6-plus",
+      "kimi-k2.5",
+      "glm-5",
+      "MiniMax-M2.5",
+      "qwen3.5-plus",
+      "qwen3-max-2026-01-23",
+      "qwen3-coder-plus",
+      "qwen3-coder-next",
+      "glm-4.7",
+    ],
+    suggestedContextSize: 131072,
+  },
+  {
+    id: "bailian-coding-anthropic",
+    label: "阿里百炼 Coding Plan (Anthropic-compat)",
+    hint: "coding.dashscope.aliyuncs.com/apps/anthropic",
+    provider: "custom",
+    baseUrl: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+    apiMode: "anthropic_messages",
+    // Same model catalog as the OpenAI-compat variant, but the wire is
+    // Anthropic Messages. Auth uses Bearer (see requiresBearerAuth in
+    // llm-providers.ts) — matches MiniMax / Bailian gateway convention.
+    defaultModel: "qwen3.6-plus",
+    suggestedModels: [
+      "qwen3.6-plus",
+      "kimi-k2.5",
+      "glm-5",
+      "MiniMax-M2.5",
+      "qwen3.5-plus",
+      "qwen3-max-2026-01-23",
+      "qwen3-coder-plus",
+      "qwen3-coder-next",
+      "glm-4.7",
+    ],
+    suggestedContextSize: 131072,
+  },
+  {
     id: "volcengine-ark",
     label: "火山引擎 Ark (Volcengine)",
     hint: "ark.cn-beijing.volces.com/api/coding/v3",

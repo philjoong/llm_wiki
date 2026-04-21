@@ -93,8 +93,12 @@ export async function autoIngest(
     { temperature: 0.1 },
   )
 
-  if (useActivityStore.getState().items.find((i) => i.id === activityId)?.status === "error") {
-    return []
+  // A silent `return []` here would look like success to the queue
+  // runner and cause the task to be filter()'d out. Throw instead so
+  // processNext's catch-block path (retry / mark failed) engages.
+  const analysisActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+  if (analysisActivity?.status === "error") {
+    throw new Error(analysisActivity.detail || "Analysis stream failed")
   }
 
   // ── Step 2: Generation ────────────────────────────────────────
@@ -143,8 +147,9 @@ export async function autoIngest(
     { temperature: 0.1 },
   )
 
-  if (useActivityStore.getState().items.find((i) => i.id === activityId)?.status === "error") {
-    return []
+  const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+  if (generationActivity?.status === "error") {
+    throw new Error(generationActivity.detail || "Generation stream failed")
   }
 
   // ── Step 3: Write files ───────────────────────────────────────
@@ -157,7 +162,13 @@ export async function autoIngest(
   const sourceSummaryFullPath = `${pp}/${sourceSummaryPath}`
   const hasSourceSummary = writtenPaths.some((p) => p.startsWith("wiki/sources/"))
 
-  if (!hasSourceSummary) {
+  // If the signal was aborted (e.g. user switched projects / cancelled),
+  // skip the fallback summary write — the LLM streams returned empty
+  // via the abort fast-path (onDone), and writing a stub file into the
+  // old project's wiki would both be noise and mask the error.
+  // Returning no files lets processNext's length-0 safety net mark the
+  // task for retry rather than "success".
+  if (!hasSourceSummary && !signal?.aborted) {
     const date = new Date().toISOString().slice(0, 10)
     const fallbackContent = [
       "---",

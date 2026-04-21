@@ -47,9 +47,13 @@ export async function resetProjectState(): Promise<void> {
 
   if (queueMod.status === "fulfilled") {
     try {
-      queueMod.value.clearQueueState()
+      // pauseQueue flushes the active project's state to disk (reverting
+      // any processing task to pending) before clearing in-memory state.
+      // Awaiting is required — the disk write must complete before the
+      // new project's restoreQueue reads its own file.
+      await queueMod.value.pauseQueue()
     } catch (err) {
-      console.warn("[Reset Project State] clearQueueState failed:", err)
+      console.warn("[Reset Project State] pauseQueue failed:", err)
     }
   } else {
     console.warn("[Reset Project State] Failed to load ingest-queue:", queueMod.reason)

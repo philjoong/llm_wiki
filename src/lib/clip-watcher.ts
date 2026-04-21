@@ -38,13 +38,15 @@ export function startClipWatcher() {
           // Enqueue (not auto-ingest directly) so the task lands in the
           // persisted queue, shows up in the activity panel, and survives
           // a UI refresh. Same path used by file imports from sources-view.
+          // Pass the project's stable UUID — the queue looks up the
+          // current filesystem path from the registry at run time.
           const llmConfig = store.llmConfig
           const hasLlm =
             !!llmConfig.apiKey ||
             llmConfig.provider === "ollama" ||
             llmConfig.provider === "custom"
           if (hasLlm) {
-            enqueueIngest(clipProjectPath, clipFilePath).catch((err) => {
+            enqueueIngest(project.id, clipFilePath).catch((err) => {
               console.error("Failed to enqueue web clip:", err)
             })
           }

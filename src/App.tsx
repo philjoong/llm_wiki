@@ -86,9 +86,11 @@ function App() {
     useWikiStore.getState().bumpDataVersion()
     await saveLastProject(proj)
 
-    // Restore ingest queue (resume interrupted tasks)
+    // Restore ingest queue (resume interrupted tasks). Keyed by the
+    // project's stable UUID so the queue still finds the right project
+    // even if the filesystem path changed since the task was enqueued.
     import("@/lib/ingest-queue").then(({ restoreQueue }) => {
-      restoreQueue(proj.path).catch((err) =>
+      restoreQueue(proj.id, proj.path).catch((err) =>
         console.error("Failed to restore ingest queue:", err)
       )
     })

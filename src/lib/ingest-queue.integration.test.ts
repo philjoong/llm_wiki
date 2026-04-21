@@ -22,6 +22,21 @@ vi.mock("./sweep-reviews", () => ({
   sweepResolvedReviews: vi.fn().mockResolvedValue(0),
 }))
 
+// Tests use real filesystem tmp dirs. Each test's `tmp.path` maps from
+// the test's UUID back to that dir via a mutable pointer the setup
+// updates in beforeEach — so getProjectPathById stays in sync with the
+// currently-active test project.
+const TEST_ID_A = "test-id-a"
+const TEST_ID_B = "test-id-b"
+const pathByIdRef: { map: Record<string, string> } = { map: {} }
+vi.mock("@/lib/project-identity", () => ({
+  ensureProjectId: vi.fn(),
+  upsertProjectInfo: vi.fn(),
+  getProjectPathById: vi.fn(async (id: string) => pathByIdRef.map[id] ?? null),
+  getProjectIdByPath: vi.fn(),
+  loadRegistry: vi.fn(),
+}))
+
 import {
   enqueueIngest,
   enqueueBatch,
@@ -44,6 +59,7 @@ beforeEach(async () => {
   mockAutoIngest.mockImplementation(() => new Promise(() => {}))
 
   tmp = await createTempProject("ingestqueue")
+  pathByIdRef.map = { [TEST_ID_A]: tmp.path }
 
   useWikiStore.getState().setLlmConfig({
     provider: "openai",
@@ -53,6 +69,9 @@ beforeEach(async () => {
     customEndpoint: "",
     maxContextSize: 128000,
   })
+
+  // Activate the test project so enqueue / restore guards pass.
+  await restoreQueue(TEST_ID_A, tmp.path)
 })
 
 afterEach(async () => {
@@ -66,7 +85,7 @@ async function readQueueFile(): Promise<string> {
 
 describe("ingest-queue persistence — write", () => {
   it("writes .llm-wiki/ingest-queue.json after enqueue", async () => {
-    await enqueueIngest(tmp.path, "raw/sources/a.md")
+    await enqueueIngest(TEST_ID_A, "raw/sources/a.md")
     await waitFor(async () => {
       try {
         const c = await readQueueFile()
@@ -80,7 +99,7 @@ describe("ingest-queue persistence — write", () => {
   })
 
   it("persists Unicode source paths without corruption", async () => {
-    await enqueueBatch(tmp.path, [
+    await enqueueBatch(TEST_ID_A, [
       { sourcePath: "raw/sources/注意力机制.pdf", folderContext: "AI研究 > 论文" },
       { sourcePath: "raw/日本語.md", folderContext: "" },
     ])
@@ -101,12 +120,12 @@ describe("ingest-queue persistence — write", () => {
 
   it("auto-creates .llm-wiki/ directory when it doesn't exist", async () => {
     expect(await fileExists(`${tmp.path}/.llm-wiki`)).toBe(false)
-    await enqueueIngest(tmp.path, "x.md")
+    await enqueueIngest(TEST_ID_A, "x.md")
     await waitFor(() => fileExists(`${tmp.path}/.llm-wiki/ingest-queue.json`))
   })
 
   it("each enqueue updates the persisted JSON in-place", async () => {
-    await enqueueIngest(tmp.path, "first.md")
+    await enqueueIngest(TEST_ID_A, "first.md")
     await waitFor(async () => {
       try {
         return JSON.parse(await readQueueFile()).length === 1
@@ -115,7 +134,7 @@ describe("ingest-queue persistence — write", () => {
       }
     })
 
-    await enqueueIngest(tmp.path, "second.md")
+    await enqueueIngest(TEST_ID_A, "second.md")
     await waitFor(async () => {
       try {
         return JSON.parse(await readQueueFile()).length === 2
@@ -133,7 +152,7 @@ describe("ingest-queue persistence — write", () => {
 
 describe("ingest-queue persistence — restore round-trip", () => {
   it("restoreQueue reads back exactly what enqueue wrote", async () => {
-    await enqueueBatch(tmp.path, [
+    await enqueueBatch(TEST_ID_A, [
       { sourcePath: "a.md", folderContext: "ctx-a" },
       { sourcePath: "b.md", folderContext: "ctx-b" },
     ])
@@ -150,7 +169,7 @@ describe("ingest-queue persistence — restore round-trip", () => {
     clearQueueState()
     expect(getQueue()).toHaveLength(0)
 
-    await restoreQueue(tmp.path)
+    await restoreQueue(TEST_ID_A, tmp.path)
     const restored = getQueue()
     expect(restored).toHaveLength(2)
     expect(restored.map((t) => t.sourcePath).sort()).toEqual(["a.md", "b.md"])
@@ -173,7 +192,7 @@ describe("ingest-queue persistence — restore round-trip", () => {
       JSON.stringify(saved, null, 2),
     )
 
-    await restoreQueue(tmp.path)
+    await restoreQueue(TEST_ID_A, tmp.path)
     await flushIO(2)
 
     const restored = getQueue()
@@ -200,7 +219,7 @@ describe("ingest-queue persistence — restore round-trip", () => {
       JSON.stringify(saved, null, 2),
     )
 
-    await restoreQueue(tmp.path)
+    await restoreQueue(TEST_ID_A, tmp.path)
     const restored = getQueue()
     expect(restored[0].status).toBe("failed")
     expect(restored[0].error).toBe("LLM hit its rate limit")
@@ -208,7 +227,7 @@ describe("ingest-queue persistence — restore round-trip", () => {
   })
 
   it("returns empty queue when the file doesn't exist", async () => {
-    await restoreQueue(tmp.path)
+    await restoreQueue(TEST_ID_A, tmp.path)
     expect(getQueue()).toEqual([])
   })
 
@@ -217,12 +236,12 @@ describe("ingest-queue persistence — restore round-trip", () => {
       `${tmp.path}/.llm-wiki/ingest-queue.json`,
       "{not valid json at all",
     )
-    await restoreQueue(tmp.path)
+    await restoreQueue(TEST_ID_A, tmp.path)
     expect(getQueue()).toEqual([])
   })
 
   it("round-trips Unicode + folder context correctly", async () => {
-    await enqueueBatch(tmp.path, [
+    await enqueueBatch(TEST_ID_A, [
       { sourcePath: "raw/sources/注意力.pdf", folderContext: "研究 > 深度学习" },
     ])
     await waitFor(async () => {
@@ -238,7 +257,7 @@ describe("ingest-queue persistence — restore round-trip", () => {
     expect(onDisk[0].folderContext).toBe("研究 > 深度学习")
 
     clearQueueState()
-    await restoreQueue(tmp.path)
+    await restoreQueue(TEST_ID_A, tmp.path)
 
     const restored = getQueue()
     expect(restored).toHaveLength(1)
@@ -250,9 +269,10 @@ describe("ingest-queue persistence — restore round-trip", () => {
 describe("ingest-queue persistence — cross-project isolation", () => {
   it("restoreQueue from project A does not leak into project B", async () => {
     const other = await createTempProject("ingestqueue-other")
+    pathByIdRef.map[TEST_ID_B] = other.path
     try {
       // Populate project A
-      await enqueueIngest(tmp.path, "a.md")
+      await enqueueIngest(TEST_ID_A, "a.md")
       await waitFor(async () => {
         try {
           return JSON.parse(await readQueueFile()).length === 1
@@ -263,7 +283,7 @@ describe("ingest-queue persistence — cross-project isolation", () => {
       expect(getQueue()).toHaveLength(1)
 
       // Restore project B (empty) — should see empty queue, not A's
-      await restoreQueue(other.path)
+      await restoreQueue(TEST_ID_B, other.path)
       expect(getQueue()).toEqual([])
     } finally {
       await other.cleanup()

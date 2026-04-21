@@ -4,7 +4,7 @@ import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useResearchStore } from "@/stores/research-store"
-import { getQueue, clearQueueState } from "./ingest-queue"
+import { getQueue, pauseQueue } from "./ingest-queue"
 
 // Dynamic-import mocks: resetProjectState uses `import("@/lib/ingest-queue")`
 // and `import("@/lib/graph-relevance")` at runtime. vi.mock hoists these
@@ -13,7 +13,7 @@ vi.mock("./ingest-queue", async () => {
   const actual = await vi.importActual<typeof import("./ingest-queue")>("./ingest-queue")
   return {
     ...actual,
-    clearQueueState: vi.fn(),
+    pauseQueue: vi.fn(async () => {}),
   }
 })
 
@@ -23,11 +23,12 @@ vi.mock("./graph-relevance", () => ({
 
 import { clearGraphCache } from "./graph-relevance"
 
-const mockClearQueueState = vi.mocked(clearQueueState)
+const mockPauseQueue = vi.mocked(pauseQueue)
 const mockClearGraphCache = vi.mocked(clearGraphCache)
 
 beforeEach(() => {
-  mockClearQueueState.mockReset()
+  mockPauseQueue.mockReset()
+  mockPauseQueue.mockImplementation(async () => {})
   mockClearGraphCache.mockReset()
 })
 
@@ -117,9 +118,9 @@ describe("resetProjectState — Zustand stores", () => {
 })
 
 describe("resetProjectState — module-level caches are awaited", () => {
-  it("calls clearQueueState before the returned promise resolves", async () => {
+  it("calls pauseQueue before the returned promise resolves", async () => {
     await resetProjectState()
-    expect(mockClearQueueState).toHaveBeenCalledOnce()
+    expect(mockPauseQueue).toHaveBeenCalledOnce()
   })
 
   it("calls clearGraphCache before the returned promise resolves", async () => {
@@ -131,12 +132,12 @@ describe("resetProjectState — module-level caches are awaited", () => {
     // This is the regression guard against fire-and-forget resets.
     // By the time the outer await returns, BOTH clears must be done.
     await resetProjectState()
-    expect(mockClearQueueState).toHaveBeenCalledOnce()
+    expect(mockPauseQueue).toHaveBeenCalledOnce()
     expect(mockClearGraphCache).toHaveBeenCalledOnce()
   })
 
-  it("does not throw when clearQueueState itself throws — logs and continues", async () => {
-    mockClearQueueState.mockImplementationOnce(() => {
+  it("does not throw when pauseQueue itself throws — logs and continues", async () => {
+    mockPauseQueue.mockImplementationOnce(async () => {
       throw new Error("boom")
     })
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})

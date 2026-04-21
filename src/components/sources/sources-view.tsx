@@ -108,7 +108,7 @@ export function SourcesView() {
     // Enqueue for serial ingest (runs in background via ingest queue)
     if (llmConfig.apiKey || llmConfig.provider === "ollama" || llmConfig.provider === "custom") {
       for (const destPath of importedPaths) {
-        enqueueIngest(pp, destPath).catch((err) =>
+        enqueueIngest(project.id, destPath).catch((err) =>
           console.error(`Failed to enqueue ingest:`, err)
         )
       }
@@ -173,7 +173,7 @@ export function SourcesView() {
           })
 
         if (tasks.length > 0) {
-          await enqueueBatch(pp, tasks)
+          await enqueueBatch(project.id, tasks)
           console.log(`[Folder Import] Enqueued ${tasks.length} files for ingest`)
         }
       }

@@ -48,16 +48,30 @@ function parseAnthropicLine(line: string): string | null {
   }
 }
 
-function parseGoogleLine(line: string): string | null {
+export function parseGoogleLine(line: string): string | null {
   if (!line.startsWith("data: ")) return null
   const data = line.slice(6).trim()
   try {
     const parsed = JSON.parse(data) as {
       candidates: Array<{
-        content: { parts: Array<{ text?: string }> }
+        content: { parts: Array<{ text?: string; thought?: boolean }> }
       }>
     }
-    return parsed.candidates?.[0]?.content?.parts?.[0]?.text ?? null
+    // Gemini can split a single event's output across multiple parts —
+    // common with 2.5/3.x reasoning models, which interleave
+    // `thought: true` parts (chain-of-thought) with the real answer.
+    // Previous impl only took parts[0].text, silently dropping anything
+    // that came in a later part. Concatenate all visible text parts and
+    // skip ones flagged as thoughts so we don't leak reasoning text into
+    // the user-visible stream.
+    const parts = parsed.candidates?.[0]?.content?.parts
+    if (!parts || parts.length === 0) return null
+    let out = ""
+    for (const p of parts) {
+      if (p.thought) continue
+      if (p.text) out += p.text
+    }
+    return out.length > 0 ? out : null
   } catch {
     return null
   }
@@ -191,9 +205,14 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
       }
     }
 
-    case "google":
+    case "google": {
+      // Encode the model segment — users sometimes paste OpenRouter-style
+      // ids with slashes (e.g. "google/gemini-3-pro-preview") and bare
+      // interpolation would produce a broken URL. encodeURIComponent
+      // handles that plus any other path-illegal characters.
+      const encodedModel = encodeURIComponent(model)
       return {
-        url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+        url: `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}:streamGenerateContent?alt=sse`,
         headers: {
           "Content-Type": JSON_CONTENT_TYPE,
           "x-goog-api-key": apiKey,
@@ -201,6 +220,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         buildBody: buildGoogleBody,
         parseStream: parseGoogleLine,
       }
+    }
 
     case "ollama": {
       // Defense-in-depth for the same reason as the custom branch: if a

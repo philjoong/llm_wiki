@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { buildAnthropicUrl } from "../llm-providers"
+import { buildAnthropicUrl, parseGoogleLine, getProviderConfig } from "../llm-providers"
+import type { LlmConfig as RealLlmConfig } from "@/stores/wiki-store"
 
 // Inline minimal types to avoid store/zustand dependencies in unit tests
 type Provider = "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax"
@@ -154,5 +155,67 @@ describe("buildAnthropicUrl — URL suffix handling", () => {
     expect(buildAnthropicUrl("https://api.anthropic.com/v1/")).toBe(
       "https://api.anthropic.com/v1/messages",
     )
+  })
+})
+
+describe("parseGoogleLine — Gemini SSE parsing", () => {
+  it("extracts plain text from a single-part event", () => {
+    const line = 'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}'
+    expect(parseGoogleLine(line)).toBe("Hello")
+  })
+
+  it("concatenates text across multiple parts in one event", () => {
+    // Gemini 2.5/3.x reasoning models sometimes split output across
+    // multiple parts in a single streaming chunk. The old parser only
+    // took parts[0], silently dropping the tail.
+    const line = 'data: {"candidates":[{"content":{"parts":[{"text":"Hello "},{"text":"world"}]}}]}'
+    expect(parseGoogleLine(line)).toBe("Hello world")
+  })
+
+  it("skips thought parts so reasoning tokens don't leak into output", () => {
+    const line =
+      'data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"let me think"},{"text":"The answer is 42"}]}}]}'
+    expect(parseGoogleLine(line)).toBe("The answer is 42")
+  })
+
+  it("returns null when the event has no visible text", () => {
+    const line = 'data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"thinking"}]}}]}'
+    expect(parseGoogleLine(line)).toBeNull()
+  })
+
+  it("returns null for non-data lines", () => {
+    expect(parseGoogleLine("event: something")).toBeNull()
+    expect(parseGoogleLine("")).toBeNull()
+    expect(parseGoogleLine(":keepalive")).toBeNull()
+  })
+
+  it("returns null for malformed JSON", () => {
+    expect(parseGoogleLine("data: {not json")).toBeNull()
+  })
+})
+
+describe("Google provider URL — model path encoding", () => {
+  const makeGoogleConfig = (model: string): RealLlmConfig => ({
+    provider: "google",
+    apiKey: "test",
+    model,
+    ollamaUrl: "",
+    customEndpoint: "",
+    maxContextSize: 128000,
+  })
+
+  it("embeds a normal model id directly in the URL", () => {
+    const cfg = getProviderConfig(makeGoogleConfig("gemini-2.5-flash"))
+    expect(cfg.url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+    )
+  })
+
+  it("encodes slashes in a pasted OpenRouter-style id so the path stays well-formed", () => {
+    // Previously bare interpolation put a real "/" in the path, which
+    // would have been interpreted as a segment boundary → 404 on a
+    // nonexistent Google resource.
+    const cfg = getProviderConfig(makeGoogleConfig("google/gemini-3-pro-preview"))
+    expect(cfg.url).toContain("google%2Fgemini-3-pro-preview:streamGenerateContent")
   })
 })

@@ -164,10 +164,16 @@ export const LLM_PRESETS: LlmPreset[] = [
     hint: "api.moonshot.ai",
     provider: "custom",
     baseUrl: "https://api.moonshot.ai/v1",
-    defaultModel: "kimi-k2-0905-preview",
+    defaultModel: "kimi-k2.6",
     apiMode: "chat_completions",
-    // hermes models.py:198-212 — "kimi-coding" + "moonshot" sections.
+    // k2.6 and k2.5 are the current flagship models — prefer these.
+    // Everything below them is being deprecated on 2026-05-25 by
+    // Moonshot; kept for now so users mid-migration still have access,
+    // but they are NOT the recommended choice.
     suggestedModels: [
+      "kimi-k2.6",
+      "kimi-k2.5",
+      // ── Deprecated after 2026-05-25 ──
       "kimi-k2-0905-preview",
       "kimi-k2-turbo-preview",
       "kimi-k2-thinking",
@@ -184,9 +190,13 @@ export const LLM_PRESETS: LlmPreset[] = [
     hint: "api.moonshot.cn",
     provider: "custom",
     baseUrl: "https://api.moonshot.cn/v1",
-    defaultModel: "kimi-k2-0905-preview",
+    defaultModel: "kimi-k2.6",
     apiMode: "chat_completions",
+    // Same deprecation window as the international preset — see above.
     suggestedModels: [
+      "kimi-k2.6",
+      "kimi-k2.5",
+      // ── Deprecated after 2026-05-25 ──
       "kimi-k2-0905-preview",
       "kimi-k2-turbo-preview",
       "kimi-k2-thinking",

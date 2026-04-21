@@ -12,6 +12,37 @@ export interface StreamCallbacks {
 const DECODER = new TextDecoder()
 
 /**
+ * All LLM HTTP traffic goes through Tauri's Rust-backed HTTP plugin
+ * instead of the webview's native fetch. This bypasses CORS entirely —
+ * the request leaves the app from Rust, never the browser engine — which
+ * is the only way some third-party LLM endpoints work at all:
+ *
+ *   - MiniMax (CORS allow-headers omits `x-api-key`; we worked around
+ *     this by using Bearer, but the plugin makes it robust)
+ *   - Volcengine Ark `/api/coding/v3` (allow-headers omits `authorization`
+ *     entirely — there is NO header swap that fixes it in the webview)
+ *   - Any other enterprise / on-prem gateway that doesn't expect browser
+ *     origins (a common class of bug across domestic Chinese clouds)
+ *
+ * The plugin's `fetch` API mirrors the web Fetch API shape so the rest
+ * of this file looks like normal fetch code. Import is lazy + cached so
+ * unit tests (vitest in node) can import this module for the helpers
+ * below without the plugin's browser-only globals blowing up at load.
+ */
+let pluginFetchPromise: Promise<typeof globalThis.fetch> | null = null
+function getHttpFetch(): Promise<typeof globalThis.fetch> {
+  if (!pluginFetchPromise) {
+    pluginFetchPromise = import("@tauri-apps/plugin-http")
+      .then((m) => m.fetch as unknown as typeof globalThis.fetch)
+      // In a non-Tauri context (vitest / node / storybook) the plugin's
+      // global init fails; fall back to the browser's own fetch so
+      // importing this module for helper functions still works.
+      .catch(() => globalThis.fetch)
+  }
+  return pluginFetchPromise
+}
+
+/**
  * Detect fetch-level network failures across Tauri's different webview
  * backends. Each platform phrases the same failure class differently:
  *
@@ -91,13 +122,12 @@ export async function streamChat(
   try {
     const baseBody = providerConfig.buildBody(messages) as Record<string, unknown>
     const body = requestOverrides ? { ...baseBody, ...requestOverrides } : baseBody
-    response = await fetch(providerConfig.url, {
+    const httpFetch = await getHttpFetch()
+    response = await httpFetch(providerConfig.url, {
       method: "POST",
       headers: providerConfig.headers,
       body: JSON.stringify(body),
       signal: combinedSignal,
-      // @ts-ignore — keepalive hint for Tauri webview
-      keepalive: false,
     })
   } catch (err) {
     if (signal?.aborted) {

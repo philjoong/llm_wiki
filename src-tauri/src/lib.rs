@@ -21,6 +21,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        // Rust-backed fetch so third-party LLM APIs that reject
+        // browser-origin headers via CORS preflight (MiniMax, Volcengine
+        // Ark's api/coding/v3, etc.) still work. Requests leave the app
+        // from Rust, never the webview.
+        .plugin(tauri_plugin_http::init())
         .setup(|app| {
             // Let the PDF extractor find the bundled pdfium dynamic
             // library via Tauri's platform-correct resource path.

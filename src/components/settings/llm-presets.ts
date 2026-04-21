@@ -252,6 +252,31 @@ export const LLM_PRESETS: LlmPreset[] = [
     suggestedContextSize: 200000,
   },
   {
+    id: "volcengine-ark",
+    label: "火山引擎 Ark (Volcengine)",
+    hint: "ark.cn-beijing.volces.com/api/coding/v3",
+    provider: "custom",
+    // Volcengine Ark's "coding" product line mandates this exact base URL
+    // per their official docs. Their other OpenAI-compat base (api/v3) is
+    // not a valid substitute. This endpoint rejects browser-origin fetch
+    // via CORS (allow-headers omits `authorization`), so LLM calls route
+    // through Tauri's HTTP plugin — see src/lib/llm-client.ts.
+    baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+    apiMode: "chat_completions",
+    // Current Volcengine Ark model families. Users commonly bring their
+    // own endpoint id (ep-xxx…) via the custom text input when they have
+    // a private deployment provisioned on the console.
+    suggestedModels: [
+      "doubao-seed-1-6-250615",
+      "doubao-1-5-pro-32k-250115",
+      "doubao-1-5-pro-256k-250115",
+      "doubao-1-5-lite-32k-250115",
+      "deepseek-v3-250324",
+      "deepseek-r1-250528",
+    ],
+    suggestedContextSize: 128000,
+  },
+  {
     id: "ollama-local",
     label: "Ollama (Local)",
     hint: "Self-hosted llama.cpp / Ollama",

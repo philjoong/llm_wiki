@@ -219,3 +219,87 @@ describe("Google provider URL — model path encoding", () => {
     expect(cfg.url).toContain("google%2Fgemini-3-pro-preview:streamGenerateContent")
   })
 })
+
+describe("Sampling override translation across wires", () => {
+  const baseMessages = [{ role: "user" as const, content: "hi" }]
+
+  it("Gemini nests overrides under generationConfig with Gemini naming", () => {
+    // Regression for a user-reported HTTP 400 —
+    //   "Unknown name 'temperature': Cannot find field."
+    // Gemini rejects sampling knobs at the top level and requires the
+    // renamed keys (top_p → topP, max_tokens → maxOutputTokens).
+    const cfg = getProviderConfig({
+      provider: "google",
+      apiKey: "k",
+      model: "gemini-2.5-flash",
+      ollamaUrl: "",
+      customEndpoint: "",
+      maxContextSize: 128000,
+    })
+    const body = cfg.buildBody(baseMessages, {
+      temperature: 0.1,
+      top_p: 0.9,
+      top_k: 40,
+      max_tokens: 500,
+      stop: ["###"],
+    }) as Record<string, unknown>
+
+    expect(body.temperature).toBeUndefined()
+    expect(body.top_p).toBeUndefined()
+    expect(body.max_tokens).toBeUndefined()
+    const gc = body.generationConfig as Record<string, unknown>
+    expect(gc.temperature).toBe(0.1)
+    expect(gc.topP).toBe(0.9)
+    expect(gc.topK).toBe(40)
+    expect(gc.maxOutputTokens).toBe(500)
+    expect(gc.stopSequences).toEqual(["###"])
+  })
+
+  it("Gemini omits generationConfig entirely when no overrides passed", () => {
+    const cfg = getProviderConfig({
+      provider: "google",
+      apiKey: "k",
+      model: "gemini-2.5-flash",
+      ollamaUrl: "",
+      customEndpoint: "",
+      maxContextSize: 128000,
+    })
+    const body = cfg.buildBody(baseMessages) as Record<string, unknown>
+    expect(body.generationConfig).toBeUndefined()
+  })
+
+  it("OpenAI wires put overrides at the top level", () => {
+    const cfg = getProviderConfig({
+      provider: "openai",
+      apiKey: "k",
+      model: "gpt-4o",
+      ollamaUrl: "",
+      customEndpoint: "",
+      maxContextSize: 128000,
+    })
+    const body = cfg.buildBody(baseMessages, { temperature: 0.1, max_tokens: 500 }) as Record<string, unknown>
+    expect(body.temperature).toBe(0.1)
+    expect(body.max_tokens).toBe(500)
+  })
+
+  it("Anthropic maps stop → stop_sequences and respects max_tokens override", () => {
+    const cfg = getProviderConfig({
+      provider: "anthropic",
+      apiKey: "k",
+      model: "claude-sonnet-4-5-20250929",
+      ollamaUrl: "",
+      customEndpoint: "",
+      maxContextSize: 200000,
+    })
+    const body = cfg.buildBody(baseMessages, {
+      temperature: 0.1,
+      stop: "END",
+      max_tokens: 8192,
+    }) as Record<string, unknown>
+    expect(body.temperature).toBe(0.1)
+    // Anthropic's wire field is `stop_sequences` (array), not `stop`.
+    expect(body.stop_sequences).toEqual(["END"])
+    expect(body.stop).toBeUndefined()
+    expect(body.max_tokens).toBe(8192)
+  })
+})

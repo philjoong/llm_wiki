@@ -1,7 +1,7 @@
 import type { LlmConfig } from "@/stores/wiki-store"
-import { getProviderConfig } from "./llm-providers"
+import { getProviderConfig, type RequestOverrides } from "./llm-providers"
 
-export type { ChatMessage } from "./llm-providers"
+export type { ChatMessage, RequestOverrides } from "./llm-providers"
 
 export interface StreamCallbacks {
   onToken: (token: string) => void
@@ -81,12 +81,14 @@ export async function streamChat(
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
   /**
-   * Extra fields to merge into the request body. Use for provider-specific
-   * knobs like `temperature`, `top_p`, `max_tokens`. Callers that need
-   * strict format adherence (e.g. ingest stage 2 emitting FILE blocks)
-   * should pass `{ temperature: 0.1 }` to reduce sampling variance.
+   * Wire-agnostic sampling knobs. The provider's buildBody() translates
+   * these into its native schema — OpenAI-style wires accept them at
+   * the top level ({temperature: 0.1}), Gemini nests them under
+   * generationConfig with renamed keys ({generationConfig: {temperature: 0.1}}).
+   * Previously we spread them onto the body here, which broke Gemini
+   * with "Unknown name 'temperature': Cannot find field." HTTP 400.
    */
-  requestOverrides?: Record<string, unknown>,
+  requestOverrides?: RequestOverrides,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
   const providerConfig = getProviderConfig(config)
@@ -120,8 +122,7 @@ export async function streamChat(
 
   let response: Response
   try {
-    const baseBody = providerConfig.buildBody(messages) as Record<string, unknown>
-    const body = requestOverrides ? { ...baseBody, ...requestOverrides } : baseBody
+    const body = providerConfig.buildBody(messages, requestOverrides)
     const httpFetch = await getHttpFetch()
     response = await httpFetch(providerConfig.url, {
       method: "POST",

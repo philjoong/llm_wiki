@@ -5,10 +5,27 @@ export interface ChatMessage {
   content: string
 }
 
+/**
+ * Sampling knobs a caller can pass to `streamChat` without caring about
+ * the underlying wire's naming. Each provider's `buildBody` is
+ * responsible for translating these into its native schema — OpenAI-
+ * style wires accept them at the top level, Gemini demands they live
+ * under `generationConfig` with renamed keys (`top_p` → `topP`,
+ * `max_tokens` → `maxOutputTokens`, etc.). Missing fields are left
+ * unset; providers keep their existing defaults.
+ */
+export interface RequestOverrides {
+  temperature?: number
+  top_p?: number
+  top_k?: number
+  max_tokens?: number
+  stop?: string | string[]
+}
+
 interface ProviderConfig {
   url: string
   headers: Record<string, string>
-  buildBody: (messages: ChatMessage[]) => unknown
+  buildBody: (messages: ChatMessage[], overrides?: RequestOverrides) => unknown
   parseStream: (line: string) => string | null
 }
 
@@ -77,20 +94,38 @@ export function parseGoogleLine(line: string): string | null {
   }
 }
 
-function buildOpenAiBody(messages: ChatMessage[]): Record<string, unknown> {
-  return { messages, stream: true }
+function buildOpenAiBody(
+  messages: ChatMessage[],
+  overrides?: RequestOverrides,
+): Record<string, unknown> {
+  // OpenAI (and every /v1/chat/completions clone — DeepSeek, Groq,
+  // Ollama, Zhipu, Kimi, xAI, MiniMax OpenAI-compat, ...) accepts these
+  // knobs at the top level using the names clients already send.
+  return { messages, stream: true, ...(overrides ?? {}) }
 }
 
-function buildAnthropicBody(messages: ChatMessage[]): Record<string, unknown> {
+function buildAnthropicBody(
+  messages: ChatMessage[],
+  overrides?: RequestOverrides,
+): Record<string, unknown> {
   const systemMessages = messages.filter((m) => m.role === "system")
   const conversationMessages = messages.filter((m) => m.role !== "system")
   const system = systemMessages.map((m) => m.content).join("\n") || undefined
 
+  // Anthropic Messages uses top_p / top_k (Python-style snake_case), a
+  // mandatory `max_tokens`, and `stop_sequences` instead of `stop`.
+  // Overrides may still set max_tokens to stretch long outputs.
   return {
     messages: conversationMessages,
     ...(system !== undefined ? { system } : {}),
     stream: true,
-    max_tokens: 4096,
+    max_tokens: overrides?.max_tokens ?? 4096,
+    ...(overrides?.temperature !== undefined ? { temperature: overrides.temperature } : {}),
+    ...(overrides?.top_p !== undefined ? { top_p: overrides.top_p } : {}),
+    ...(overrides?.top_k !== undefined ? { top_k: overrides.top_k } : {}),
+    ...(overrides?.stop !== undefined
+      ? { stop_sequences: Array.isArray(overrides.stop) ? overrides.stop : [overrides.stop] }
+      : {}),
   }
 }
 
@@ -152,7 +187,10 @@ function buildAnthropicHeaders(apiKey: string, url: string): Record<string, stri
   return base
 }
 
-function buildGoogleBody(messages: ChatMessage[]): Record<string, unknown> {
+function buildGoogleBody(
+  messages: ChatMessage[],
+  overrides?: RequestOverrides,
+): Record<string, unknown> {
   const systemMessages = messages.filter((m) => m.role === "system")
   const conversationMessages = messages.filter((m) => m.role !== "system")
 
@@ -168,9 +206,28 @@ function buildGoogleBody(messages: ChatMessage[]): Record<string, unknown> {
         }
       : undefined
 
+  // Gemini rejects sampling knobs at the top level (HTTP 400
+  // "Unknown name 'temperature': Cannot find field.") — everything
+  // must live under `generationConfig` with Gemini-specific naming:
+  //   top_p       → topP
+  //   top_k       → topK
+  //   max_tokens  → maxOutputTokens
+  //   stop        → stopSequences (array)
+  // Build it only when the caller actually passed something, so an
+  // unmodified request stays minimal and lets server defaults apply.
+  const generationConfig: Record<string, unknown> = {}
+  if (overrides?.temperature !== undefined) generationConfig.temperature = overrides.temperature
+  if (overrides?.top_p !== undefined) generationConfig.topP = overrides.top_p
+  if (overrides?.top_k !== undefined) generationConfig.topK = overrides.top_k
+  if (overrides?.max_tokens !== undefined) generationConfig.maxOutputTokens = overrides.max_tokens
+  if (overrides?.stop !== undefined) {
+    generationConfig.stopSequences = Array.isArray(overrides.stop) ? overrides.stop : [overrides.stop]
+  }
+
   return {
     contents,
     ...(systemInstruction !== undefined ? { systemInstruction } : {}),
+    ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
   }
 }
 
@@ -185,8 +242,8 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           "Content-Type": JSON_CONTENT_TYPE,
           Authorization: `Bearer ${apiKey}`,
         },
-        buildBody: (messages) => ({
-          ...buildOpenAiBody(messages),
+        buildBody: (messages, overrides) => ({
+          ...buildOpenAiBody(messages, overrides),
           model,
         }),
         parseStream: parseOpenAiLine,
@@ -197,8 +254,8 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
       return {
         url,
         headers: buildAnthropicHeaders(apiKey, url),
-        buildBody: (messages) => ({
-          ...buildAnthropicBody(messages),
+        buildBody: (messages, overrides) => ({
+          ...buildAnthropicBody(messages, overrides),
           model,
         }),
         parseStream: parseAnthropicLine,
@@ -238,9 +295,9 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         headers: {
           "Content-Type": JSON_CONTENT_TYPE,
         },
-        buildBody: (messages) => {
+        buildBody: (messages, overrides) => {
           const body: Record<string, unknown> = {
-            ...buildOpenAiBody(messages),
+            ...buildOpenAiBody(messages, overrides),
             model,
           }
           // Qwen3 thinking mode disable. Recognized by llama.cpp server
@@ -267,8 +324,8 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
       return {
         url,
         headers: buildAnthropicHeaders(apiKey, url),
-        buildBody: (messages) => ({
-          ...buildAnthropicBody(messages),
+        buildBody: (messages, overrides) => ({
+          ...buildAnthropicBody(messages, overrides),
           model,
         }),
         parseStream: parseAnthropicLine,
@@ -286,8 +343,8 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         return {
           url,
           headers: buildAnthropicHeaders(apiKey, url),
-          buildBody: (messages) => ({
-            ...buildAnthropicBody(messages),
+          buildBody: (messages, overrides) => ({
+            ...buildAnthropicBody(messages, overrides),
             model,
           }),
           parseStream: parseAnthropicLine,
@@ -307,8 +364,8 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           "Content-Type": JSON_CONTENT_TYPE,
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
-        buildBody: (messages) => ({
-          ...buildOpenAiBody(messages),
+        buildBody: (messages, overrides) => ({
+          ...buildOpenAiBody(messages, overrides),
           model,
         }),
         parseStream: parseOpenAiLine,

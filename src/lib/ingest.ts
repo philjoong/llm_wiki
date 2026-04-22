@@ -475,8 +475,33 @@ async function writeFileBlocks(
         const existing = await tryReadFile(fullPath)
         const appended = existing ? `${existing}\n\n${content.trim()}` : content.trim()
         await writeFile(fullPath, appended)
-      } else {
+      } else if (
+        relativePath === "wiki/index.md" ||
+        relativePath.endsWith("/index.md") ||
+        relativePath === "wiki/overview.md" ||
+        relativePath.endsWith("/overview.md")
+      ) {
+        // Listing pages (index / overview) are always overwritten
+        // wholesale — their sources field is incidental and merging
+        // wouldn't make semantic sense (they aren't source-derived
+        // content pages).
         await writeFile(fullPath, content)
+      } else {
+        // Content pages (entities / concepts / queries / synthesis /
+        // comparisons / sources summaries): MERGE the sources field
+        // with what's already on disk before overwriting, so pages
+        // that multiple source documents contribute to retain the
+        // full `sources: [...]` history. Without this, every
+        // re-ingest clobbers sources to a single entry and the
+        // source-delete flow would later treat the page as single-
+        // sourced and delete it outright — silent data loss.
+        //
+        // See src/lib/sources-merge.ts for the merge semantics
+        // (case-insensitive dedup, preserves existing order).
+        const { mergeSourcesIntoContent } = await import("./sources-merge")
+        const existing = await tryReadFile(fullPath)
+        const toWrite = mergeSourcesIntoContent(content, existing)
+        await writeFile(fullPath, toWrite)
       }
       writtenPaths.push(relativePath)
     } catch (err) {

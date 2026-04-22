@@ -146,13 +146,13 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
                 // it automatically via shouldShowUpdateBanner.
                 <span
                   className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-muted/50"
-                  title="有可用更新"
+                  title={t("nav.updateAvailable")}
                 />
               )}
             </TooltipTrigger>
             <TooltipContent side="right">
               {t("nav.settings")}
-              {updateBannerVisible ? "  · 有更新" : ""}
+              {updateBannerVisible ? t("nav.updateAvailableSuffix") : ""}
             </TooltipContent>
           </Tooltip>
           <Tooltip>

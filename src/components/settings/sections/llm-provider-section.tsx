@@ -110,6 +110,7 @@ function PresetRow({
   onToggleExpand,
   onChange,
 }: PresetRowProps) {
+  const { t } = useTranslation()
   const ov = override ?? {}
   const model = ov.model ?? preset.defaultModel ?? ""
   const apiKey = ov.apiKey ?? ""
@@ -131,7 +132,7 @@ function PresetRow({
           type="button"
           onClick={onToggleExpand}
           className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent"
-          title={isExpanded ? "收起" : "展开配置"}
+          title={isExpanded ? t("settings.sections.llm.collapse") : t("settings.sections.llm.expand")}
         >
           {isExpanded ? (
             <ChevronDown className="h-4 w-4" />
@@ -149,16 +150,16 @@ function PresetRow({
             <span className="truncate text-sm font-medium">{preset.label}</span>
             {hasConfig && !isActive && (
               <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                已配置
+                {t("settings.sections.llm.configuredBadge")}
               </span>
             )}
             {isActive && (
               <span className="shrink-0 rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                ● 活跃
+                {t("settings.sections.llm.activeBadge")}
               </span>
             )}
             {savedHere && (
-              <span className="shrink-0 text-[10px] text-emerald-600">已保存</span>
+              <span className="shrink-0 text-[10px] text-emerald-600">{t("settings.sections.llm.savedBadge")}</span>
             )}
           </div>
           {preset.hint && (
@@ -177,7 +178,7 @@ function PresetRow({
               ? "border-primary bg-primary"
               : "border-muted-foreground/30 bg-muted-foreground/20 hover:bg-muted-foreground/30"
           }`}
-          title={isActive ? "点击关闭" : "点击启用(会关闭其他 provider)"}
+          title={isActive ? t("settings.sections.llm.toggleOff") : t("settings.sections.llm.toggleOn")}
           aria-label={isActive ? "Deactivate" : "Activate"}
         >
           <span
@@ -193,12 +194,12 @@ function PresetRow({
         <div className="space-y-4 border-t bg-background/50 px-4 py-3">
           {preset.provider === "custom" && (
             <div className="space-y-2">
-              <Label>API 模式</Label>
+              <Label>API Mode</Label>
               <div className="flex flex-wrap gap-2">
                 {(
                   [
-                    { value: "chat_completions", label: "OpenAI 兼容" },
-                    { value: "anthropic_messages", label: "Anthropic 兼容" },
+                    { value: "chat_completions", labelKey: "settings.sections.llm.wireOpenAi" },
+                    { value: "anthropic_messages", labelKey: "settings.sections.llm.wireAnthropic" },
                   ] as const
                 ).map((m) => {
                   const active = apiMode === m.value
@@ -223,7 +224,7 @@ function PresetRow({
                           : "border-border hover:bg-accent"
                       }`}
                     >
-                      {m.label}
+                      {t(m.labelKey)}
                     </button>
                   )
                 })}
@@ -249,8 +250,8 @@ function PresetRow({
                 onChange={(e) => onChange({ apiKey: e.target.value })}
                 placeholder={
                   preset.provider === "custom"
-                    ? "无 Key 可留空(本地模型)"
-                    : "Enter your API key"
+                    ? t("settings.sections.llm.apiKeyPlaceholderCustom")
+                    : t("settings.sections.llm.apiKeyPlaceholder")
                 }
               />
             </div>

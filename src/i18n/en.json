@@ -11,7 +11,9 @@
     "lint": "Lint",
     "review": "Review",
     "settings": "Settings",
-    "switchProject": "Switch Project"
+    "switchProject": "Switch Project",
+    "updateAvailable": "Update available",
+    "updateAvailableSuffix": " · update"
   },
   "welcome": {
     "newProject": "New Project",
@@ -106,7 +108,18 @@
     "sections": {
       "llm": {
         "title": "LLM Models",
-        "description": "One row per vendor. Toggling one on automatically turns off the others. Changes save instantly; each vendor's API key is stored independently so switching doesn't lose data."
+        "description": "One row per vendor. Toggling one on automatically turns off the others. Changes save instantly; each vendor's API key is stored independently so switching doesn't lose data.",
+        "expand": "Expand config",
+        "collapse": "Collapse",
+        "toggleOff": "Click to deactivate",
+        "toggleOn": "Click to activate (turns off other providers)",
+        "wireOpenAi": "OpenAI-compat",
+        "wireAnthropic": "Anthropic-compat",
+        "apiKeyPlaceholderCustom": "Leave empty if no key (local models)",
+        "apiKeyPlaceholder": "Enter your API key",
+        "savedBadge": "saved",
+        "configuredBadge": "configured",
+        "activeBadge": "● active"
       },
       "embedding": {
         "title": "Vector Embeddings",

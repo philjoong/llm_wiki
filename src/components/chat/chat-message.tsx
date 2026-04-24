@@ -16,6 +16,7 @@ import type { FileNode } from "@/types/wiki"
 
 import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
 import { normalizePath, getFileName } from "@/lib/path-utils"
+import { makeQueryFileName } from "@/lib/wiki-filename"
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -155,17 +156,13 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
     const pp = normalizePath(project.path)
     setSaving(true)
     try {
-      // Generate slug from first line or first 50 chars
+      // Generate a unique filename for this save.
+      // See `src/lib/wiki-filename.ts` — the slug is Unicode-aware
+      // (so CJK titles don't collapse to empty) and the HHMMSS
+      // timestamp suffix guarantees same-day saves stay distinct.
       const firstLine = content.split("\n")[0].replace(/^#+\s*/, "").trim()
       const title = firstLine.slice(0, 60) || "Saved Query"
-      const slug = title
-        .toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, "")
-        .trim()
-        .replace(/\s+/g, "-")
-        .slice(0, 50)
-      const date = new Date().toISOString().slice(0, 10)
-      const fileName = `${slug}-${date}.md`
+      const { date, fileName } = makeQueryFileName(title)
       const filePath = `${pp}/wiki/queries/${fileName}`
 
       // Strip hidden sources comment and thinking blocks from content
@@ -195,7 +192,11 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
       } catch {
         indexContent = "# Wiki Index\n\n## Queries\n"
       }
-      const entry = `- [[queries/${slug}-${date}|${title}]]`
+      // The wikilink target is the filename WITHOUT the `.md`
+      // extension — must match `fileName` exactly (including the
+      // time suffix) or the link lands on a 404.
+      const linkTarget = fileName.replace(/\.md$/, "")
+      const entry = `- [[queries/${linkTarget}|${title}]]`
       if (indexContent.includes("## Queries")) {
         indexContent = indexContent.replace(
           /(## Queries\n)/,

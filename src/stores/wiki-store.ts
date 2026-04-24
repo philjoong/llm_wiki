@@ -29,6 +29,21 @@ interface EmbeddingConfig {
   endpoint: string // e.g. "http://127.0.0.1:1234/v1/embeddings"
   apiKey: string
   model: string // e.g. "text-embedding-qwen3-embedding-0.6b"
+  /**
+   * Chunking knobs (Phase 1 RAG). Undefined values fall back to the
+   * chunker's built-in defaults in `src/lib/text-chunker.ts`:
+   *   targetChars   1000
+   *   maxChars      1500
+   *   minChars      200
+   *   overlapChars  200
+   *
+   * Users on small-context endpoints (e.g. llama.cpp with n_ctx=512,
+   * Ollama `mxbai-embed-large`) should lower `maxChunkChars` to avoid
+   * per-request rejections; fetchEmbedding also auto-halves on
+   * "too long" server errors as a second line of defence.
+   */
+  maxChunkChars?: number
+  overlapChunkChars?: number
 }
 
 /**

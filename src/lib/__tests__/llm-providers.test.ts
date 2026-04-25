@@ -303,3 +303,105 @@ describe("Sampling override translation across wires", () => {
     expect(body.max_tokens).toBe(8192)
   })
 })
+
+// ── Origin header for local LLM providers (Ollama + custom OpenAI) ──
+//
+// Pinned by a real packet capture from a Windows user (v0.3.11) where
+// plugin-http auto-injected `origin: http://tauri.localhost`,
+// triggering Ollama 403 because that origin isn't in the default
+// `OLLAMA_ORIGINS` allowlist. Setting Origin = same-origin makes
+// Ollama always trust the request.
+//
+// Plugin-http v2.5.x respects user-set headers (override behavior
+// confirmed by reading dist-js/index.js line 71-75), and the
+// `unsafe-headers` Cargo feature ensures Rust-side reqwest forwards
+// it. So this header surfacing here = bytes on the wire.
+
+describe("Origin header — local LLM CORS workaround", () => {
+  it("Ollama provider sets Origin to the request's own host (localhost)", () => {
+    const cfg = getProviderConfig({
+      provider: "ollama",
+      apiKey: "",
+      model: "llama3",
+      ollamaUrl: "http://localhost:11434",
+      customEndpoint: "",
+      maxContextSize: 8192,
+    })
+    expect(cfg.headers["Origin"]).toBe("http://localhost:11434")
+  })
+
+  it("Ollama provider Origin reflects remote LAN deployment (not localhost)", () => {
+    const cfg = getProviderConfig({
+      provider: "ollama",
+      apiKey: "",
+      model: "llama3",
+      ollamaUrl: "http://192.168.1.50:11434",
+      customEndpoint: "",
+      maxContextSize: 8192,
+    })
+    expect(cfg.headers["Origin"]).toBe("http://192.168.1.50:11434")
+  })
+
+  it("Ollama provider strips trailing /v1 before deriving Origin", () => {
+    // User pasted "http://localhost:11434/v1" as their Ollama URL. The
+    // URL the provider builds will be "http://localhost:11434/v1/chat/completions",
+    // so Origin must still be "http://localhost:11434" (URL.origin
+    // never includes a path anyway, but pinning this catches a
+    // regression where someone derives Origin from the full URL string
+    // by hand).
+    const cfg = getProviderConfig({
+      provider: "ollama",
+      apiKey: "",
+      model: "llama3",
+      ollamaUrl: "http://localhost:11434/v1",
+      customEndpoint: "",
+      maxContextSize: 8192,
+    })
+    expect(cfg.headers["Origin"]).toBe("http://localhost:11434")
+  })
+
+  it("custom OpenAI-compat endpoint also gets a same-origin Origin (LM Studio / llama.cpp / vLLM)", () => {
+    const cfg = getProviderConfig({
+      provider: "custom",
+      apiKey: "",
+      model: "qwen3",
+      ollamaUrl: "",
+      customEndpoint: "http://127.0.0.1:1234",
+      maxContextSize: 8192,
+      apiMode: "chat_completions",
+    } as RealLlmConfig)
+    expect(cfg.headers["Origin"]).toBe("http://127.0.0.1:1234")
+  })
+
+  it("commercial provider (OpenAI) does NOT get an explicit Origin override", () => {
+    // OpenAI's CORS doesn't care about Origin (auth is via API key).
+    // Setting Origin would just be noise. Pin that we DON'T touch
+    // commercial endpoints.
+    const cfg = getProviderConfig({
+      provider: "openai",
+      apiKey: "k",
+      model: "gpt-4o",
+      ollamaUrl: "",
+      customEndpoint: "",
+      maxContextSize: 128000,
+    })
+    expect(cfg.headers["Origin"]).toBeUndefined()
+  })
+
+  it("malformed ollamaUrl falls back gracefully (no Origin header) instead of crashing", () => {
+    // Settings UI normalizes URLs but a stale config from an older
+    // version could carry rubbish. Origin parsing must not throw.
+    const cfg = getProviderConfig({
+      provider: "ollama",
+      apiKey: "",
+      model: "llama3",
+      ollamaUrl: "not a url",
+      customEndpoint: "",
+      maxContextSize: 8192,
+    })
+    expect(cfg.headers["Origin"]).toBeUndefined()
+    // The URL itself will obviously be broken — but the provider
+    // builder shouldn't have thrown.
+    expect(typeof cfg.url).toBe("string")
+  })
+})

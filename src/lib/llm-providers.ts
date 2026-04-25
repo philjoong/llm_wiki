@@ -31,6 +31,44 @@ interface ProviderConfig {
 
 const JSON_CONTENT_TYPE = "application/json"
 
+/**
+ * Origin header for local-LLM endpoints (Ollama, LM Studio, llama.cpp
+ * server, LocalAI, vLLM, …).
+ *
+ * Why we set this explicitly:
+ *   `@tauri-apps/plugin-http` v2.5.x auto-injects the webview's
+ *   own Origin (`tauri://localhost` on macOS/Linux,
+ *   `http://tauri.localhost` on Windows). Ollama's default
+ *   `OLLAMA_ORIGINS` allowlist accepts `tauri://*` since ~0.1.30
+ *   but NOT `http://tauri.localhost` — so Windows users hit 403
+ *   even when everything is configured correctly. A user packet
+ *   capture (v0.3.11) confirmed the request carrying
+ *   `origin: http://tauri.localhost`.
+ *
+ * Setting Origin to the request's own host = same-origin, which
+ * Ollama always trusts regardless of `OLLAMA_ORIGINS` value or
+ * Ollama version.
+ *
+ * Why this works at all:
+ *   plugin-http's JS shim respects user-set headers (see
+ *   `node_modules/@tauri-apps/plugin-http/dist-js/index.js`,
+ *   the loop after `new Request(input, init)` only fills
+ *   browser-default headers when the user did NOT already set
+ *   them). On the Rust side, the `unsafe-headers` feature flag
+ *   in `src-tauri/Cargo.toml` lets reqwest forward Origin
+ *   without stripping it. End-to-end this means our value wins.
+ *
+ * If `url` can't be parsed (mis-typed config), we return {} —
+ * better to send no override than to crash building the request.
+ */
+function sameOriginHeader(url: string): Record<string, string> {
+  try {
+    return { Origin: new URL(url).origin }
+  } catch {
+    return {}
+  }
+}
+
 function parseOpenAiLine(line: string): string | null {
   if (!line.startsWith("data: ")) return null
   const data = line.slice(6).trim()
@@ -294,6 +332,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         url: `${ollamaBase}/v1/chat/completions`,
         headers: {
           "Content-Type": JSON_CONTENT_TYPE,
+          ...sameOriginHeader(ollamaBase),
         },
         buildBody: (messages, overrides) => {
           const body: Record<string, unknown> = {
@@ -363,6 +402,10 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         headers: {
           "Content-Type": JSON_CONTENT_TYPE,
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          // Local OpenAI-compatible servers (LM Studio, llama.cpp,
+          // vLLM, LocalAI) often share Ollama's CORS sensitivity.
+          // Same rationale as the `ollama` branch above.
+          ...sameOriginHeader(base),
         },
         buildBody: (messages, overrides) => ({
           ...buildOpenAiBody(messages, overrides),

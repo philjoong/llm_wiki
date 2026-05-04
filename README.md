@@ -1,349 +1,5 @@
 # LLM Wiki
 
-<p align="center">
-  <img src="logo.jpg" width="128" height="128" style="border-radius: 22%;" alt="LLM Wiki Logo">
-</p>
-
-<p align="center">
-  <strong>A personal knowledge base that builds itself.</strong><br>
-  LLM reads your documents, builds a structured wiki, and keeps it current.
-</p>
-
-<p align="center">
-  <a href="#what-is-this">What is this?</a> •
-  <a href="#what-we-changed--added">Features</a> •
-  <a href="#tech-stack">Tech Stack</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#credits">Credits</a> •
-  <a href="#license">License</a>
-</p>
-
-<p align="center">
-  English | <a href="README_CN.md">中文</a>
-</p>
-
----
-
-<p align="center">
-  <img src="assets/overview.jpg" width="100%" alt="Overview">
-</p>
-
-## Features
-
-- **Two-Step Chain-of-Thought Ingest** — LLM analyzes first, then generates wiki pages with source traceability and incremental cache
-- **4-Signal Knowledge Graph** — relevance model with direct links, source overlap, Adamic-Adar, and type affinity
-- **Louvain Community Detection** — automatic knowledge cluster discovery with cohesion scoring
-- **Graph Insights** — surprising connections and knowledge gaps with one-click Deep Research
-- **Vector Semantic Search** — optional embedding-based retrieval via LanceDB, supports any OpenAI-compatible endpoint
-- **Persistent Ingest Queue** — serial processing with crash recovery, cancel, retry, and progress visualization
-- **Folder Import** — recursive folder import preserving directory structure, folder context as LLM classification hint
-- **Deep Research** — LLM-optimized search topics, multi-query web search, auto-ingest results into wiki
-- **Async Review System** — LLM flags items for human judgment, predefined actions, pre-generated search queries
-- **Chrome Web Clipper** — one-click web page capture with auto-ingest into knowledge base
-
-## What is this?
-
-LLM Wiki is a cross-platform desktop application that turns your documents into an organized, interlinked knowledge base — automatically. Instead of traditional RAG (retrieve-and-answer from scratch every time), the LLM **incrementally builds and maintains a persistent wiki** from your sources. Knowledge is compiled once and kept current, not re-derived on every query.
-
-This project is based on [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a methodology for building personal knowledge bases using LLMs. We implemented the core ideas as a full desktop application with significant enhancements.
-
-<p align="center">
-  <img src="assets/llm_wiki_arch.jpg" width="100%" alt="LLM Wiki Architecture">
-</p>
-
-## Credits
-
-The foundational methodology comes from **Andrej Karpathy**'s [llm-wiki.md](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), which describes the pattern of using LLMs to incrementally build and maintain a personal wiki. The original document is an abstract design pattern; this project is a concrete implementation with substantial extensions.
-
-## What We Kept from the Original
-
-The core architecture follows Karpathy's design faithfully:
-
-- **Three-layer architecture**: Raw Sources (immutable) → Wiki (LLM-generated) → Schema (rules & config)
-- **Three core operations**: Ingest, Query, Lint
-- **index.md** as the content catalog and LLM navigation entry point
-- **log.md** as the chronological operation record with parseable format
-- **[[wikilink]]** syntax for cross-references
-- **YAML frontmatter** on every wiki page
-- **Obsidian compatibility** — the wiki directory works as an Obsidian vault
-- **Human curates, LLM maintains** — the fundamental role division
-
-<p align="center">
-  <img src="assets/5-obsidian_compatibility.jpg" width="100%" alt="Obsidian Compatibility">
-</p>
-
-## What We Changed & Added
-
-### 1. From CLI to Desktop Application
-
-The original is an abstract pattern document designed to be copy-pasted to an LLM agent. We built it into a **full cross-platform desktop application** with:
-- **Three-column layout**: Knowledge Tree / File Tree (left) + Chat (center) + Preview (right)
-- **Icon sidebar** for switching between Wiki, Sources, Search, Graph, Lint, Review, Deep Research, Settings
-- **Custom resizable panels** — drag-to-resize left and right panels with min/max constraints
-- **Activity panel** — real-time processing status showing file-by-file ingest progress
-- **All state persisted** — conversations, settings, review items, project config survive restarts
-- **Scenario templates** — Research, Reading, Personal Growth, Business, General — each pre-configures purpose.md and schema.md
-
-### 2. Purpose.md — The Wiki's Soul
-
-The original has Schema (how the wiki works) but no formal place for **why** the wiki exists. We added `purpose.md`:
-- Defines goals, key questions, research scope, evolving thesis
-- LLM reads it during every ingest and query for context
-- LLM can suggest updates based on usage patterns
-- Different from schema — schema is structural rules, purpose is directional intent
-
-### 3. Two-Step Chain-of-Thought Ingest
-
-The original describes a single-step ingest where the LLM reads and writes simultaneously. We split it into **two sequential LLM calls** for significantly better quality:
-
-```
-Step 1 (Analysis): LLM reads source → structured analysis
-  - Key entities, concepts, arguments
-  - Connections to existing wiki content
-  - Contradictions & tensions with existing knowledge
-  - Recommendations for wiki structure
-
-Step 2 (Generation): LLM takes analysis → generates wiki files
-  - Source summary with frontmatter (type, title, sources[])
-  - Entity pages, concept pages with cross-references
-  - Updated index.md, log.md, overview.md
-  - Review items for human judgment
-  - Search queries for Deep Research
-```
-
-Additional ingest enhancements beyond the original:
-- **SHA256 incremental cache** — source file content is hashed before ingest; unchanged files are skipped automatically, saving LLM tokens and time
-- **Persistent ingest queue** — serial processing prevents concurrent LLM calls; queue persisted to disk, survives app restart; failed tasks auto-retry up to 3 times
-- **Folder import** — recursive folder import preserving directory structure; folder path passed to LLM as classification context (e.g., "papers > energy" helps categorize content)
-- **Queue visualization** — Activity Panel shows progress bar, pending/processing/failed tasks with cancel and retry buttons
-- **Auto-embedding** — when vector search is enabled, new pages are automatically embedded after ingest
-- **Source traceability** — every generated wiki page includes a `sources: []` field in YAML frontmatter, linking back to the raw source files that contributed to it
-- **overview.md auto-update** — global summary page regenerated on every ingest to reflect the latest state of the wiki
-- **Guaranteed source summary** — fallback ensures a source summary page is always created, even if the LLM omits it
-- **Language-aware generation** — LLM responds in the user's configured language (English or Chinese)
-
-### 4. Knowledge Graph with Relevance Model
-
-<p align="center">
-  <img src="assets/3-knowledge_graph.jpg" width="100%" alt="Knowledge Graph">
-</p>
-
-The original mentions `[[wikilinks]]` for cross-references but has no graph analysis. We built a **full knowledge graph visualization and relevance engine**:
-
-**4-Signal Relevance Model:**
-| Signal | Weight | Description |
-|--------|--------|-------------|
-| Direct link | ×3.0 | Pages linked via `[[wikilinks]]` |
-| Source overlap | ×4.0 | Pages sharing the same raw source (via frontmatter `sources[]`) |
-| Adamic-Adar | ×1.5 | Pages sharing common neighbors (weighted by neighbor degree) |
-| Type affinity | ×1.0 | Bonus for same page type (entity↔entity, concept↔concept) |
-
-**Graph Visualization (sigma.js + graphology + ForceAtlas2):**
-- Node colors by page type or community, sizes scaled by link count (√ scaling)
-- Edge thickness and color by relevance weight (green=strong, gray=weak)
-- Hover interaction: neighbors stay visible, non-neighbors dim, edges highlight with relevance score label
-- Zoom controls (ZoomIn, ZoomOut, Fit-to-screen)
-- Position caching prevents layout jumps when data updates
-- Legend switches between type counts and community info based on coloring mode
-
-### 5. Louvain Community Detection
-
-Not in the original. Automatic discovery of knowledge clusters using the **Louvain algorithm** (graphology-communities-louvain):
-
-- **Auto-clustering** — discovers which pages naturally group together based on link topology, independent of predefined page types
-- **Type / Community toggle** — switch between coloring nodes by page type (entity, concept, source...) or by discovered knowledge cluster
-- **Cohesion scoring** — each community scored by intra-edge density (actual edges / possible edges); low-cohesion clusters (< 0.15) flagged with warning
-- **12-color palette** — distinct visual separation between clusters
-- **Community legend** — shows top node label, member count, and cohesion per cluster
-
-<p align="center">
-  <img src="assets/kg_community.jpg" width="100%" alt="Louvain Community Detection">
-</p>
-
-### 6. Graph Insights — Surprising Connections & Knowledge Gaps
-
-Not in the original. The system **automatically analyzes graph structure** to surface actionable insights:
-
-**Surprising Connections:**
-- Detects unexpected relationships: cross-community edges, cross-type links, peripheral↔hub couplings
-- Composite surprise score ranks the most noteworthy connections
-- Dismissable — mark connections as reviewed so they don't reappear
-
-**Knowledge Gaps:**
-- **Isolated pages** (degree ≤ 1) — pages with few or no connections to the rest of the wiki
-- **Sparse communities** (cohesion < 0.15, ≥ 3 pages) — knowledge areas with weak internal cross-references
-- **Bridge nodes** (connecting 3+ clusters) — critical junction pages that hold multiple knowledge areas together
-
-**Interactive:**
-- Click any insight card to **highlight** corresponding nodes and edges in the graph; click again to deselect
-- Knowledge gaps and bridge nodes have a **Deep Research button** — triggers LLM-optimized research with domain-aware topics (reads overview.md + purpose.md for context)
-- Research topic shown in **editable confirmation dialog** before starting — user can refine topic and search queries
-
-<p align="center">
-  <img src="assets/kg_insights.jpg" width="100%" alt="Graph Insights">
-</p>
-
-### 7. Optimized Query Retrieval Pipeline
-
-The original describes a simple query where the LLM reads relevant pages. We built a **multi-phase retrieval pipeline** with optional vector search and budget control:
-
-```
-Phase 1: Tokenized Search
-  - English: word splitting + stop word removal
-  - Chinese: CJK bigram tokenization (每个 → [每个, 个…])
-  - Title match bonus (+10 score)
-  - Searches both wiki/ and raw/sources/
-
-Phase 1.5: Vector Semantic Search (optional)
-  - Embedding via any OpenAI-compatible /v1/embeddings endpoint
-  - Stored in LanceDB (Rust backend) for fast ANN retrieval
-  - Cosine similarity finds semantically related pages even without keyword overlap
-  - Results merged into search: boosts existing matches + adds new discoveries
-
-Phase 2: Graph Expansion
-  - Top search results used as seed nodes
-  - 4-signal relevance model finds related pages
-  - 2-hop traversal with decay for deeper connections
-
-Phase 3: Budget Control
-  - Configurable context window: 4K → 1M tokens
-  - Proportional allocation: 60% wiki pages, 20% chat history, 5% index, 15% system
-  - Pages prioritized by combined search + graph relevance score
-
-Phase 4: Context Assembly
-  - Numbered pages with full content (not just summaries)
-  - System prompt includes: purpose.md, language rules, citation format, index.md
-  - LLM instructed to cite pages by number: [1], [2], etc.
-```
-
-**Vector Search** is fully optional — disabled by default, enabled in Settings with independent endpoint, API key, and model configuration. When disabled, the pipeline falls back to tokenized search + graph expansion. Benchmark: overall recall improved from 58.2% to 71.4% with vector search enabled.
-
-### 8. Multi-Conversation Chat with Persistence
-
-The original has a single query interface. We built **full multi-conversation support**:
-
-- **Independent chat sessions** — create, rename, delete conversations
-- **Conversation sidebar** — quick switching between topics
-- **Per-conversation persistence** — each conversation saved to `.llm-wiki/chats/{id}.json`
-- **Configurable history depth** — limit how many messages are sent as context (default: 10)
-- **Cited references panel** — collapsible section on each response showing which wiki pages were used, grouped by type with icons
-- **Reference persistence** — cited pages stored directly in message data, stable across restarts
-- **Regenerate** — re-generate the last response with one click (removes last assistant + user message pair, re-sends)
-- **Save to Wiki** — archive valuable answers to `wiki/queries/`, then auto-ingest to extract entities/concepts into the knowledge network
-
-### 9. Thinking / Reasoning Display
-
-Not in the original. For LLMs that emit `<think>` blocks (DeepSeek, QwQ, etc.):
-
-- **Streaming thinking** — rolling 5-line display with opacity fade during generation
-- **Collapsed by default** — thinking blocks hidden after completion, click to expand
-- **Visual separation** — thinking content shown in distinct style, separate from the main response
-
-### 10. KaTeX Math Rendering
-
-Not in the original. Full LaTeX math support across all views:
-
-- **KaTeX rendering** — inline `$...$` and block `$$...$$` formulas rendered via remark-math + rehype-katex
-- **Milkdown math plugin** — preview editor renders math natively via @milkdown/plugin-math
-- **Auto-detection** — bare `\begin{aligned}` and other LaTeX environments automatically wrapped with `$$` delimiters
-- **Unicode fallback** — 100+ symbol mappings (α, ∑, →, ≤, etc.) for simple inline notation outside math blocks
-
-### 11. Review System (Async Human-in-the-Loop)
-
-The original suggests staying involved during ingest. We added an **asynchronous review queue**:
-
-- LLM flags items needing human judgment during ingest
-- **Predefined action types**: Create Page, Deep Research, Skip — constrained to prevent LLM hallucination of arbitrary actions
-- **Search queries generated at ingest time** — LLM pre-generates optimized web search queries for each review item
-- User handles reviews at their convenience — doesn't block ingest
-
-### 12. Deep Research
-
-<p align="center">
-  <img src="assets/1-deepresearch.jpg" width="100%" alt="Deep Research">
-</p>
-
-Not in the original. When the LLM identifies knowledge gaps:
-
-- **Web search** (Tavily API) finds relevant sources with full content extraction (no truncation)
-- **Multiple search queries** per topic — LLM-generated at ingest time, optimized for search engines
-- **LLM-optimized research topics** — when triggered from Graph Insights, LLM reads overview.md + purpose.md to generate domain-specific topics and queries (not generic keywords)
-- **User confirmation dialog** — editable topic and search queries shown for review before research starts
-- **LLM synthesizes** findings into a wiki research page with cross-references to existing wiki
-- **Thinking display** — `<think>` blocks shown as collapsible sections during synthesis, auto-scroll to latest content
-- **Auto-ingest** — research results automatically processed to extract entities/concepts into the wiki
-- **Task queue** with 3 concurrent tasks
-- **Research Panel** — dedicated sidebar panel with dynamic height, real-time streaming progress
-
-### 13. Browser Extension (Web Clipper)
-
-<p align="center">
-  <img src="assets/4-chrome_extension_webclipper.jpg" width="100%" alt="Chrome Extension Web Clipper">
-</p>
-
-The original mentions Obsidian Web Clipper. We built a **dedicated Chrome Extension** (Manifest V3):
-
-- **Mozilla Readability.js** for accurate article extraction (strips ads, nav, sidebars)
-- **Turndown.js** for HTML → Markdown conversion with table support
-- **Project picker** — choose which wiki to clip into (supports multi-project)
-- **Local HTTP API** (port 19827, tiny_http) — Extension ↔ App communication
-- **Auto-ingest** — clipped content automatically triggers the two-step ingest pipeline
-- **Clip watcher** — polls every 3 seconds for new clips, processes automatically
-- **Offline preview** — shows extracted content even when app is not running
-
-### 14. Multi-format Document Support
-
-The original focuses on text/markdown. We support structured extraction preserving document semantics:
-
-| Format | Method |
-|--------|--------|
-| PDF | pdf-extract (Rust) with file caching |
-| DOCX | docx-rs — headings, bold/italic, lists, tables → structured Markdown |
-| PPTX | ZIP + XML — slide-by-slide extraction with heading/list structure |
-| XLSX/XLS/ODS | calamine — proper cell types, multi-sheet support, Markdown tables |
-| Images | Native preview (png, jpg, gif, webp, svg, etc.) |
-| Video/Audio | Built-in player |
-| Web clips | Readability.js + Turndown.js → clean Markdown |
-
-### 15. File Deletion with Cascade Cleanup
-
-The original has no deletion mechanism. We added **intelligent cascade deletion**:
-
-- Deleting a source file removes its wiki summary page
-- **3-method matching** finds related wiki pages: frontmatter `sources[]` field, source summary page name, frontmatter section references
-- **Shared entity preservation** — entity/concept pages linked to multiple sources only have the deleted source removed from their `sources[]` array, not deleted entirely
-- **Index cleanup** — removed pages are purged from index.md
-- **Wikilink cleanup** — dead `[[wikilinks]]` to deleted pages are removed from remaining wiki pages
-
-### 16. Configurable Context Window
-
-Not in the original. Users can configure how much context the LLM receives:
-
-- **Slider from 4K to 1M tokens** — adapts to different LLM capabilities
-- **Proportional budget allocation** — larger windows get proportionally more wiki content
-- **60/20/5/15 split** — wiki pages / chat history / index / system prompt
-
-### 17. Cross-Platform Compatibility
-
-The original is platform-agnostic (abstract pattern). We handle concrete cross-platform concerns:
-
-- **Path normalization** — unified `normalizePath()` used across 22+ files, backslash → forward slash
-- **Unicode-safe string handling** — char-based slicing instead of byte-based (prevents crashes on CJK filenames)
-- **macOS close-to-hide** — close button hides window (app stays running in background), click dock icon to restore, Cmd+Q to quit
-- **Windows/Linux close confirmation** — confirmation dialog before quitting to prevent accidental data loss
-- **Tauri v2** — native desktop on macOS, Windows, Linux
-- **GitHub Actions CI/CD** — automated builds for macOS (ARM + Intel), Windows (.msi), Linux (.deb / .AppImage)
-
-### 18. Other Additions
-
-- **i18n** — English + Chinese interface (react-i18next)
-- **Settings persistence** — LLM provider, API key, model, context size, language saved via Tauri Store
-- **Obsidian config** — auto-generated `.obsidian/` directory with recommended settings
-- **Markdown rendering** — GFM tables with borders, proper code blocks, wikilink processing in chat and preview
-- **Multi-provider LLM support** — OpenAI, Anthropic, Google, Ollama, Custom — each with provider-specific streaming and headers
-- **15-minute timeout** — long ingest operations won't fail prematurely
-- **dataVersion signaling** — graph and UI automatically refresh when wiki content changes
-
 ## Tech Stack
 
 | Layer | Technology |
@@ -423,16 +79,172 @@ my-wiki/
 └── .llm-wiki/              # App config, chat history, review items
 ```
 
-## Star History
+### 코드베이스 전반 구조 (먼저 이해할 것)
 
-<a href="https://www.star-history.com/?repos=nashsu%2Fllm_wiki&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=nashsu/llm_wiki&type=date&legend=top-left" />
- </picture>
-</a>
+학습 전 머릿속에 잡아두면 좋은 큰 그림:
 
-## License
+- **Frontend (React + TS)** — [src/](src/)
+  - UI/레이아웃: [src/components/layout/](src/components/layout/)
+  - 도메인 로직 (ingest, search, graph, lint 등 순수 함수 위주): [src/lib/](src/lib/)
+  - 화면 단위 컴포넌트: [src/components/](src/components/)
+- **Backend (Rust / Tauri v2)** — [src-tauri/src/](src-tauri/src/)
+  - Tauri 명령(IPC) 정의: [src-tauri/src/commands/](src-tauri/src/commands/)
+  - 앱 부트스트랩: [src-tauri/src/lib.rs](src-tauri/src/lib.rs), [src-tauri/src/main.rs](src-tauri/src/main.rs)
+- **i18n 리소스** — [src/i18n/en.json](src/i18n/en.json), [src/i18n/zh.json](src/i18n/zh.json)
+---
 
-This project is licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE) for details.
+### 1. Desktop Application 구조 (3-column layout, icon sidebar, 패널)
+
+- 앱 루트 / 라우팅: [src/App.tsx](src/App.tsx)
+- 전체 레이아웃 (3-column, resizable): [src/components/layout/app-layout.tsx](src/components/layout/app-layout.tsx)
+- 좌측 아이콘 사이드바 (Wiki / Sources / Search / Graph / Lint / Review / Deep Research / Settings 전환): [src/components/layout/icon-sidebar.tsx](src/components/layout/icon-sidebar.tsx)
+- 좌측 패널 (Knowledge Tree / File Tree): [src/components/layout/sidebar-panel.tsx](src/components/layout/sidebar-panel.tsx), [src/components/layout/knowledge-tree.tsx](src/components/layout/knowledge-tree.tsx), [src/components/layout/file-tree.tsx](src/components/layout/file-tree.tsx)
+- 중앙 콘텐츠 / 채팅 영역: [src/components/layout/content-area.tsx](src/components/layout/content-area.tsx), [src/components/chat/chat-panel.tsx](src/components/chat/chat-panel.tsx)
+- 우측 프리뷰 패널: [src/components/layout/preview-panel.tsx](src/components/layout/preview-panel.tsx)
+- 드래그 리사이즈 패널 컴포넌트: [src/components/ui/resizable.tsx](src/components/ui/resizable.tsx)
+- Activity Panel (실시간 ingest 진행률): [src/components/layout/activity-panel.tsx](src/components/layout/activity-panel.tsx)
+- 상태 영속화 (Zustand 등): [src/lib/persist.ts](src/lib/persist.ts), [src/lib/project-store.ts](src/lib/project-store.ts), [src/lib/project-identity.ts](src/lib/project-identity.ts)
+- Scenario 템플릿 (Research / Reading / Personal Growth / Business / General): [src/lib/templates.ts](src/lib/templates.ts), [src/components/project/template-picker.tsx](src/components/project/template-picker.tsx), [src/components/project/create-project-dialog.tsx](src/components/project/create-project-dialog.tsx), [src/components/project/welcome-screen.tsx](src/components/project/welcome-screen.tsx)
+
+### 2. purpose.md — Wiki의 의도(Why) 정의
+
+- 템플릿이 `purpose.md` / `schema.md` 초기 내용을 결정: [src/lib/templates.ts](src/lib/templates.ts)
+- ingest / query 시 LLM 컨텍스트로 purpose.md를 읽어 들이는 흐름은 [src/lib/ingest.ts](src/lib/ingest.ts) 와 [src/lib/search.ts](src/lib/search.ts) 에서 확인할 수 있습니다.
+
+### 3. Two-Step Chain-of-Thought Ingest
+
+- **Ingest 메인 파이프라인** (analysis → generation 두 단계 LLM 호출): [src/lib/ingest.ts](src/lib/ingest.ts)
+- 프롬프트가 어떻게 구성되는지 검증: [src/lib/ingest.prompt.test.ts](src/lib/ingest.prompt.test.ts)
+- 시나리오 단위로 동작을 확인: [src/lib/ingest.scenarios.test.ts](src/lib/ingest.scenarios.test.ts), [src/lib/ingest.real-llm.test.ts](src/lib/ingest.real-llm.test.ts)
+- LLM 응답 파싱: [src/lib/ingest-parse.test.ts](src/lib/ingest-parse.test.ts)
+- **SHA256 incremental cache** (변경 없는 파일 skip): [src/lib/ingest-cache.ts](src/lib/ingest-cache.ts), [src/lib/ingest-cache.test.ts](src/lib/ingest-cache.test.ts)
+- **Persistent ingest queue** (직렬 처리, 재시작 복구, 재시도, cancel): [src/lib/ingest-queue.ts](src/lib/ingest-queue.ts), [src/lib/ingest-queue.test.ts](src/lib/ingest-queue.test.ts), [src/lib/ingest-queue.integration.test.ts](src/lib/ingest-queue.integration.test.ts)
+- 동시 실행 방지를 위한 mutex: [src/lib/project-mutex.ts](src/lib/project-mutex.ts)
+- 큐 시각화 UI: [src/components/layout/activity-panel.tsx](src/components/layout/activity-panel.tsx)
+- **Folder import** / 파일 검색은 commands 계층에서 처리: [src/commands/fs.ts](src/commands/fs.ts) (frontend), [src-tauri/src/commands/fs.rs](src-tauri/src/commands/fs.rs) (backend)
+- **Auto-embedding** (ingest 직후 임베딩 자동 갱신): [src/lib/embedding.ts](src/lib/embedding.ts)
+
+### 4. Knowledge Graph + 4-Signal Relevance Model
+
+- **4-signal 관련도 계산** (direct link, source overlap, Adamic-Adar, type affinity, 가중치 ×3.0/×4.0/×1.5/×1.0): [src/lib/graph-relevance.ts](src/lib/graph-relevance.ts)
+- 그래프 데이터 빌더 (wiki 디렉토리 → nodes/edges): [src/lib/wiki-graph.ts](src/lib/wiki-graph.ts)
+- 그래프 시각화 (sigma.js + graphology + ForceAtlas2, hover, zoom, position cache): [src/components/graph/graph-view.tsx](src/components/graph/graph-view.tsx)
+
+### 5. Louvain Community Detection
+
+- 클러스터 감지(graphology-communities-louvain), cohesion 점수, 12-color 팔레트 처리: [src/components/graph/graph-view.tsx](src/components/graph/graph-view.tsx) 내부의 community 관련 로직과 [src/lib/wiki-graph.ts](src/lib/wiki-graph.ts) 를 함께 보세요.
+- (Type/Community 토글, legend도 동일 컴포넌트에 함께 있음.)
+
+### 6. Graph Insights — Surprising Connections & Knowledge Gaps
+
+- **인사이트 산출 알고리즘** (cross-community edge, isolated nodes, sparse community, bridge node, 종합 surprise score): [src/lib/graph-insights.ts](src/lib/graph-insights.ts)
+- 인사이트 카드 / 클릭 하이라이트 / Deep Research 트리거 UI: [src/components/graph/graph-view.tsx](src/components/graph/graph-view.tsx)
+- Graph Insight → Deep Research 연결 시 사용되는 도메인-aware 토픽 최적화: [src/lib/optimize-research-topic.ts](src/lib/optimize-research-topic.ts), [src/lib/optimize-research-topic.test.ts](src/lib/optimize-research-topic.test.ts)
+
+### 7. Optimized Query Retrieval Pipeline (4-Phase)
+
+- **Phase 1 / 1.5 / 2 / 3 / 4 통합 검색**: [src/lib/search.ts](src/lib/search.ts)
+- CJK bigram, stopword, RRF 등 토크나이저/스코어링 검증: [src/lib/search.scenarios.test.ts](src/lib/search.scenarios.test.ts), [src/lib/search-rrf.test.ts](src/lib/search-rrf.test.ts)
+- **Phase 1.5 Vector Search** (LanceDB 기반):
+  - Frontend embedding 호출 / 증분 동기화: [src/lib/embedding.ts](src/lib/embedding.ts), [src/lib/embedding.test.ts](src/lib/embedding.test.ts)
+  - 텍스트 청킹: [src/lib/text-chunker.ts](src/lib/text-chunker.ts), [src/lib/text-chunker.test.ts](src/lib/text-chunker.test.ts)
+  - Tauri 명령으로 LanceDB 접근: [src-tauri/src/commands/vectorstore.rs](src-tauri/src/commands/vectorstore.rs)
+  - 임베딩 endpoint 정규화 (`/v1/embeddings` 등): [src/lib/endpoint-normalizer.ts](src/lib/endpoint-normalizer.ts)
+  - 설정 UI: [src/components/settings/sections/embedding-section.tsx](src/components/settings/sections/embedding-section.tsx)
+- **Phase 2 Graph Expansion**: [src/lib/graph-relevance.ts](src/lib/graph-relevance.ts) (검색 결과를 seed로 2-hop 확장)
+- **Phase 3 Budget Control** (4K~1M, 60/20/5/15 split): [src/lib/context-budget.ts](src/lib/context-budget.ts), [src/lib/context-budget.test.ts](src/lib/context-budget.test.ts)
+- **Phase 4 Context Assembly** + 시스템 프롬프트 (purpose, language, citation, index): [src/lib/search.ts](src/lib/search.ts) 의 컨텍스트 빌더 부분과 [src/lib/output-language.ts](src/lib/output-language.ts), [src/lib/detect-language.ts](src/lib/detect-language.ts) 참고.
+- 검색 화면 UI: [src/components/search/search-view.tsx](src/components/search/search-view.tsx)
+
+### 8. Multi-Conversation Chat with Persistence
+
+- 채팅 패널 / 메시지 / 입력: [src/components/chat/chat-panel.tsx](src/components/chat/chat-panel.tsx), [src/components/chat/chat-message.tsx](src/components/chat/chat-message.tsx), [src/components/chat/chat-input.tsx](src/components/chat/chat-input.tsx)
+- 회화 목록 / 상단 바: [src/components/layout/chat-bar.tsx](src/components/layout/chat-bar.tsx)
+- 회화 단위 영속화 (`.llm-wiki/chats/{id}.json`): [src/lib/persist.ts](src/lib/persist.ts)
+- 인용 페이지 묶음 / Save to Wiki / Regenerate 동작은 [src/components/chat/chat-panel.tsx](src/components/chat/chat-panel.tsx) 와 [src/lib/search.ts](src/lib/search.ts) 를 함께 보세요. (Save to Wiki는 `wiki/queries/` 작성 후 [src/lib/ingest.ts](src/lib/ingest.ts) 재호출)
+- 인사말 등 가벼운 입력 감지 (검색 생략): [src/lib/greeting-detector.ts](src/lib/greeting-detector.ts)
+
+### 9. Thinking / Reasoning Display (`<think>` 블록)
+
+- 메시지 렌더러에서 `<think>` 태그를 분리해 5줄 롤링 / 페이드 / collapsible로 그리는 로직: [src/components/chat/chat-message.tsx](src/components/chat/chat-message.tsx)
+- 모델별 streaming 처리 (think 토큰 포함): [src/lib/llm-client.ts](src/lib/llm-client.ts), [src/lib/llm-providers.ts](src/lib/llm-providers.ts)
+
+### 10. KaTeX Math Rendering
+
+- 메시지 / 프리뷰 렌더 (remark-math + rehype-katex 적용 위치): [src/components/chat/chat-message.tsx](src/components/chat/chat-message.tsx), [src/components/editor/file-preview.tsx](src/components/editor/file-preview.tsx)
+- Milkdown 에디터의 math 플러그인: [src/components/editor/wiki-editor.tsx](src/components/editor/wiki-editor.tsx)
+- 자동 `$$` 래핑 / `\begin{aligned}` 감지, Unicode 폴백: [src/lib/latex-to-unicode.ts](src/lib/latex-to-unicode.ts)
+
+### 11. Review System (Async Human-in-the-Loop)
+
+- 리뷰 항목 정의 / 정규화 / 액션 제약 (Create Page, Deep Research, Skip): [src/lib/review-utils.ts](src/lib/review-utils.ts), [src/lib/review-utils.test.ts](src/lib/review-utils.test.ts)
+- 리뷰 큐 일괄 처리 (sweep): [src/lib/sweep-reviews.ts](src/lib/sweep-reviews.ts), [src/lib/sweep-reviews.scenarios.test.ts](src/lib/sweep-reviews.scenarios.test.ts), [src/lib/sweep-reviews.race.test.ts](src/lib/sweep-reviews.race.test.ts)
+- 리뷰 화면: [src/components/review/review-view.tsx](src/components/review/review-view.tsx)
+- 리뷰 항목은 ingest 시 LLM이 만들어 둠 → [src/lib/ingest.ts](src/lib/ingest.ts)
+
+### 12. Deep Research
+
+- 리서치 파이프라인 (Tavily 호출, 멀티 쿼리, 결과 합성, auto-ingest): [src/lib/deep-research.ts](src/lib/deep-research.ts)
+- Tavily / 웹 검색 클라이언트: [src/lib/web-search.ts](src/lib/web-search.ts)
+- 도메인-aware 토픽/쿼리 최적화 (overview.md + purpose.md 활용): [src/lib/optimize-research-topic.ts](src/lib/optimize-research-topic.ts)
+- Research 사이드 패널 (실시간 streaming, thinking 표시): [src/components/layout/research-panel.tsx](src/components/layout/research-panel.tsx)
+- 설정: [src/components/settings/sections/web-search-section.tsx](src/components/settings/sections/web-search-section.tsx)
+
+### 13. Browser Extension (Chrome Web Clipper)
+
+- Manifest V3 정의: [extension/manifest.json](extension/manifest.json)
+- 팝업 UI (project picker 포함): [extension/popup.html](extension/popup.html), [extension/popup.js](extension/popup.js)
+- 본문 추출: [extension/Readability.js](extension/Readability.js)
+- HTML → Markdown 변환: [extension/Turndown.js](extension/Turndown.js)
+- **Local HTTP API 서버 (port 19827, tiny_http)** — App 측 수신부: [src-tauri/src/clip_server.rs](src-tauri/src/clip_server.rs)
+- 클립 폴더 폴링 (3초 간격) 및 자동 ingest 트리거: [src/lib/clip-watcher.ts](src/lib/clip-watcher.ts)
+
+### 14. Multi-format Document Support
+
+- 파일 타입 분기 / 확장자 매핑: [src/lib/file-types.ts](src/lib/file-types.ts)
+- 프리뷰 (이미지/비디오/오디오/마크다운/오피스): [src/components/editor/file-preview.tsx](src/components/editor/file-preview.tsx)
+- 백엔드(Rust)에서 PDF/DOCX/PPTX/XLSX 텍스트 추출: [src-tauri/src/commands/fs.rs](src-tauri/src/commands/fs.rs) (Cargo 의존성은 [src-tauri/Cargo.toml](src-tauri/Cargo.toml) 참고 — `pdf-extract`, `docx-rs`, `calamine` 등)
+
+### 15. File Deletion with Cascade Cleanup
+
+- 삭제 의사결정 (어떤 wiki 페이지가 함께 지워져야 하나 / sources[]에서만 제거되어야 하나): [src/lib/source-delete-decision.ts](src/lib/source-delete-decision.ts), [src/lib/source-delete-decision.test.ts](src/lib/source-delete-decision.test.ts)
+- 페이지 삭제 + index.md / wikilink 정리: [src/lib/wiki-page-delete.ts](src/lib/wiki-page-delete.ts), [src/lib/wiki-cleanup.ts](src/lib/wiki-cleanup.ts), [src/lib/sources-merge.ts](src/lib/sources-merge.ts)
+- 위키링크 보강/치환: [src/lib/enrich-wikilinks.ts](src/lib/enrich-wikilinks.ts)
+
+### 16. Configurable Context Window (4K → 1M)
+
+- 토큰 예산 비례 분배 (60/20/5/15): [src/lib/context-budget.ts](src/lib/context-budget.ts)
+- 슬라이더 UI: [src/components/settings/context-size-selector.tsx](src/components/settings/context-size-selector.tsx)
+
+### 17. Cross-Platform Compatibility
+
+- **`normalizePath()` 등 경로 정규화 / Unicode-safe 문자열 처리**: [src/lib/path-utils.ts](src/lib/path-utils.ts), [src/lib/path-utils.test.ts](src/lib/path-utils.test.ts), [src/lib/path-utils.property.test.ts](src/lib/path-utils.property.test.ts)
+- Tauri 설정 (플랫폼별 윈도우 동작 / 번들): [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json), [src-tauri/tauri.macos.conf.json](src-tauri/tauri.macos.conf.json), [src-tauri/tauri.windows.conf.json](src-tauri/tauri.windows.conf.json), [src-tauri/tauri.linux.conf.json](src-tauri/tauri.linux.conf.json)
+- 권한(capabilities): [src-tauri/capabilities/default.json](src-tauri/capabilities/default.json)
+- 종료/숨김(close-to-hide / 종료 확인) 등 윈도우 이벤트: [src-tauri/src/lib.rs](src-tauri/src/lib.rs)
+- 네이티브 패닉 가드: [src-tauri/src/panic_guard.rs](src-tauri/src/panic_guard.rs)
+
+### 18. 그 밖의 추가 기능
+
+- **i18n (en/zh)**: [src/i18n/index.ts](src/i18n/index.ts), [src/i18n/en.json](src/i18n/en.json), [src/i18n/zh.json](src/i18n/zh.json), 누락 키 검사: [src/i18n/i18n-parity.test.ts](src/i18n/i18n-parity.test.ts)
+- **언어 감지 / 출력 언어 강제**: [src/lib/detect-language.ts](src/lib/detect-language.ts), [src/lib/output-language.ts](src/lib/output-language.ts)
+- **LLM 멀티 프로바이더** (OpenAI / Anthropic / Google / Ollama / Custom 별 streaming, 헤더 차이): [src/lib/llm-providers.ts](src/lib/llm-providers.ts), [src/lib/llm-client.ts](src/lib/llm-client.ts), [src/lib/__tests__/llm-providers.test.ts](src/lib/__tests__/llm-providers.test.ts)
+- **Claude Code CLI provider (API 키 불필요)** — 최근 추가된 기능: [src/lib/claude-cli-transport.ts](src/lib/claude-cli-transport.ts), [src/lib/__tests__/claude-cli-transport.test.ts](src/lib/__tests__/claude-cli-transport.test.ts), [src-tauri/src/commands/claude_cli.rs](src-tauri/src/commands/claude_cli.rs), 프리셋: [src/components/settings/llm-presets.ts](src/components/settings/llm-presets.ts), [src/components/settings/preset-resolver.ts](src/components/settings/preset-resolver.ts)
+- **Tauri 기반 fetch 어댑터** (CORS 우회, 헤더 제어): [src/lib/tauri-fetch.ts](src/lib/tauri-fetch.ts)
+- **Lint** (wiki 건강도 점검): [src/lib/lint.ts](src/lib/lint.ts), [src/components/lint/lint-view.tsx](src/components/lint/lint-view.tsx)
+- **자동 저장 / 업데이트 체크 / 위키 파일명 정규화**: [src/lib/auto-save.ts](src/lib/auto-save.ts), [src/lib/update-check.ts](src/lib/update-check.ts), [src/lib/wiki-filename.ts](src/lib/wiki-filename.ts)
+- **설정 화면 전반**: [src/components/settings/settings-view.tsx](src/components/settings/settings-view.tsx) 와 [src/components/settings/sections/](src/components/settings/sections/) 하위 섹션들
+
+---
+
+### 추천 학습 순서
+
+1. **3-layer 모델 체감** — 빈 프로젝트를 만들고 [src/lib/templates.ts](src/lib/templates.ts) 가 어떤 `purpose.md` / `schema.md` 를 생성하는지 본다.
+2. **Ingest 흐름** — [src/lib/ingest.ts](src/lib/ingest.ts) → [src/lib/ingest-queue.ts](src/lib/ingest-queue.ts) → [src/lib/ingest-cache.ts](src/lib/ingest-cache.ts) 순서로 읽고, [src/lib/ingest.scenarios.test.ts](src/lib/ingest.scenarios.test.ts) 로 검증.
+3. **Search/Query 파이프라인** — [src/lib/search.ts](src/lib/search.ts) 를 한 번에 정독한 뒤, 곁가지로 [src/lib/context-budget.ts](src/lib/context-budget.ts), [src/lib/embedding.ts](src/lib/embedding.ts), [src/lib/graph-relevance.ts](src/lib/graph-relevance.ts) 를 본다.
+4. **Graph & Insights** — [src/lib/wiki-graph.ts](src/lib/wiki-graph.ts) → [src/lib/graph-relevance.ts](src/lib/graph-relevance.ts) → [src/lib/graph-insights.ts](src/lib/graph-insights.ts) → [src/components/graph/graph-view.tsx](src/components/graph/graph-view.tsx).
+5. **Deep Research / Review 사이클** — [src/lib/deep-research.ts](src/lib/deep-research.ts), [src/lib/sweep-reviews.ts](src/lib/sweep-reviews.ts).
+6. **Cross-cutting (LLM provider, 경로/유니코드, Tauri)** — [src/lib/llm-providers.ts](src/lib/llm-providers.ts), [src/lib/path-utils.ts](src/lib/path-utils.ts), [src-tauri/src/lib.rs](src-tauri/src/lib.rs).
+7. **Extension** — [extension/popup.js](extension/popup.js) → [src-tauri/src/clip_server.rs](src-tauri/src/clip_server.rs) → [src/lib/clip-watcher.ts](src/lib/clip-watcher.ts) 흐름으로 클립 한 건이 wiki에 들어가는 경로 추적.
+
+> 각 항목의 `*.test.ts` 파일은 **명세서 역할**을 합니다. 함수 시그니처보다 테스트의 입출력 예시를 먼저 보면 가장 적은 노력으로 의도를 파악할 수 있습니다.

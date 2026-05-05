@@ -175,6 +175,83 @@ describe("review-store addItems dedupe", () => {
   })
 })
 
+describe("review-store modification stage flow", () => {
+  function makeModification(idHint: string = "rewards") {
+    return {
+      type: "modification" as ReviewItem["type"],
+      title: `Modification proposal: db/content/${idHint}.md`,
+      description: "v2 differs from existing",
+      options: [],
+      proposal: {
+        targetPath: `db/content/${idHint}.md`,
+        existingExcerpt: "old",
+        incomingExcerpt: "new",
+        incomingDraftPath: `pending/_proposals/100-1-${idHint}.md`,
+        sourceRefs: [{ file: "raw_v2.md", range: "## section" }],
+      },
+    }
+  }
+
+  it("addItems sets stage='primary' on a fresh modification", () => {
+    useReviewStore.getState().addItems([makeModification()])
+    const item = useReviewStore.getState().items[0]
+    expect(item.type).toBe("modification")
+    expect(item.stage).toBe("primary")
+    expect(item.proposal?.targetPath).toBe("db/content/rewards.md")
+  })
+
+  it("transitionToRejectionHandling flips stage on a pending modification", () => {
+    useReviewStore.getState().addItems([makeModification()])
+    const id = useReviewStore.getState().items[0].id
+    useReviewStore.getState().transitionToRejectionHandling(id)
+    const item = useReviewStore.getState().items.find((i) => i.id === id)
+    expect(item?.stage).toBe("rejection-handling")
+    expect(item?.resolved).toBe(false)
+  })
+
+  it("transitionToRejectionHandling is a no-op on resolved or non-modification items", () => {
+    const store = useReviewStore.getState()
+    store.addItems([makeModification("a"), makeInput({ title: "regular missing" })])
+    const [mod, missing] = useReviewStore.getState().items
+    store.resolveItem(mod.id, "Approved")
+    store.transitionToRejectionHandling(mod.id)
+    store.transitionToRejectionHandling(missing.id)
+    const items = useReviewStore.getState().items
+    // Resolved modification keeps stage='primary'.
+    expect(items.find((i) => i.id === mod.id)?.stage).toBe("primary")
+    // Missing-page item should NOT have a stage at all.
+    expect(items.find((i) => i.id === missing.id)?.stage).toBeUndefined()
+  })
+
+  it("addItems does NOT dedupe two modifications with the same target path", () => {
+    // Two parked drafts with distinct incomingDraftPaths must surface as
+    // two separate cards — merging would silently lose one of them.
+    useReviewStore.getState().addItems([
+      {
+        ...makeModification("rewards"),
+        proposal: {
+          ...makeModification("rewards").proposal!,
+          incomingDraftPath: "pending/_proposals/100-1-rewards.md",
+        },
+      },
+      {
+        ...makeModification("rewards"),
+        proposal: {
+          ...makeModification("rewards").proposal!,
+          incomingDraftPath: "pending/_proposals/200-1-rewards.md",
+        },
+      },
+    ])
+    const items = useReviewStore.getState().items
+    expect(items).toHaveLength(2)
+    const drafts = items.map((i) => i.proposal?.incomingDraftPath)
+    expect(drafts).toEqual([
+      "pending/_proposals/100-1-rewards.md",
+      "pending/_proposals/200-1-rewards.md",
+    ])
+  })
+})
+
 describe("review-store resolveItem / dismissItem / clearResolved", () => {
   it("resolveItem flips the flag and stores action", () => {
     useReviewStore.getState().addItem(makeInput())

@@ -66,6 +66,14 @@ pub fn run() {
             commands::claude_cli::claude_cli_detect,
             commands::claude_cli::claude_cli_spawn,
             commands::claude_cli::claude_cli_kill,
+            commands::git_ops::git_init,
+            commands::git_ops::git_commit,
+            commands::git_ops::git_status,
+            commands::git_ops::git_log,
+            commands::git_ops::git_show,
+            commands::git_ops::git_diff,
+            commands::git_ops::git_checkout_path,
+            commands::git_ops::git_revert,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

@@ -17,6 +17,10 @@ import {
   writeSources,
   mergeSourcesLists,
   mergeSourcesIntoContent,
+  parseSourceRefs,
+  writeSourceRefs,
+  mergeSourceRefsLists,
+  mergeSourceRefsIntoContent,
 } from "./sources-merge"
 
 const WRAP = (fm: string, body = "body\n") => `---\n${fm}\n---\n${body}`
@@ -310,3 +314,296 @@ describe("Regression: the data-loss path in the user's diagnosis", () => {
     expect(page).not.toContain("body v2")
   })
 })
+
+// ── Stage 3: SourceRef-aware variants ──────────────────────────────────
+
+describe("parseSourceRefs — accepts every form the LLM might emit", () => {
+  it("parses inline string array (legacy)", () => {
+    expect(parseSourceRefs(WRAP('sources: ["a.md", "b.md"]'))).toEqual([
+      { file: "a.md" },
+      { file: "b.md" },
+    ])
+  })
+
+  it("parses multi-line string list (legacy)", () => {
+    const fm = ["sources:", "  - a.md", "  - b.md"].join("\n")
+    expect(parseSourceRefs(WRAP(fm))).toEqual([
+      { file: "a.md" },
+      { file: "b.md" },
+    ])
+  })
+
+  it("parses Stage 3 multi-line object form (file + range)", () => {
+    const fm = [
+      "sources:",
+      "  - file: design.md",
+      "    range: ## 3. 던전 A — 보상",
+      "  - file: design.md",
+      "    range: ## 4. 던전 B — 스폰 규칙",
+    ].join("\n")
+    expect(parseSourceRefs(WRAP(fm))).toEqual([
+      { file: "design.md", range: "## 3. 던전 A — 보상" },
+      { file: "design.md", range: "## 4. 던전 B — 스폰 규칙" },
+    ])
+  })
+
+  it("parses object form with quoted range (handles colons / dashes)", () => {
+    const fm = [
+      "sources:",
+      '  - file: "design.md"',
+      '    range: "section 3.2.1: rewards"',
+    ].join("\n")
+    expect(parseSourceRefs(WRAP(fm))).toEqual([
+      { file: "design.md", range: "section 3.2.1: rewards" },
+    ])
+  })
+
+  it("tolerates object entries without range", () => {
+    const fm = [
+      "sources:",
+      "  - file: a.md",
+      "  - file: b.md",
+      "    range: section 2",
+    ].join("\n")
+    expect(parseSourceRefs(WRAP(fm))).toEqual([
+      { file: "a.md" },
+      { file: "b.md", range: "section 2" },
+    ])
+  })
+
+  it("returns [] when there is no sources field", () => {
+    expect(parseSourceRefs(WRAP("title: X"))).toEqual([])
+  })
+
+  it("stops the multi-line block at the next frontmatter field", () => {
+    // A subsequent non-indented field (`tags:` here) must not be sucked
+    // into the sources block — the block scanner stops at the first
+    // non-indented non-empty line.
+    const fm = [
+      "title: X",
+      "sources:",
+      "  - file: a.md",
+      "    range: section 1",
+      "tags: [t1]",
+    ].join("\n")
+    expect(parseSourceRefs(WRAP(fm))).toEqual([
+      { file: "a.md", range: "section 1" },
+    ])
+  })
+})
+
+describe("parseSources back-compat with new object form", () => {
+  it("projects new-format object entries down to filenames only", () => {
+    // Legacy callers (e.g. sources-view's source-delete flow) should
+    // continue to work even when reading a Stage-3 page whose
+    // frontmatter uses the object form.
+    const fm = [
+      "sources:",
+      "  - file: a.md",
+      "    range: section 1",
+      "  - file: b.md",
+      "    range: section 2",
+    ].join("\n")
+    expect(parseSources(WRAP(fm))).toEqual(["a.md", "b.md"])
+  })
+})
+
+// ── writeSourceRefs ────────────────────────────────────────────────────
+
+describe("writeSourceRefs", () => {
+  it("emits the multi-line object form for refs with ranges", () => {
+    const before = WRAP("title: X")
+    const after = writeSourceRefs(before, [
+      { file: "a.md", range: "section 1" },
+      { file: "a.md", range: "section 2" },
+    ])
+    expect(after).toContain("sources:")
+    expect(after).toContain("- file: a.md")
+    expect(after).toContain('range: "section 1"')
+    expect(after).toContain('range: "section 2"')
+    // Round-trip: re-parsing must yield the same shape.
+    expect(parseSourceRefs(after)).toEqual([
+      { file: "a.md", range: "section 1" },
+      { file: "a.md", range: "section 2" },
+    ])
+  })
+
+  it("emits object entries without range for ranged-less refs", () => {
+    const before = WRAP("title: X")
+    const after = writeSourceRefs(before, [{ file: "a.md" }])
+    expect(after).toMatch(/sources:\s*\n\s+-\s+file: a\.md/)
+    expect(after).not.toContain("range:")
+    expect(parseSourceRefs(after)).toEqual([{ file: "a.md" }])
+  })
+
+  it("replaces an existing inline string array", () => {
+    const before = WRAP('title: X\nsources: ["a.md"]\ntags: []')
+    const after = writeSourceRefs(before, [
+      { file: "a.md", range: "section 1" },
+    ])
+    expect(parseSourceRefs(after)).toEqual([
+      { file: "a.md", range: "section 1" },
+    ])
+    // Other frontmatter fields preserved.
+    expect(after).toContain("title: X")
+    expect(after).toContain("tags: []")
+  })
+
+  it("replaces an existing multi-line block (string OR object form)", () => {
+    const before = WRAP(
+      [
+        "title: X",
+        "sources:",
+        "  - file: a.md",
+        "    range: section 1",
+        "tags: []",
+      ].join("\n"),
+    )
+    const after = writeSourceRefs(before, [
+      { file: "a.md", range: "section 1" },
+      { file: "b.md" },
+    ])
+    expect(parseSourceRefs(after)).toEqual([
+      { file: "a.md", range: "section 1" },
+      { file: "b.md" },
+    ])
+    expect(after).toContain("tags: []")
+  })
+
+  it("escapes embedded double quotes in range", () => {
+    const before = WRAP("title: X")
+    const after = writeSourceRefs(before, [
+      { file: "a.md", range: 'has "quoted" word' },
+    ])
+    expect(after).toContain('range: "has \\"quoted\\" word"')
+    expect(parseSourceRefs(after)).toEqual([
+      { file: "a.md", range: 'has "quoted" word' },
+    ])
+  })
+
+  it("returns content unchanged when there is no frontmatter", () => {
+    const before = "# heading\n\nbody"
+    expect(writeSourceRefs(before, [{ file: "a.md" }])).toBe(before)
+  })
+})
+
+// ── mergeSourceRefsLists ──────────────────────────────────────────────
+
+describe("mergeSourceRefsLists", () => {
+  it("dedups entries with the same file + range", () => {
+    expect(
+      mergeSourceRefsLists(
+        [{ file: "a.md", range: "s1" }],
+        [{ file: "a.md", range: "s1" }],
+      ),
+    ).toEqual([{ file: "a.md", range: "s1" }])
+  })
+
+  it("keeps entries with the same file but different ranges", () => {
+    // This is the central Stage 3 case: two different sections of the
+    // same raw file landing on the same page must both be remembered.
+    expect(
+      mergeSourceRefsLists(
+        [{ file: "design.md", range: "section 1" }],
+        [{ file: "design.md", range: "section 2" }],
+      ),
+    ).toEqual([
+      { file: "design.md", range: "section 1" },
+      { file: "design.md", range: "section 2" },
+    ])
+  })
+
+  it("dedups case-insensitively across both file and range", () => {
+    expect(
+      mergeSourceRefsLists(
+        [{ file: "Design.md", range: "Section 1" }],
+        [{ file: "design.md", range: "section 1" }],
+      ),
+    ).toEqual([{ file: "Design.md", range: "Section 1" }])
+  })
+
+  it("preserves order of existing entries", () => {
+    expect(
+      mergeSourceRefsLists(
+        [{ file: "b.md" }, { file: "a.md" }],
+        [{ file: "c.md" }],
+      ),
+    ).toEqual([{ file: "b.md" }, { file: "a.md" }, { file: "c.md" }])
+  })
+
+  it("a file-only ref and a same-file ranged ref coexist", () => {
+    // file-only means "the whole file"; ranged means "this section".
+    // They're different identities and both should survive merge.
+    expect(
+      mergeSourceRefsLists(
+        [{ file: "a.md" }],
+        [{ file: "a.md", range: "section 1" }],
+      ),
+    ).toEqual([{ file: "a.md" }, { file: "a.md", range: "section 1" }])
+  })
+})
+
+// ── mergeSourceRefsIntoContent ────────────────────────────────────────
+
+describe("mergeSourceRefsIntoContent", () => {
+  it("preserves range when an old range ref merges with a new range ref", () => {
+    const existing = WRAP(
+      [
+        "sources:",
+        "  - file: design.md",
+        "    range: section 1",
+      ].join("\n"),
+    )
+    const incoming = WRAP(
+      [
+        "sources:",
+        "  - file: design.md",
+        "    range: section 2",
+      ].join("\n"),
+      "fresh body",
+    )
+    const merged = mergeSourceRefsIntoContent(incoming, existing)
+    expect(parseSourceRefs(merged)).toEqual([
+      { file: "design.md", range: "section 1" },
+      { file: "design.md", range: "section 2" },
+    ])
+    expect(merged).toContain("fresh body")
+  })
+
+  it("upgrades a legacy string-form page to object form when a ranged ref is added", () => {
+    const existing = WRAP('sources: ["design.md"]')
+    const incoming = WRAP(
+      [
+        "sources:",
+        "  - file: design.md",
+        "    range: section 1",
+      ].join("\n"),
+    )
+    const merged = mergeSourceRefsIntoContent(incoming, existing)
+    // Legacy `{ file: "design.md" }` and new `{ file, range }` are
+    // separate identities — both must survive.
+    expect(parseSourceRefs(merged)).toEqual([
+      { file: "design.md" },
+      { file: "design.md", range: "section 1" },
+    ])
+  })
+
+  it("returns newContent unchanged when page is new (no existing)", () => {
+    const incoming = WRAP(
+      [
+        "sources:",
+        "  - file: a.md",
+        "    range: s1",
+      ].join("\n"),
+    )
+    expect(mergeSourceRefsIntoContent(incoming, null)).toBe(incoming)
+  })
+
+  it("short-circuits when the incoming refs already cover the existing", () => {
+    // Same file+range on both sides → no rewrite, hand back newContent.
+    const existing = WRAP('sources: ["a.md"]')
+    const incoming = WRAP('sources: ["a.md"]')
+    expect(mergeSourceRefsIntoContent(incoming, existing)).toBe(incoming)
+  })
+})
+

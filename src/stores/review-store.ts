@@ -1,14 +1,54 @@
 import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
+import type { SourceRef } from "@/lib/source-ref"
 
 export interface ReviewOption {
   label: string
   action: string // identifier for the action
 }
 
+/**
+ * Stage 4 modification proposals carry the data needed to render the
+ * existing-vs-incoming diff in the review card and resolve the
+ * proposal back into the wiki tree.
+ *
+ * - `targetPath` — the db/ page the user has to decide about
+ * - `existingExcerpt` / `incomingExcerpt` — full bodies (frontmatter
+ *   stripped is fine; the UI handles truncation). Stored eagerly so the
+ *   card can render without extra disk reads.
+ * - `incomingDraftPath` — relative path of the parked proposal file
+ *   under `pending/_proposals/...`. Approve / Pending / Counterexample
+ *   all start by reading or moving this file.
+ * - `sourceRefs` — what the incoming raw range was. Used to populate the
+ *   commit message trailer when the user resolves the proposal.
+ */
+export interface ModificationProposal {
+  targetPath: string
+  existingExcerpt: string
+  incomingExcerpt: string
+  incomingDraftPath: string
+  sourceRefs: SourceRef[]
+}
+
 export interface ReviewItem {
   id: string
-  type: "contradiction" | "duplicate" | "missing-page" | "confirm" | "suggestion"
+  type:
+    | "contradiction"
+    | "duplicate"
+    | "missing-page"
+    | "confirm"
+    | "suggestion"
+    | "modification"
+  /**
+   * Stage 4 two-step decision tree. Only meaningful for `type:
+   * "modification"`. `"primary"` shows [Approve | Merge | Reject];
+   * `"rejection-handling"` shows [Discard | Pending | Counterexample]
+   * after the user clicks Reject. Other types stay implicitly in a
+   * single-stage flow.
+   */
+  stage?: "primary" | "rejection-handling"
+  /** Modification-only payload — the diff data and the parked draft. */
+  proposal?: ModificationProposal
   title: string
   description: string
   sourcePath?: string
@@ -26,6 +66,12 @@ interface ReviewState {
   addItems: (items: Omit<ReviewItem, "id" | "resolved" | "createdAt">[]) => void
   setItems: (items: ReviewItem[]) => void
   resolveItem: (id: string, action: string) => void
+  /**
+   * Stage 4: flip a `modification` review from `"primary"` to
+   * `"rejection-handling"` without resolving it. The card stays open
+   * but its action set switches to [Discard | Pending | Counterexample].
+   */
+  transitionToRejectionHandling: (id: string) => void
   dismissItem: (id: string) => void
   clearResolved: () => void
 }
@@ -54,18 +100,33 @@ export const useReviewStore = create<ReviewState>((set) => ({
       // 5 types — bulk ingest can re-surface the same contradiction/confirm
       // from multiple files).
       // Merge affectedPages / searchQueries / sourcePath instead of duplicating.
+      // Modification items skip the dedupe path: each proposal is tied to
+      // a distinct parked draft (incomingDraftPath) and merging two of them
+      // would silently lose one of the parked files. Two raw ingests that
+      // both target the same db/ page must surface as two cards.
       const result = [...state.items]
       const keyFor = (t: string, title: string) => `${t}::${normalizeReviewTitle(title)}`
 
       // Build index of existing pending items for fast lookup
       const pendingIndex = new Map<string, number>()
       result.forEach((it, idx) => {
-        if (!it.resolved) {
+        if (!it.resolved && it.type !== "modification") {
           pendingIndex.set(keyFor(it.type, it.title), idx)
         }
       })
 
       for (const incoming of items) {
+        if (incoming.type === "modification") {
+          // Always append — never merge.
+          result.push({
+            ...incoming,
+            id: `review-${++counter}`,
+            resolved: false,
+            createdAt: Date.now(),
+            stage: incoming.stage ?? "primary",
+          })
+          continue
+        }
         const k = keyFor(incoming.type, incoming.title)
         const existingIdx = pendingIndex.get(k)
 
@@ -102,6 +163,15 @@ export const useReviewStore = create<ReviewState>((set) => ({
     set((state) => ({
       items: state.items.map((item) =>
         item.id === id ? { ...item, resolved: true, resolvedAction: action } : item
+      ),
+    })),
+
+  transitionToRejectionHandling: (id) =>
+    set((state) => ({
+      items: state.items.map((item) =>
+        item.id === id && item.type === "modification" && !item.resolved
+          ? { ...item, stage: "rejection-handling" }
+          : item
       ),
     })),
 

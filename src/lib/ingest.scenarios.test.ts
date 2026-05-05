@@ -19,6 +19,16 @@ import type { IngestScenario } from "@/test-helpers/scenarios/types"
 
 vi.mock("@/commands/fs", () => realFs)
 
+// Stage 3 ingest now drives a git commit at the end of every run. The
+// real gitCommit goes through @tauri-apps/api/core::invoke, which hangs
+// in a node test environment with no Tauri host. Stub it.
+vi.mock("@/commands/git", () => ({
+  gitInit: vi.fn(async () => undefined),
+  gitCommit: vi.fn(async () => ({ committed: true, commitHash: "test1234" })),
+  gitStatus: vi.fn(async () => []),
+  gitLog: vi.fn(async () => []),
+}))
+
 // Sequenced streamChat: stage-1 returns analysisResponse, stage-2 returns
 // generationResponse. Any further calls return empty (shouldn't happen in a
 // typical autoIngest run).

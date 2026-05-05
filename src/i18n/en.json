@@ -4,12 +4,13 @@
     "subtitle": "Build and maintain your personal knowledge base with LLMs"
   },
   "nav": {
-    "wiki": "Wiki",
-    "sources": "Sources",
+    "wiki": "DB",
+    "sources": "Raw",
     "search": "Search",
     "graph": "Graph",
     "lint": "Lint",
-    "review": "Review",
+    "review": "Modifications",
+    "history": "History",
     "settings": "Settings",
     "switchProject": "Switch Project",
     "updateAvailable": "Update available",
@@ -25,10 +26,23 @@
     "name": "Project Name",
     "namePlaceholder": "my-research-wiki",
     "parentDir": "Parent Directory",
-    "template": "Template",
     "cancel": "Cancel",
     "create": "Create",
-    "creating": "Creating..."
+    "creating": "Creating...",
+    "schema": {
+      "label": "Schema",
+      "button": "Choose schema file",
+      "changeButton": "Choose a different schema file",
+      "dialogTitle": "Choose schema file"
+    },
+    "purpose": {
+      "label": "Project purpose",
+      "placeholder": "Describe the purpose of this project in markdown. (optional)"
+    },
+    "error": {
+      "nameAndPath": "Please enter both a name and a path.",
+      "schemaRequired": "Please choose a schema file."
+    }
   },
   "sources": {
     "title": "Raw Sources",
@@ -57,7 +71,19 @@
     "title": "Search",
     "placeholder": "Search wiki pages...",
     "noResults": "No results found",
-    "startSearching": "Type to search wiki pages"
+    "startSearching": "Type to search wiki pages",
+    "trace": {
+      "headerWithType": "Judged: {{name}} · removed {{removed}} of {{initial}}",
+      "headerNoType": "No type judged · {{initial}} candidates",
+      "judgedType": "Judged type",
+      "appliedExclusions": "Applied exclusions",
+      "removedOfInitial": "removed {{removed}} of {{initial}}",
+      "residueCount": "Residue: {{count}}",
+      "noEntriesFired": "No exclusion entries matched."
+    },
+    "zeroResidue": {
+      "label": "Zero residue"
+    }
   },
   "lint": {
     "title": "Lint",
@@ -74,9 +100,27 @@
     "suggestion": "Suggestion"
   },
   "review": {
-    "title": "Review",
+    "title": "Modifications",
     "clearResolved": "Clear resolved",
     "allClear": "All clear — nothing to review"
+  },
+  "history": {
+    "title": "History",
+    "empty": "No commits yet",
+    "loading": "Loading...",
+    "loadMore": "Load more",
+    "selectCommit": "Select a commit to see its changes here",
+    "filesChanged": "Files changed",
+    "noFileSelected": "Select a file to see the diff",
+    "restoreFile": "Restore this version",
+    "restoring": "Restoring...",
+    "restored": "Restored",
+    "revertCommit": "Revert this commit",
+    "reverting": "Reverting...",
+    "reverted": "Reverted",
+    "conflictTitle": "Conflict",
+    "conflictBody": "Revert produced conflicts. Resolve the following files manually and try again:\n{{files}}",
+    "actionFailed": "Action failed: {{error}}"
   },
   "settings": {
     "title": "Settings",

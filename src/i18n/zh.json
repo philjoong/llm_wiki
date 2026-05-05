@@ -4,12 +4,13 @@
     "subtitle": "用 LLM 构建和维护你的个人知识库"
   },
   "nav": {
-    "wiki": "Wiki",
-    "sources": "原始资料",
+    "wiki": "DB",
+    "sources": "Raw",
     "search": "搜索",
     "graph": "关系图",
     "lint": "检查",
-    "review": "待审阅",
+    "review": "修改请求",
+    "history": "历史",
     "settings": "设置",
     "switchProject": "切换项目",
     "updateAvailable": "有可用更新",
@@ -25,10 +26,23 @@
     "name": "项目名称",
     "namePlaceholder": "my-research-wiki",
     "parentDir": "父目录",
-    "template": "模板",
     "cancel": "取消",
     "create": "创建",
-    "creating": "创建中..."
+    "creating": "创建中...",
+    "schema": {
+      "label": "Schema",
+      "button": "选择 Schema 文件",
+      "changeButton": "选择其他 Schema 文件",
+      "dialogTitle": "选择 Schema 文件"
+    },
+    "purpose": {
+      "label": "项目目的",
+      "placeholder": "用 markdown 描述这个项目的目的。（可选）"
+    },
+    "error": {
+      "nameAndPath": "请输入项目名称和路径。",
+      "schemaRequired": "请选择 Schema 文件。"
+    }
   },
   "sources": {
     "title": "原始资料",
@@ -57,7 +71,19 @@
     "title": "搜索",
     "placeholder": "搜索 Wiki 页面...",
     "noResults": "未找到相关结果",
-    "startSearching": "输入关键词搜索 Wiki 页面"
+    "startSearching": "输入关键词搜索 Wiki 页面",
+    "trace": {
+      "headerWithType": "判定类型：{{name}} · 已排除 {{removed}} / {{initial}}",
+      "headerNoType": "未判定类型 · 候选 {{initial}} 个",
+      "judgedType": "判定类型",
+      "appliedExclusions": "已应用的排除",
+      "removedOfInitial": "排除 {{removed}} / {{initial}}",
+      "residueCount": "剩余：{{count}}",
+      "noEntriesFired": "没有排除项命中。"
+    },
+    "zeroResidue": {
+      "label": "零剩余"
+    }
   },
   "lint": {
     "title": "检查",
@@ -74,9 +100,27 @@
     "suggestion": "建议"
   },
   "review": {
-    "title": "待审阅",
+    "title": "修改请求",
     "clearResolved": "清除已解决",
     "allClear": "一切正常，无需审阅"
+  },
+  "history": {
+    "title": "历史",
+    "empty": "还没有提交记录",
+    "loading": "加载中...",
+    "loadMore": "加载更多",
+    "selectCommit": "选择一个提交以查看其改动",
+    "filesChanged": "改动文件",
+    "noFileSelected": "选择文件以查看 diff",
+    "restoreFile": "恢复到此版本",
+    "restoring": "恢复中...",
+    "restored": "已恢复",
+    "revertCommit": "回退此提交",
+    "reverting": "回退中...",
+    "reverted": "已回退",
+    "conflictTitle": "冲突",
+    "conflictBody": "Revert 出现冲突。请手动处理以下文件后重试：\n{{files}}",
+    "actionFailed": "操作失败：{{error}}"
   },
   "settings": {
     "title": "设置",

@@ -1,0 +1,250 @@
+{
+  "app": {
+    "title": "LLM Wiki",
+    "subtitle": "LLM과 함께 개인 지식 베이스를 구축하고 관리하세요"
+  },
+  "nav": {
+    "wiki": "DB",
+    "sources": "Raw",
+    "search": "검색",
+    "graph": "그래프",
+    "lint": "Lint",
+    "review": "수정 요청",
+    "history": "히스토리",
+    "settings": "설정",
+    "switchProject": "프로젝트 전환",
+    "updateAvailable": "업데이트 가능",
+    "updateAvailableSuffix": " · 업데이트"
+  },
+  "welcome": {
+    "newProject": "새 프로젝트",
+    "openProject": "프로젝트 열기",
+    "recentProjects": "최근 프로젝트"
+  },
+  "project": {
+    "createTitle": "새 Wiki 프로젝트 만들기",
+    "name": "프로젝트 이름",
+    "namePlaceholder": "my-research-wiki",
+    "parentDir": "상위 디렉토리",
+    "cancel": "취소",
+    "create": "생성",
+    "creating": "생성 중...",
+    "schema": {
+      "label": "스키마",
+      "button": "스키마 파일 선택",
+      "changeButton": "다른 스키마 파일 선택",
+      "dialogTitle": "스키마 파일 선택"
+    },
+    "purpose": {
+      "label": "프로젝트 목적",
+      "placeholder": "이 프로젝트의 목적을 markdown으로 작성하세요. (생략 가능)"
+    },
+    "error": {
+      "nameAndPath": "이름과 경로를 모두 입력해주세요.",
+      "schemaRequired": "스키마 파일을 선택해주세요."
+    }
+  },
+  "sources": {
+    "title": "Raw 자료",
+    "import": "가져오기",
+    "importing": "가져오는 중...",
+    "noSources": "자료가 없습니다",
+    "importHint": "문서를 가져와서 wiki 구축을 시작하세요",
+    "importFiles": "파일 가져오기",
+    "ingest": "Wiki에 반영",
+    "delete": "자료 및 관련 wiki 페이지 삭제",
+    "deleteConfirm": "「{{name}}」 및 관련 wiki 페이지를 삭제하시겠습니까?\n\n이 작업은:\n- 자료 파일 삭제\n- 자료에서 생성된 wiki 페이지 삭제\n- index.md 갱신",
+    "sourceCount": "{{count}}개 자료",
+    "sourceCount_plural": "{{count}}개 자료"
+  },
+  "chat": {
+    "placeholder": "wiki에 질문해보세요...",
+    "ingestPlaceholder": "자료에 대해 토론하거나 추가 질문을 하세요...",
+    "saveToWiki": "Wiki에 저장",
+    "saving": "저장 중...",
+    "saved": "저장됨!",
+    "writeToWiki": "Wiki에 쓰기",
+    "emptyHint": "질문을 하거나 자료 ingest를 시작하세요.",
+    "sources": "출처"
+  },
+  "search": {
+    "title": "검색",
+    "placeholder": "Wiki 페이지 검색...",
+    "noResults": "결과를 찾을 수 없습니다",
+    "startSearching": "Wiki 페이지를 검색하려면 입력하세요",
+    "trace": {
+      "headerWithType": "판정된 유형: {{name}} · {{initial}}개 중 {{removed}}개 제거",
+      "headerNoType": "유형 미판정 · 후보 {{initial}}개",
+      "judgedType": "판정된 유형",
+      "appliedExclusions": "적용된 배제",
+      "removedOfInitial": "{{initial}}개 중 {{removed}}개 제거",
+      "residueCount": "잔존: {{count}}개",
+      "noEntriesFired": "매칭된 배제 항목 없음."
+    },
+    "zeroResidue": {
+      "label": "잔존 0"
+    }
+  },
+  "lint": {
+    "title": "Lint",
+    "runLint": "Lint 실행",
+    "running": "실행 중...",
+    "semantic": "Semantic (LLM)",
+    "allClear": "이상 없음 — 발견된 문제가 없습니다",
+    "orphan": "고립 페이지",
+    "brokenLink": "끊긴 링크",
+    "noOutlinks": "외부 링크 없음",
+    "contradiction": "내용 모순",
+    "stale": "오래된 콘텐츠",
+    "missingPage": "누락된 페이지",
+    "suggestion": "제안"
+  },
+  "review": {
+    "title": "수정 요청",
+    "clearResolved": "해결 완료 항목 정리",
+    "allClear": "이상 없음 — 검토할 항목이 없습니다"
+  },
+  "history": {
+    "title": "히스토리",
+    "empty": "커밋이 없습니다",
+    "loading": "로딩 중...",
+    "loadMore": "더 보기",
+    "selectCommit": "커밋을 선택하면 변경 내용이 여기에 표시됩니다",
+    "filesChanged": "변경된 파일",
+    "noFileSelected": "파일을 선택하면 diff가 표시됩니다",
+    "restoreFile": "이 버전으로 복원",
+    "restoring": "복원 중...",
+    "restored": "복원됨",
+    "revertCommit": "이 커밋 되돌리기",
+    "reverting": "되돌리는 중...",
+    "reverted": "되돌림 완료",
+    "conflictTitle": "충돌 발생",
+    "conflictBody": "Revert 도중 충돌이 발생했습니다. 다음 파일을 직접 해결한 뒤 다시 시도하세요:\n{{files}}",
+    "actionFailed": "작업 실패: {{error}}"
+  },
+  "settings": {
+    "title": "설정",
+    "llmProvider": "LLM 제공자",
+    "provider": "제공자",
+    "apiKey": "API 키",
+    "apiKeyPlaceholder": "{{provider}} API 키를 입력하세요",
+    "model": "모델",
+    "customModel": "또는 커스텀 모델 이름 입력",
+    "ollamaUrl": "Ollama URL",
+    "customEndpoint": "API 엔드포인트 (OpenAI 호환)",
+    "customEndpointHint": "OpenAI 호환 API 엔드포인트 (예: LiteLLM, vLLM, LocalAI, Azure OpenAI)",
+    "customApiKey": "API 키 입력 (필요시)",
+    "modelPlaceholder": "모델 이름을 입력하세요",
+    "save": "저장",
+    "saved": "저장됨",
+    "savedTick": "저장됨 ✓",
+    "changeHint": "변경 사항은 저장 후 적용됩니다.",
+    "language": "언어",
+    "languageHint": "인터페이스 언어 (wiki 콘텐츠는 원본 자료 언어를 따릅니다)",
+    "categories": {
+      "llm": "LLM 모델",
+      "embedding": "임베딩",
+      "webSearch": "웹 검색",
+      "output": "출력",
+      "interface": "인터페이스",
+      "about": "정보"
+    },
+    "sections": {
+      "llm": {
+        "title": "LLM 모델",
+        "description": "각 vendor당 1행. 한 vendor를 켜면 다른 vendor는 자동으로 꺼집니다. 변경 사항은 즉시 저장되며, 각 vendor의 API 키는 독립적으로 보관되어 전환 시에도 손실되지 않습니다.",
+        "expand": "설정 펼치기",
+        "collapse": "접기",
+        "toggleOff": "비활성화하려면 클릭",
+        "toggleOn": "활성화하려면 클릭 (다른 provider는 꺼짐)",
+        "wireOpenAi": "OpenAI 호환",
+        "wireAnthropic": "Anthropic 호환",
+        "apiKeyPlaceholderCustom": "키가 없으면 비워두세요 (로컬 모델)",
+        "apiKeyPlaceholder": "API 키를 입력하세요",
+        "savedBadge": "저장됨",
+        "configuredBadge": "설정됨",
+        "activeBadge": "● 활성"
+      },
+      "embedding": {
+        "title": "벡터 임베딩",
+        "description": "Wiki에 대한 의미 검색을 활성화합니다. OpenAI 호환 /v1/embeddings 엔드포인트와 동작합니다. 로컬 모델 (LM Studio, Ollama embedding 등) 은 API 키가 필요 없습니다.",
+        "enableLabel": "벡터 검색 활성화",
+        "enableHint": "비활성화 시 검색은 토큰 매칭만 사용합니다.",
+        "endpoint": "엔드포인트",
+        "apiKey": "API 키 (선택)",
+        "apiKeyPlaceholder": "로컬 모델은 비워두세요",
+        "model": "모델",
+        "chunking": "청킹",
+        "maxChunkChars": "최대 청크 크기 (글자 수)",
+        "maxChunkCharsHint": "각 청크의 목표 크기. endpoint context가 작을 때 (llama.cpp n_ctx=512, mxbai-embed-large 등) 낮춰주세요 (예: 500).",
+        "overlapChunkChars": "오버랩 (글자 수)",
+        "overlapChunkCharsHint": "인접 청크 간 글자 수 오버랩으로 의미가 경계에서 끊기지 않게 합니다.",
+        "statsHeading": "인덱스 상태",
+        "chunkCount": "{{count}}개 청크 인덱싱됨",
+        "lastErrorHeading": "최근 임베딩 에러",
+        "reindexAll": "전체 페이지 재인덱싱",
+        "reindexing": "{{done}}/{{total}} 인덱싱 중…",
+        "reindexDone": "{{count}}개 페이지 인덱싱 완료.",
+        "legacyPromptTitle": "구버전 페이지 인덱스 발견",
+        "legacyPromptBody": "프로젝트의 구 페이지 단위 vector store에 {{count}}개 항목이 있습니다. 새 청크 단위 인덱스가 검색 품질이 더 좋지만 1회 재임베딩이 필요합니다. \"전체 페이지 재인덱싱\"을 실행해 업그레이드하세요.",
+        "dropLegacy": "구 인덱스 삭제",
+        "dropLegacyDone": "구 인덱스가 삭제되었습니다."
+      },
+      "webSearch": {
+        "title": "웹 검색",
+        "description": "Deep Research가 외부 컨텍스트를 가져올 때 사용합니다."
+      },
+      "output": {
+        "title": "출력 환경설정",
+        "description": "생성된 콘텐츠 — 언어, 대화 히스토리 길이 등을 제어합니다.",
+        "aiLanguage": "AI 출력 언어",
+        "aiLanguageHint": "AI가 생성한 콘텐츠 (chat 답변, wiki 페이지, research 출력, lint 리포트) 가 선택된 언어를 사용하도록 강제합니다. \"Auto\" 를 선택하면 AI가 사용자 입력 또는 원본 문서 언어를 따릅니다.",
+        "historyLength": "대화 히스토리 길이",
+        "historyHint": "각 요청 시 AI에 전달되는 이전 메시지 개수. 많을수록 컨텍스트는 풍부해지지만 토큰을 더 사용합니다.",
+        "historyCurrent": "현재 {{count}}개 메시지 (약 {{turns}}턴)"
+      },
+      "interface": {
+        "title": "인터페이스",
+        "description": "UI 언어와 외관. 변경 사항은 즉시 적용되고 유지됩니다.",
+        "uiLanguage": "UI 언어",
+        "uiLanguageHint": "라벨, 버튼 등 UI 문자열에만 영향을 줍니다. AI 출력 언어는 출력 환경설정에서 별도로 지정합니다."
+      },
+      "about": {
+        "title": "정보",
+        "description": "빌드 정보 및 런타임 상태.",
+        "version": "버전",
+        "clipServer": "Clip 서버",
+        "updateCheck": "업데이트 확인",
+        "lastChecked": "마지막 확인",
+        "lastCheckedNever": "없음",
+        "unreachable": "GitHub에 연결할 수 없음",
+        "checkNow": "지금 확인",
+        "checking": "확인 중…",
+        "upToDate": "최신 버전입니다 (v{{version}}).",
+        "updateAvailable": "업데이트 가능: v{{version}}",
+        "openDownload": "다운로드 페이지 열기",
+        "later": "나중에",
+        "autoCheck": "시작 시 자동으로 업데이트 확인 (최대 6시간에 1회)",
+        "appDescription": "LLM 기반 개인 지식 베이스. 소스:"
+      }
+    }
+  },
+  "preview": {
+    "selectFile": "미리 보려면 파일을 선택하세요",
+    "notAvailable": "이 파일 형식은 미리보기를 지원하지 않습니다"
+  },
+  "activity": {
+    "processing": "처리 중: {{title}}",
+    "done": "완료: {{title}}",
+    "clearCompleted": "완료 항목 정리"
+  },
+  "fileTree": {
+    "noProject": "열려 있는 프로젝트 없음"
+  },
+  "time": {
+    "justNow": "방금 전",
+    "minutesAgo": "{{count}}분 전",
+    "hoursAgo": "{{count}}시간 전",
+    "daysAgo": "{{count}}일 전"
+  }
+}

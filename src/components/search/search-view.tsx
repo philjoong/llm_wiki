@@ -2,40 +2,55 @@ import { useState, useCallback } from "react"
 import { Search, FileText } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
-import { searchWiki, type SearchResult } from "@/lib/search"
+import type { SearchResult } from "@/lib/search"
+import {
+  runExcludeSearch,
+  type SearchTrace,
+} from "@/lib/exclude-search"
 import { useTranslation } from "react-i18next"
 import { normalizePath } from "@/lib/path-utils"
+import { ExclusionTrace } from "./exclusion-trace"
 
 export function SearchView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
+  const llmConfig = useWikiStore((s) => s.llmConfig)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setActiveView = useWikiStore((s) => s.setActiveView)
 
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<SearchResult[]>([])
+  const [trace, setTrace] = useState<SearchTrace | null>(null)
   const [searching, setSearching] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
+
   const doSearch = useCallback(
     async (q: string) => {
       if (!project || !q.trim()) {
         setResults([])
+        setTrace(null)
         return
       }
       setSearching(true)
       setHasSearched(true)
       try {
-        const found = await searchWiki(normalizePath(project.path), q)
-        setResults(found)
+        const out = await runExcludeSearch(
+          q,
+          normalizePath(project.path),
+          llmConfig,
+        )
+        setResults(out.hits)
+        setTrace(out.trace)
       } catch (err) {
         console.error("Search failed:", err)
         setResults([])
+        setTrace(null)
       } finally {
         setSearching(false)
       }
     },
-    [project],
+    [project, llmConfig],
   )
 
   async function handleOpen(result: SearchResult) {
@@ -48,6 +63,14 @@ export function SearchView() {
       console.error("Failed to open search result:", err)
     }
   }
+
+  // §2.10 — when residue is 0 AND a type was judged, show its
+  // zeroResidueMeaning instead of the generic "no results" copy.
+  const zeroResidueMessage =
+    trace &&
+    trace.judgedType !== null &&
+    trace.residueCount === 0 &&
+    trace.zeroResidueMeaning
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -74,23 +97,40 @@ export function SearchView() {
             <Search className="h-8 w-8 text-muted-foreground/30" />
             <p>Press Enter to search</p>
           </div>
-        ) : results.length === 0 ? (
-          <div className="p-4 text-center text-sm text-muted-foreground">
-            {t("search.noResults")} <span className="font-medium">"{query}"</span>
-          </div>
         ) : (
           <div className="flex flex-col gap-1 p-2">
-            <div className="px-2 py-1 text-xs text-muted-foreground">
-              {results.length} result{results.length !== 1 ? "s" : ""}
-            </div>
-            {results.map((result) => (
-              <SearchResultCard
-                key={result.path}
-                result={result}
-                query={query}
-                onClick={() => handleOpen(result)}
-              />
-            ))}
+            {trace && <ExclusionTrace trace={trace} />}
+
+            {results.length === 0 ? (
+              zeroResidueMessage ? (
+                <div className="rounded-md border border-emerald-500/30 bg-emerald-50/50 dark:bg-emerald-950/20 p-3 text-sm">
+                  <div className="font-medium text-emerald-700 dark:text-emerald-400 mb-1">
+                    {t("search.zeroResidue.label")}
+                  </div>
+                  <div className="text-emerald-900/80 dark:text-emerald-200/70 whitespace-pre-wrap">
+                    {trace!.zeroResidueMeaning}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 text-center text-sm text-muted-foreground">
+                  {t("search.noResults")} <span className="font-medium">"{query}"</span>
+                </div>
+              )
+            ) : (
+              <>
+                <div className="px-2 py-1 text-xs text-muted-foreground">
+                  {results.length} result{results.length !== 1 ? "s" : ""}
+                </div>
+                {results.map((result) => (
+                  <SearchResultCard
+                    key={result.path}
+                    result={result}
+                    query={query}
+                    onClick={() => handleOpen(result)}
+                  />
+                ))}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -107,7 +147,16 @@ function SearchResultCard({
   query: string
   onClick: () => void
 }) {
-  const shortPath = result.path.split("/wiki/").pop() ?? result.path
+  // db/ 우선, 그다음 wiki/, 둘 다 아니면 풀 path. 패스에 둘 다 있으면 더 깊은
+  // 분기를 살린다 (보통 db/ 트리 안에 있는 결과).
+  const dbIdx = result.path.lastIndexOf("/db/")
+  const wikiIdx = result.path.lastIndexOf("/wiki/")
+  const shortPath =
+    dbIdx >= 0
+      ? result.path.slice(dbIdx + 1)
+      : wikiIdx >= 0
+        ? result.path.slice(wikiIdx + 1)
+        : result.path
 
   return (
     <button

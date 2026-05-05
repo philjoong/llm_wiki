@@ -217,7 +217,150 @@ export const ingestScenarios: IngestScenario[] = [
     },
   },
 
-  // 4. chinese-source — Chinese content flows through to Chinese wiki pages
+  // 4. game-dev/instance-server — Stage 3 decomposition into db/ paths.
+  //
+  // The source document mixes 4 distinct semantic units that schema.md
+  // routes to 4 different db/ subtrees. The Stage 3 ingest pipeline must:
+  //   - copy raw → processed_1/instance_server_design.md (passthrough)
+  //   - emit one db/ FILE block per semantic unit
+  //   - frontmatter `sources` carries `file:` + `range:` pointing back
+  //     to the heading of the contributing section
+  {
+    name: "game-dev/instance-server",
+    description:
+      "A raw game-dev design doc decomposes into 4 db/ pages plus the " +
+      "passthrough copy under processed_1/. Asserts both the file layout " +
+      "and the SourceRef shape in each page's frontmatter.",
+    initialWiki: {
+      "purpose.md": "# Purpose\n\nGame-dev design wiki for an MMORPG.\n",
+      "schema.md":
+        "# Schema (excerpt)\n\n" +
+        "- db/systems/instance_server/server_structure.md\n" +
+        "- db/content/dungeons/{dungeon_id}/entry_rules.md\n" +
+        "- db/content/dungeons/{dungeon_id}/rewards.md\n" +
+        "- db/content/dungeons/{dungeon_id}/spawn_rules.md\n",
+    },
+    source: {
+      path: "raw/instance_server_design.md",
+      content: [
+        "# 인스턴스 서버 설계",
+        "",
+        "## 1. 서버 구조",
+        "- 인스턴스 서버는 채널마다 별도 프로세스로 동작.",
+        "- 메인 서버와 gRPC로 통신.",
+        "",
+        "## 2. 던전 A — 입장 규칙",
+        "- 레벨 50 이상 입장 가능.",
+        "- 파티 4인 필수.",
+        "",
+        "## 3. 던전 A — 보상",
+        "- 클리어 시 골드 1000 + 장비 박스 1개.",
+        "- 주간 1회 추가 보상.",
+        "",
+        "## 4. 던전 B — 스폰 규칙",
+        "- 보스는 60초 간격으로 스폰.",
+        "- 스폰 위치는 5곳 랜덤.",
+      ].join("\n"),
+    },
+    analysisResponse: [
+      "Proposed decomposition:",
+      "- path: db/systems/instance_server/server_structure.md",
+      "  range: ## 1. 서버 구조",
+      "- path: db/content/dungeons/dungeon_a/entry_rules.md",
+      "  range: ## 2. 던전 A — 입장 규칙",
+      "- path: db/content/dungeons/dungeon_a/rewards.md",
+      "  range: ## 3. 던전 A — 보상",
+      "- path: db/content/dungeons/dungeon_b/spawn_rules.md",
+      "  range: ## 4. 던전 B — 스폰 규칙",
+    ].join("\n"),
+    generationResponse: [
+      "---FILE: db/systems/instance_server/server_structure.md---",
+      "---",
+      "title: 인스턴스 서버 구조",
+      "status: draft",
+      "sources:",
+      "  - file: instance_server_design.md",
+      '    range: "## 1. 서버 구조"',
+      "---",
+      "",
+      "# 인스턴스 서버 구조",
+      "",
+      "채널마다 별도 프로세스로 동작하며, 메인 서버와 gRPC로 통신한다.",
+      "---END FILE---",
+      "",
+      "---FILE: db/content/dungeons/dungeon_a/entry_rules.md---",
+      "---",
+      "title: 던전 A 입장 규칙",
+      "status: draft",
+      "sources:",
+      "  - file: instance_server_design.md",
+      '    range: "## 2. 던전 A — 입장 규칙"',
+      "---",
+      "",
+      "# 던전 A 입장 규칙",
+      "",
+      "- 레벨 50 이상 입장 가능",
+      "- 파티 4인 필수",
+      "---END FILE---",
+      "",
+      "---FILE: db/content/dungeons/dungeon_a/rewards.md---",
+      "---",
+      "title: 던전 A 보상",
+      "status: draft",
+      "sources:",
+      "  - file: instance_server_design.md",
+      '    range: "## 3. 던전 A — 보상"',
+      "---",
+      "",
+      "# 던전 A 보상",
+      "",
+      "- 클리어 시 골드 1000 + 장비 박스 1개",
+      "- 주간 1회 추가 보상",
+      "---END FILE---",
+      "",
+      "---FILE: db/content/dungeons/dungeon_b/spawn_rules.md---",
+      "---",
+      "title: 던전 B 스폰 규칙",
+      "status: draft",
+      "sources:",
+      "  - file: instance_server_design.md",
+      '    range: "## 4. 던전 B — 스폰 규칙"',
+      "---",
+      "",
+      "# 던전 B 스폰 규칙",
+      "",
+      "- 보스는 60초 간격으로 스폰",
+      "- 스폰 위치는 5곳 랜덤",
+      "---END FILE---",
+    ].join("\n"),
+    expected: {
+      writtenPaths: [
+        "processed_1/instance_server_design.md",
+        "db/systems/instance_server/server_structure.md",
+        "db/content/dungeons/dungeon_a/entry_rules.md",
+        "db/content/dungeons/dungeon_a/rewards.md",
+        "db/content/dungeons/dungeon_b/spawn_rules.md",
+      ],
+      fileContains: {
+        "db/content/dungeons/dungeon_a/rewards.md": [
+          "title: 던전 A 보상",
+          "file: instance_server_design.md",
+          "## 3. 던전 A — 보상",
+        ],
+        "db/systems/instance_server/server_structure.md": [
+          "file: instance_server_design.md",
+          "gRPC",
+        ],
+        "processed_1/instance_server_design.md": [
+          "# 인스턴스 서버 설계",
+          "## 4. 던전 B — 스폰 규칙",
+        ],
+      },
+      reviewsCreated: [],
+    },
+  },
+
+  // 5. chinese-source — Chinese content flows through to Chinese wiki pages
   {
     name: "chinese-source",
     description:

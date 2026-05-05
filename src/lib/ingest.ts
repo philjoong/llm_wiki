@@ -10,6 +10,18 @@ import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
 import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
+import { runProcessed1 } from "@/lib/processed1"
+import { formatIngestMessage } from "@/lib/auto-commit"
+import { gitCommit } from "@/commands/git"
+import { parseSourceRefs } from "@/lib/sources-merge"
+import {
+  loadCounterexamples,
+  loadRejectionLog,
+  findRelatedRejections,
+  formatDismissalContext,
+} from "@/lib/counterexample-index"
+import type { ModificationProposal } from "@/stores/review-store"
+import type { FileNode } from "@/types/wiki"
 
 // Legacy export kept for backward compatibility with existing diagnostic
 // tests. The live pipeline goes through parseFileBlocks() below, which
@@ -53,9 +65,10 @@ const CLOSER_LINE = /^---\s*END\s+FILE\s*---\s*$/i
  * sandboxing of its own (it's a generic command used for many things),
  * so the gate has to live here at the parse boundary.
  *
- * Allowed: any path under `wiki/` (e.g. `wiki/concepts/foo.md`).
+ * Allowed: any path under one of the SAFE_INGEST_PREFIXES
+ * (e.g. `db/systems/foo.md`, `wiki/concepts/foo.md`).
  * Rejected:
- *   - paths not starting with `wiki/`
+ *   - paths not starting with an allowed prefix
  *   - absolute paths (`/etc/passwd`, `C:/Windows/...`)
  *   - any `..` segment
  *   - NUL or control characters
@@ -63,6 +76,17 @@ const CLOSER_LINE = /^---\s*END\s+FILE\s*---\s*$/i
  *
  * Exported for tests.
  */
+// TODO Stage 3: drop "wiki/" once the ingest pipeline writes to db/.
+const SAFE_INGEST_PREFIXES = [
+  "db/",
+  "processed_1/",
+  "pending/",
+  "counterexamples/",
+  "question_types/",
+  "exclusions/",
+  "wiki/",
+]
+
 export function isSafeIngestPath(p: string): boolean {
   if (typeof p !== "string" || p.trim().length === 0) return false
   // No control / NUL bytes anywhere.
@@ -74,8 +98,8 @@ export function isSafeIngestPath(p: string): boolean {
   const normalized = p.replace(/\\/g, "/")
   // No `..` segments, regardless of position.
   if (normalized.split("/").some((seg) => seg === "..")) return false
-  // Must live under wiki/ — the only tree the ingest pipeline writes to.
-  if (!normalized.startsWith("wiki/")) return false
+  // Must live under one of the allowed prefixes.
+  if (!SAFE_INGEST_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false
   return true
 }
 // Fence delimiters per CommonMark (triple+ backticks or tildes). Leading
@@ -190,8 +214,8 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
 
     if (!isSafeIngestPath(path)) {
       // Path-traversal guard. Drops blocks whose path tries to escape
-      // wiki/ — see isSafeIngestPath for the threat model.
-      const msg = `FILE block with unsafe path "${path}" rejected (must be under wiki/, no .., no absolute paths).`
+      // the allowed prefixes — see isSafeIngestPath for the threat model.
+      const msg = `FILE block with unsafe path "${path}" rejected (must be under db/, processed_1/, pending/, counterexamples/, question_types/, exclusions/, or wiki/; no .., no absolute paths).`
       console.warn(`[ingest] ${msg}`)
       warnings.push(msg)
       continue
@@ -254,12 +278,10 @@ async function autoIngestImpl(
     filesWritten: [],
   })
 
-  const [sourceContent, schema, purpose, index, overview] = await Promise.all([
+  const [sourceContent, schema, purpose] = await Promise.all([
     tryReadFile(sp),
     tryReadFile(`${pp}/schema.md`),
     tryReadFile(`${pp}/purpose.md`),
-    tryReadFile(`${pp}/wiki/index.md`),
-    tryReadFile(`${pp}/wiki/overview.md`),
   ])
 
   // ── Cache check: skip re-ingest if source content hasn't changed ──
@@ -273,22 +295,48 @@ async function autoIngestImpl(
     return cachedFiles
   }
 
+  // ── Step 0: Stage 3 1차 가공 (passthrough) ──────────────────
+  // Copy raw content into processed_1/<name>.md before anything else so
+  // it lands in the same commit as the db/ pages downstream. Currently
+  // a simple passthrough; a structured 1차 가공 segmenter will replace
+  // this body in Part 1.5.
+  activity.updateItem(activityId, { detail: "Step 0/2: Caching 1차 산출물..." })
+  const processed1 = await runProcessed1(pp, sp, sourceContent)
+
+  // Build a compact db/ index string to inject into both prompts. We
+  // skip empty / .gitkeep entries; the LLM only needs to see what real
+  // pages already live there.
+  const dbIndex = await buildDbIndex(pp)
+
+  // Stage 5 — load prior dismissals (counterexamples + rejection log) so
+  // the analysis prompt can re-apply the user's earlier decisions instead
+  // of re-proposing the same modification card every time the source is
+  // re-ingested. `pending/` is intentionally not loaded — those entries
+  // are awaiting human triage and shouldn't bias the model.
+  const [counterexamples, rejectionLog] = await Promise.all([
+    loadCounterexamples(pp),
+    loadRejectionLog(pp),
+  ])
+  const relevantRejections = findRelatedRejections(rejectionLog, fileName)
+  const dismissalContext = formatDismissalContext(
+    counterexamples,
+    relevantRejections,
+  )
+
   const truncatedContent = sourceContent.length > 50000
     ? sourceContent.slice(0, 50000) + "\n\n[...truncated...]"
     : sourceContent
 
-  // ── Step 1: Analysis ──────────────────────────────────────────
-  // LLM reads the source and produces a structured analysis:
-  // key entities, concepts, main arguments, connections to existing wiki, contradictions
-  activity.updateItem(activityId, { detail: "Step 1/2: Analyzing source..." })
+  // ── Step 1: Analysis (decomposition planner) ─────────────────
+  activity.updateItem(activityId, { detail: "Step 1/2: Planning decomposition..." })
 
   let analysis = ""
 
   await streamChat(
     llmConfig,
     [
-      { role: "system", content: buildAnalysisPrompt(purpose, index, truncatedContent) },
-      { role: "user", content: `Analyze this source document:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}\n\n---\n\n${truncatedContent}` },
+      { role: "system", content: buildAnalysisPrompt(schema, purpose, dbIndex, truncatedContent, dismissalContext) },
+      { role: "user", content: `Analyze this source document and propose db/ paths:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}\n\n---\n\n${truncatedContent}` },
     ],
     {
       onToken: (token) => { analysis += token },
@@ -309,26 +357,25 @@ async function autoIngestImpl(
     throw new Error(analysisActivity.detail || "Analysis stream failed")
   }
 
-  // ── Step 2: Generation ────────────────────────────────────────
-  // LLM takes the analysis as context and produces wiki files + review items
-  activity.updateItem(activityId, { detail: "Step 2/2: Generating wiki pages..." })
+  // ── Step 2: Generation (FILE blocks under db/) ────────────────
+  activity.updateItem(activityId, { detail: "Step 2/2: Generating db/ pages..." })
 
   let generation = ""
 
   await streamChat(
     llmConfig,
     [
-      { role: "system", content: buildGenerationPrompt(schema, purpose, index, fileName, overview, truncatedContent) },
+      { role: "system", content: buildGenerationPrompt(schema, purpose, dbIndex, fileName, truncatedContent) },
       {
         role: "user",
         content: [
           `Source document to process: **${fileName}**`,
           "",
-          "The Stage 1 analysis below is CONTEXT to inform your output. Do NOT echo",
-          "its tables, bullet points, or prose. Your output must be FILE/REVIEW",
-          "blocks as specified in the system prompt — nothing else.",
+          "The Stage 1 decomposition plan below is CONTEXT. Do NOT echo it as",
+          "prose. Your output must be FILE/REVIEW blocks as specified in the",
+          "system prompt — nothing else.",
           "",
-          "## Stage 1 Analysis (context only — do not repeat)",
+          "## Stage 1 Decomposition Plan (context only — do not repeat)",
           "",
           analysis,
           "",
@@ -338,8 +385,8 @@ async function autoIngestImpl(
           "",
           "---",
           "",
-          `Now emit the FILE blocks for the wiki files derived from **${fileName}**.`,
-          "Your response MUST begin with `---FILE:` as the very first characters.",
+          `Now emit the FILE blocks for the db/ pages derived from **${fileName}**.`,
+          "Your response MUST begin with `---FILE: db/` as the very first characters.",
           "No preamble. No analysis prose. Start immediately.",
         ].join("\n"),
       },
@@ -362,12 +409,15 @@ async function autoIngestImpl(
 
   // ── Step 3: Write files ───────────────────────────────────────
   activity.updateItem(activityId, { detail: "Writing files..." })
-  const { writtenPaths, warnings: writeWarnings, hardFailures } = await writeFileBlocks(pp, generation)
+  const { writtenPaths, warnings: writeWarnings, hardFailures, proposals } = await writeFileBlocks(pp, generation, fileName)
+
+  // Always include the processed_1 passthrough output in the commit's
+  // file list — it's part of this ingest run even though it didn't go
+  // through the FILE block parser.
+  const allWrittenPaths = [processed1.writtenPath, ...writtenPaths]
 
   // Surface parser / writer warnings to the activity panel so users
   // don't have to open devtools to find out a block was dropped.
-  // Keeping the base "Writing files..." detail on top and appending the
-  // first few warnings; full list stays in the console.
   if (writeWarnings.length > 0) {
     const summary = writeWarnings.length === 1
       ? writeWarnings[0]
@@ -375,45 +425,7 @@ async function autoIngestImpl(
     activity.updateItem(activityId, { detail: summary })
   }
 
-  // Ensure source summary page exists (LLM may not have generated it correctly)
-  const sourceBaseName = fileName.replace(/\.[^.]+$/, "")
-  const sourceSummaryPath = `wiki/sources/${sourceBaseName}.md`
-  const sourceSummaryFullPath = `${pp}/${sourceSummaryPath}`
-  const hasSourceSummary = writtenPaths.some((p) => p.startsWith("wiki/sources/"))
-
-  // If the signal was aborted (e.g. user switched projects / cancelled),
-  // skip the fallback summary write — the LLM streams returned empty
-  // via the abort fast-path (onDone), and writing a stub file into the
-  // old project's wiki would both be noise and mask the error.
-  // Returning no files lets processNext's length-0 safety net mark the
-  // task for retry rather than "success".
-  if (!hasSourceSummary && !signal?.aborted) {
-    const date = new Date().toISOString().slice(0, 10)
-    const fallbackContent = [
-      "---",
-      `type: source`,
-      `title: "Source: ${fileName}"`,
-      `created: ${date}`,
-      `updated: ${date}`,
-      `sources: ["${fileName}"]`,
-      `tags: []`,
-      `related: []`,
-      "---",
-      "",
-      `# Source: ${fileName}`,
-      "",
-      analysis ? analysis.slice(0, 3000) : "(Analysis not available)",
-      "",
-    ].join("\n")
-    try {
-      await writeFile(sourceSummaryFullPath, fallbackContent)
-      writtenPaths.push(sourceSummaryPath)
-    } catch {
-      // non-critical
-    }
-  }
-
-  if (writtenPaths.length > 0) {
+  if (allWrittenPaths.length > 0) {
     try {
       const tree = await listDirectory(pp)
       useWikiStore.getState().setFileTree(tree)
@@ -425,6 +437,25 @@ async function autoIngestImpl(
 
   // ── Step 4: Parse review items ────────────────────────────────
   const reviewItems = parseReviewBlocks(generation, sp)
+  // Stage 4 — append a modification card for every proposal the writer
+  // parked. These items always run in their own card (the store skips
+  // dedupe for `modification`) so two parallel conflicts can't collapse
+  // into one and lose a parked draft.
+  for (const proposal of proposals) {
+    reviewItems.push({
+      type: "modification",
+      stage: "primary",
+      title: `Modification proposal: ${proposal.targetPath}`,
+      description:
+        `Re-ingest of "${fileName}" produced different content for ` +
+        `${proposal.targetPath}. Approve to overwrite, Merge to hand-edit, ` +
+        `or Reject to send the proposal to discard / pending / counterexample.`,
+      sourcePath: sp,
+      affectedPages: [proposal.targetPath],
+      options: [],
+      proposal,
+    })
+  }
   if (reviewItems.length > 0) {
     useReviewStore.getState().addItems(reviewItems)
   }
@@ -438,15 +469,34 @@ async function autoIngestImpl(
   // mismatch, path-traversal rejection, empty-path) are NOT failures
   // — they represent deterministic decisions and caching them is
   // safe.
-  if (writtenPaths.length > 0 && hardFailures.length === 0) {
-    await saveIngestCache(pp, fileName, sourceContent, writtenPaths)
+  if (allWrittenPaths.length > 0 && hardFailures.length === 0) {
+    await saveIngestCache(pp, fileName, sourceContent, allWrittenPaths)
   } else if (hardFailures.length > 0) {
     console.warn(
       `[ingest] Skipping cache save for "${fileName}" — ${hardFailures.length} block(s) failed to write: ${hardFailures.join(", ")}`,
     )
   }
 
-  // ── Step 6: Generate embeddings (if enabled) ───────────────
+  // ── Step 6: Auto-commit ───────────────────────────────────
+  // One ingest run = one git commit. Includes the processed_1
+  // passthrough plus every db/ page the generator emitted. We call
+  // gitCommit directly (NOT commitIngest from auto-commit.ts) because
+  // the autoIngest entry point already holds the per-project lock —
+  // re-entering withProjectLock here would deadlock.
+  // Failures are non-fatal: the files are already on disk and the
+  // user can `git add -A && git commit` manually if needed.
+  if (allWrittenPaths.length > 0) {
+    try {
+      const commitMessage = formatIngestMessage(fileName, allWrittenPaths)
+      await gitCommit(pp, commitMessage, allWrittenPaths)
+    } catch (err) {
+      console.warn(
+        `[ingest] commit failed for "${fileName}": ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  // ── Step 7: Generate embeddings (if enabled) ───────────────
   const embCfg = useWikiStore.getState().embeddingConfig
   if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
     try {
@@ -468,17 +518,49 @@ async function autoIngestImpl(
     }
   }
 
-  const detail = writtenPaths.length > 0
-    ? `${writtenPaths.length} files written${reviewItems.length > 0 ? `, ${reviewItems.length} review item(s)` : ""}`
+  const detail = allWrittenPaths.length > 0
+    ? `${allWrittenPaths.length} files written${reviewItems.length > 0 ? `, ${reviewItems.length} review item(s)` : ""}`
     : "No files generated"
 
   activity.updateItem(activityId, {
-    status: writtenPaths.length > 0 ? "done" : "error",
+    status: allWrittenPaths.length > 0 ? "done" : "error",
     detail,
-    filesWritten: writtenPaths,
+    filesWritten: allWrittenPaths,
   })
 
-  return writtenPaths
+  return allWrittenPaths
+}
+
+/**
+ * Build a compact tree-style listing of pages already under `db/`. Used
+ * as context in both the analysis and generation prompts so the LLM can
+ * see what already exists and align proposed paths with existing ones.
+ *
+ * Returns an empty string when db/ is missing or only contains .gitkeep —
+ * the prompts handle the empty case explicitly.
+ */
+async function buildDbIndex(projectPath: string): Promise<string> {
+  let nodes: FileNode[]
+  try {
+    nodes = await listDirectory(`${projectPath}/db`)
+  } catch {
+    return ""
+  }
+  const lines: string[] = []
+  walk(nodes, "db", lines)
+  return lines.join("\n")
+}
+
+function walk(nodes: FileNode[], prefix: string, out: string[]): void {
+  for (const node of nodes) {
+    if (node.name.startsWith(".")) continue
+    const path = `${prefix}/${node.name}`
+    if (node.is_dir) {
+      walk(node.children ?? [], path, out)
+    } else if (node.name.endsWith(".md")) {
+      out.push(path)
+    }
+  }
 }
 
 /**
@@ -512,10 +594,39 @@ function contentMatchesTargetLanguage(content: string, target: string): boolean 
   return !detectedIsCjk && !["Arabic", "Hindi", "Thai", "Hebrew"].includes(detected)
 }
 
+/**
+ * Strip YAML frontmatter (the leading `---\n...\n---\n` block) from a
+ * page so two re-ingests can be compared on body content alone, without
+ * a `sources:` rewrite tripping the conflict detector.
+ */
+function stripFrontmatter(content: string): string {
+  if (!content.startsWith("---\n")) return content
+  const end = content.indexOf("\n---\n", 4)
+  if (end < 0) return content
+  return content.slice(end + 5)
+}
+
+/**
+ * "Materially different" check between an incoming generated page and
+ * what's already on disk. Compares post-frontmatter body trimmed of
+ * trailing whitespace. Equal bodies are treated as a benign re-ingest
+ * (sources will be merged), differing bodies trigger Stage 4's
+ * modification flow.
+ */
+function bodiesMatch(a: string, b: string): boolean {
+  return stripFrontmatter(a).trim() === stripFrontmatter(b).trim()
+}
+
 async function writeFileBlocks(
   projectPath: string,
   text: string,
-): Promise<{ writtenPaths: string[]; warnings: string[]; hardFailures: string[] }> {
+  sourceFile: string,
+): Promise<{
+  writtenPaths: string[]
+  warnings: string[]
+  hardFailures: string[]
+  proposals: ModificationProposal[]
+}> {
   const { blocks, warnings: parseWarnings } = parseFileBlocks(text)
   const warnings = [...parseWarnings]
   const writtenPaths: string[] = []
@@ -528,6 +639,14 @@ async function writeFileBlocks(
   // be written, so the next re-ingest goes through the full pipeline
   // instead of replaying the partial result forever.
   const hardFailures: string[] = []
+
+  // Stage 4 — modification proposals: db/ pages whose target already
+  // exists with materially different content are parked under
+  // `pending/_proposals/...` instead of overwriting. The caller turns
+  // each proposal into a `modification` review card.
+  const proposals: ModificationProposal[] = []
+  const runStamp = Date.now()
+  let proposalIdx = 0
 
   const targetLang = useWikiStore.getState().outputLanguage
 
@@ -578,20 +697,57 @@ async function writeFileBlocks(
         // content pages).
         await writeFile(fullPath, content)
       } else {
-        // Content pages (entities / concepts / queries / synthesis /
-        // comparisons / sources summaries): MERGE the sources field
-        // with what's already on disk before overwriting, so pages
-        // that multiple source documents contribute to retain the
-        // full `sources: [...]` history. Without this, every
-        // re-ingest clobbers sources to a single entry and the
-        // source-delete flow would later treat the page as single-
-        // sourced and delete it outright — silent data loss.
+        // Content pages: MERGE the sources field with what's already on
+        // disk before overwriting, so pages that multiple source
+        // documents contribute to retain the full sources history.
+        // Without this, every re-ingest clobbers sources to a single
+        // entry and the source-delete flow would later treat the page
+        // as single-sourced and delete it outright — silent data loss.
         //
-        // See src/lib/sources-merge.ts for the merge semantics
-        // (case-insensitive dedup, preserves existing order).
-        const { mergeSourcesIntoContent } = await import("./sources-merge")
+        // db/ pages use the SourceRef-aware merge so the `range` field
+        // (Stage 3) round-trips correctly. Legacy wiki/ pages keep the
+        // string-based merge to avoid changing their on-disk shape.
+        const isDbPage = relativePath.startsWith("db/")
+        const { mergeSourcesIntoContent, mergeSourceRefsIntoContent } = await import("./sources-merge")
         const existing = await tryReadFile(fullPath)
-        const toWrite = mergeSourcesIntoContent(content, existing)
+
+        // Stage 4 — conflict detection (db/ pages only).
+        // If the target already exists with materially different body
+        // content, refuse to overwrite. Park the incoming draft under
+        // `pending/_proposals/<run>-<idx>-<slug>.md` and record a
+        // proposal for the caller to surface as a modification review.
+        // Same-body re-ingests fall through to the source-merge path
+        // below — those aren't conflicts, just additional sources for
+        // the same page.
+        if (isDbPage && existing && !bodiesMatch(content, existing)) {
+          const slug = relativePath
+            .replace(/^db\//, "")
+            .replace(/\.md$/, "")
+            .replace(/\//g, "_")
+          proposalIdx++
+          const draftRel = `pending/_proposals/${runStamp}-${proposalIdx}-${slug}.md`
+          const draftAbs = `${projectPath}/${draftRel}`
+          await writeFile(draftAbs, content)
+
+          const incomingRefs = parseSourceRefs(content)
+          const sourceRefs = incomingRefs.length > 0
+            ? incomingRefs
+            : [{ file: sourceFile }]
+
+          proposals.push({
+            targetPath: relativePath,
+            existingExcerpt: existing,
+            incomingExcerpt: content,
+            incomingDraftPath: draftRel,
+            sourceRefs,
+          })
+          writtenPaths.push(draftRel)
+          continue
+        }
+
+        const toWrite = isDbPage
+          ? mergeSourceRefsIntoContent(content, existing)
+          : mergeSourcesIntoContent(content, existing)
         await writeFile(fullPath, toWrite)
       }
       writtenPaths.push(relativePath)
@@ -603,7 +759,7 @@ async function writeFileBlocks(
     }
   }
 
-  return { writtenPaths, warnings, hardFailures }
+  return { writtenPaths, warnings, hardFailures, proposals }
 }
 
 const REVIEW_BLOCK_REGEX = /---REVIEW:\s*(\w[\w-]*)\s*\|\s*(.+?)\s*---\n([\s\S]*?)---END REVIEW---/g
@@ -672,133 +828,160 @@ function parseReviewBlocks(
 }
 
 /**
- * Step 1 prompt: AI reads the source and produces a structured analysis.
- * This is the "discussion" step — the AI reasons about the source before writing wiki pages.
+ * Step 1 prompt (Stage 3 rewrite). Decomposition planner.
+ *
+ * The analyst now reads the raw source against the project's `schema.md`
+ * (the user-supplied taxonomy that defines where each kind of content
+ * belongs) and proposes a per-section decomposition: which schema-defined
+ * paths under `db/...` does this raw file fan out to, what's the meaning
+ * of each piece, and what range in the raw file does it correspond to.
+ *
+ * Notable changes vs. the pre-Stage-3 prompt:
+ *   - No more "List entities / concepts / queries" — those were artifacts
+ *     of the wiki/ flow and the new pipeline doesn't write them.
+ *   - schema.md is injected verbatim (not truncated). The schema is the
+ *     authoritative path map; truncating it would silently confine the
+ *     decomposition to the early sections.
+ *   - The output is structured around proposed db/ paths, NOT around
+ *     wiki sections — Stage 2 will turn each proposal into a FILE block.
  */
-export function buildAnalysisPrompt(purpose: string, index: string, sourceContent: string = ""): string {
+export function buildAnalysisPrompt(
+  schema: string,
+  purpose: string,
+  dbIndex: string,
+  sourceContent: string = "",
+  dismissalContext: string = "",
+): string {
   return [
-    "You are an expert research analyst. Read the source document and produce a structured analysis.",
+    "You are a knowledge-base decomposer. Read the raw source document and",
+    "decide how to split it into schema-defined pages under `db/`.",
     "",
     languageRule(sourceContent),
     "",
-    "Your analysis should cover:",
+    "## What to produce",
     "",
-    "## Key Entities",
-    "List people, organizations, products, datasets, tools mentioned. For each:",
-    "- Name and type",
-    "- Role in the source (central vs. peripheral)",
-    "- Whether it likely already exists in the wiki (check the index)",
+    "A list of proposed pages. For each proposed page:",
     "",
-    "## Key Concepts",
-    "List theories, methods, techniques, phenomena. For each:",
-    "- Name and brief definition",
-    "- Why it matters in this source",
-    "- Whether it likely already exists in the wiki",
+    "- **path** — the project-relative path under `db/` that this page should",
+    "  live at. The path MUST follow the `schema.md` directory tree below.",
+    "  Use the schema's placeholder slots (e.g. `{dungeon_id}`, `{patch_id}`)",
+    "  with concrete identifiers drawn from the source's content.",
+    "- **summary** — one or two sentences describing what this page is about.",
+    "- **range** — a pointer back into the raw file: a heading path",
+    "  (`## 3. 던전 A — 보상`), a sheet+range (`DungeonA!B12:E18`), a",
+    "  timestamp, or whatever marker fits the source format. This is what",
+    "  ends up in the page's frontmatter `sources[].range`, so it must be",
+    "  precise enough that a human can re-find the exact section in the raw.",
+    "- **existing?** — if a page at `path` already exists in the current db",
+    "  index below, say so. Stage 2 will still emit a FILE block for it; the",
+    "  modification flow (Stage 4) will handle conflicts later.",
     "",
-    "## Main Arguments & Findings",
-    "- What are the core claims or results?",
-    "- What evidence supports them?",
-    "- How strong is the evidence?",
+    "Multiple sections of the same raw file may collapse to the same page",
+    "(e.g. two passages about the same dungeon's rewards). Do not invent",
+    "content that isn't in the source. If a section doesn't fit anywhere in",
+    "the schema, skip it and note it briefly under '## Unmapped sections'",
+    "at the end.",
     "",
-    "## Connections to Existing Wiki",
-    "- What existing pages does this source relate to?",
-    "- Does it strengthen, challenge, or extend existing knowledge?",
+    "Be concrete: 'the source has a section on dungeon A entry rules → it",
+    "decomposes to db/world/dungeons/dungeon_a/entry_rules.md' beats vague",
+    "categorical hand-waving.",
     "",
-    "## Contradictions & Tensions",
-    "- Does anything in this source conflict with existing wiki content?",
-    "- Are there internal tensions or caveats?",
+    purpose ? `## Wiki Purpose (project intent)\n${purpose}` : "",
     "",
-    "## Recommendations",
-    "- What wiki pages should be created or updated?",
-    "- What should be emphasized vs. de-emphasized?",
-    "- Any open questions worth flagging for the user?",
+    schema ? `## Schema (authoritative directory tree — every proposed path MUST live under this)\n\n${schema}` : "",
     "",
-    "Be thorough but concise. Focus on what's genuinely important.",
+    dbIndex ? `## Current db/ index (pages that already exist)\n\n${dbIndex}` : "## Current db/ index\n\n(empty — this is the first ingest into this project)",
     "",
-    "If a folder context is provided, use it as a hint for categorization — the folder structure often reflects the user's organizational intent (e.g., 'papers/energy' suggests the file is an energy-related paper).",
-    "",
-    purpose ? `## Wiki Purpose (for context)\n${purpose}` : "",
-    index ? `## Current Wiki Index (for checking existing content)\n${index}` : "",
+    dismissalContext,
   ].filter(Boolean).join("\n")
 }
 
 /**
- * Step 2 prompt: AI takes its own analysis and generates wiki files + review items.
+ * Step 2 prompt (Stage 3 rewrite). Generation: emit one FILE block per
+ * proposed page, with object-form `sources` carrying file + range.
+ *
+ * Notable changes vs. the pre-Stage-3 prompt:
+ *   - All output paths must live under `db/`. The schema is the
+ *     authoritative tree; the prompt no longer asks for `wiki/sources/`,
+ *     `wiki/entities/`, `wiki/concepts/`, `wiki/index.md`, or `wiki/overview.md`.
+ *   - Frontmatter `sources` is the multi-line object form documented in
+ *     `schema/game-dev-example.md` §4 — `file:` + `range:` per entry.
+ *     This is what `parseSourceRefs` reads and what the modification
+ *     flow (Stage 4) needs to detect "same raw range, different content".
+ *   - REVIEW blocks are kept (sweep/lint flows still consume them) but
+ *     the stage-3 prompt expects them to be rare — most decisions belong
+ *     in Stage 4's modification queue, not in stage-2 review items.
  */
-export function buildGenerationPrompt(schema: string, purpose: string, index: string, sourceFileName: string, overview?: string, sourceContent: string = ""): string {
-  // Use original filename (without extension) as the source summary page name
-  const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, "")
-
+export function buildGenerationPrompt(
+  schema: string,
+  purpose: string,
+  dbIndex: string,
+  sourceFileName: string,
+  sourceContent: string = "",
+): string {
   return [
-    "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
+    "You are a wiki maintainer. The Stage 1 analysis has proposed a set of",
+    "pages under `db/` that this raw file decomposes into. Now emit one",
+    "FILE block per proposed page, with the actual page content.",
     "",
     languageRule(sourceContent),
     "",
-    `## IMPORTANT: Source File`,
-    `The original source file is: **${sourceFileName}**`,
-    `All wiki pages generated from this source MUST include this filename in their frontmatter \`sources\` field.`,
+    `## Source file`,
+    `The original raw file is **${sourceFileName}**. Every FILE block you`,
+    `emit MUST list this file in its frontmatter \`sources\` array, with a`,
+    `\`range:\` value that points back to the specific section / sheet /`,
+    `timestamp the page was derived from.`,
     "",
-    "## What to generate",
+    "## Path rules",
     "",
-    `1. A source summary page at **wiki/sources/${sourceBaseName}.md** (MUST use this exact path)`,
-    "2. Entity pages in wiki/entities/ for key entities identified in the analysis",
-    "3. Concept pages in wiki/concepts/ for key concepts identified in the analysis",
-    "4. An updated wiki/index.md — add new entries to existing categories, preserve all existing entries",
-    "5. A log entry for wiki/log.md (just the new entry to append, format: ## [YYYY-MM-DD] ingest | Title)",
-    "6. An updated wiki/overview.md — a high-level summary of what the entire wiki covers, updated to reflect the newly ingested source. This should be a comprehensive 2-5 paragraph overview of ALL topics in the wiki, not just the new source.",
+    "- Every FILE path MUST start with `db/` and follow the schema's tree.",
+    "- Resolve any placeholder slots in the schema (e.g. `{dungeon_id}`)",
+    "  with concrete identifiers from the source content.",
+    "- Use the same path the Stage 1 analysis proposed unless you have a",
+    "  concrete reason to change it (and if you do, change it consistently).",
     "",
-    "## Frontmatter Rules (CRITICAL)",
+    "## Frontmatter shape (every page)",
     "",
-    "Every page MUST have YAML frontmatter with these fields:",
     "```yaml",
     "---",
-    "type: source | entity | concept | comparison | query | synthesis",
-    "title: Human-readable title",
-    "created: YYYY-MM-DD",
-    "updated: YYYY-MM-DD",
-    "tags: []",
-    "related: []",
-    `sources: [\"${sourceFileName}\"]  # MUST contain the original source filename`,
+    "title: <human-readable title>",
+    "status: draft",
+    "sources:",
+    `  - file: ${sourceFileName}`,
+    "    range: <heading path | sheet!range | timestamp | url+anchor>",
     "---",
     "```",
     "",
-    `The \`sources\` field MUST always contain "${sourceFileName}" — this links the wiki page back to the original uploaded document.`,
+    "Notes on `sources`:",
+    "- It MUST be the multi-line object form above (NOT `sources: [\"file.md\"]`).",
+    "- One entry per source. If multiple raw ranges contributed to the same",
+    "  page, list each range as its own entry — same `file`, different `range`.",
+    "- `range` is human-readable; pick the shortest unambiguous pointer.",
+    "  For markdown sources, the heading path (`## 3. 던전 A — 보상`) is best.",
     "",
-    "Other rules:",
-    "- Use [[wikilink]] syntax for cross-references between pages",
-    "- Use kebab-case filenames",
-    "- Follow the analysis recommendations on what to emphasize",
-    "- If the analysis found connections to existing pages, add cross-references",
+    "Other content rules:",
+    "- Use `[[wikilink]]` for cross-references to other db/ pages.",
+    "- Do NOT generate index, overview, or log pages — those aren't part of",
+    "  the Stage 3 pipeline.",
+    "- Do NOT invent content that isn't in the source. If a section is too",
+    "  thin to be a useful page, skip it.",
     "",
-    "## Review block types",
+    "## Review blocks (optional, rare)",
     "",
-    "After all FILE blocks, optionally emit REVIEW blocks for anything that needs human judgment:",
+    "After all FILE blocks, you MAY emit REVIEW blocks for things that",
+    "genuinely need human judgment in this ingest run — e.g. a missing-page",
+    "the source assumes exists, or a suggestion for follow-up research.",
+    "Don't use REVIEW for routine decomposition decisions; that's what",
+    "Stage 4's modification flow is for.",
     "",
-    "- contradiction: the analysis found conflicts with existing wiki content",
-    "- duplicate: an entity/concept might already exist under a different name in the index",
-    "- missing-page: an important concept is referenced but has no dedicated page",
-    "- suggestion: ideas for further research, related sources to look for, or connections worth exploring",
-    "",
-    "Only create reviews for things that genuinely need human input. Don't create trivial reviews.",
-    "",
-    "## OPTIONS allowed values (only these predefined labels):",
-    "",
-    "- contradiction: OPTIONS: Create Page | Skip",
-    "- duplicate: OPTIONS: Create Page | Skip",
-    "- missing-page: OPTIONS: Create Page | Skip",
-    "- suggestion: OPTIONS: Create Page | Skip",
-    "",
-    "The user also has a 'Deep Research' button (auto-added by the system) that triggers web search.",
-    "Do NOT invent custom option labels. Only use 'Create Page' and 'Skip'.",
-    "",
-    "For suggestion and missing-page reviews, the SEARCH field must contain 2-3 web search queries",
-    "(keyword-rich, specific, suitable for a search engine — NOT titles or sentences). Example:",
-    "  SEARCH: automated technical debt detection AI generated code | software quality metrics LLM code generation | static analysis tools agentic software development",
+    "Allowed REVIEW types: `missing-page`, `suggestion`.",
+    "Allowed OPTIONS values: `Create Page | Skip` (do not invent others).",
     "",
     purpose ? `## Wiki Purpose\n${purpose}` : "",
-    schema ? `## Wiki Schema\n${schema}` : "",
-    index ? `## Current Wiki Index (preserve all existing entries, add new ones)\n${index}` : "",
-    overview ? `## Current Overview (update this to reflect the new source)\n${overview}` : "",
+    "",
+    schema ? `## Schema (authoritative path map)\n\n${schema}` : "",
+    "",
+    dbIndex ? `## Current db/ index (preserve existing — emit FILE blocks for them only when this source legitimately contributes)\n\n${dbIndex}` : "",
     "",
     // ── OUTPUT FORMAT MUST BE THE LAST SECTION — models weight recent instructions highest ──
     "## Output Format (MUST FOLLOW EXACTLY — this is how the parser reads your response)",
@@ -807,7 +990,7 @@ export function buildGenerationPrompt(schema: string, purpose: string, index: st
     "",
     "FILE block template:",
     "```",
-    "---FILE: wiki/path/to/page.md---",
+    "---FILE: db/path/to/page.md---",
     "(complete file content with YAML frontmatter)",
     "---END FILE---",
     "```",
@@ -817,8 +1000,7 @@ export function buildGenerationPrompt(schema: string, purpose: string, index: st
     "---REVIEW: type | Title---",
     "Description of what needs the user's attention.",
     "OPTIONS: Create Page | Skip",
-    "PAGES: wiki/page1.md, wiki/page2.md",
-    "SEARCH: query 1 | query 2 | query 3",
+    "PAGES: db/page1.md, db/page2.md",
     "---END REVIEW---",
     "```",
     "",
@@ -830,7 +1012,7 @@ export function buildGenerationPrompt(schema: string, purpose: string, index: st
     "4. DO NOT output markdown tables, bullet lists, or headings outside of FILE/REVIEW blocks.",
     "5. DO NOT output any trailing commentary after the last `---END FILE---` or `---END REVIEW---`.",
     "6. Between blocks, use only blank lines — no prose.",
-    "7. EVERY FILE block's content (titles, body, descriptions) MUST be in the mandatory output language specified below. No exceptions — not even for page names or section headings.",
+    "7. EVERY FILE block's content (titles, body, descriptions) MUST be in the mandatory output language specified below.",
     "",
     "If you start with anything other than `---FILE:`, the entire response will be discarded.",
     "",

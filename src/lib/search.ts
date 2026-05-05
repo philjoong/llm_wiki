@@ -1,6 +1,6 @@
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
-import { normalizePath, getFileStem } from "@/lib/path-utils"
+import { normalizePath, getFileStem, getFileName } from "@/lib/path-utils"
 
 export interface SearchResult {
   path: string
@@ -293,6 +293,46 @@ export async function searchWiki(
   console.log(
     `[Search] query="${query}" | RRF fused: ${tokenHits} token + ${vectorCount} vector → ${results.length} unique`,
   )
+
+  return results.slice(0, MAX_RESULTS)
+}
+
+/**
+ * Search a fixed list of file paths.
+ *
+ * Stage 11 entry point for the exclusion-aware pipeline: caller has
+ * already pruned the candidate space (db/ tree minus excluded patterns)
+ * and passes the absolute paths it wants scored. Token-only — db/ has no
+ * vector index yet, and Stage 11 is explicitly out-of-scope for the
+ * search algorithm itself.
+ */
+export async function searchPaths(
+  projectPath: string,
+  query: string,
+  absolutePaths: readonly string[],
+): Promise<SearchResult[]> {
+  if (!query.trim()) return []
+  if (absolutePaths.length === 0) return []
+  // projectPath kept for parity with searchWiki and for future RRF/vector
+  // hookup; the helper currently doesn't need it.
+  void projectPath
+
+  const tokens = tokenizeQuery(query)
+  const effectiveTokens = tokens.length > 0 ? tokens : [query.trim().toLowerCase()]
+
+  const files: FileNode[] = absolutePaths.map((p) => ({
+    name: getFileName(p),
+    path: normalizePath(p),
+    is_dir: false,
+  }))
+
+  const results: SearchResult[] = []
+  await searchFiles(files, effectiveTokens, query, results)
+
+  results.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return a.path.localeCompare(b.path)
+  })
 
   return results.slice(0, MAX_RESULTS)
 }

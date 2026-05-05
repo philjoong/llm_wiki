@@ -1,10 +1,11 @@
-import { useCallback } from "react"
+import { useCallback, useState } from "react"
 import { queueResearch } from "@/lib/deep-research"
 import {
   AlertTriangle,
   Copy,
   FileQuestion,
   CheckCircle2,
+  GitMerge,
   Lightbulb,
   MessageSquare,
   X,
@@ -16,6 +17,13 @@ import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { writeFile, readFile, listDirectory, deleteFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
+import {
+  approveModification,
+  discardModification,
+  pendingModification,
+  counterexampleModification,
+} from "@/lib/modification-resolve"
+import { PendingView } from "@/components/review/pending-view"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
   contradiction: { icon: AlertTriangle, label: "Contradiction", color: "text-amber-500" },
@@ -23,18 +31,83 @@ const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label
   "missing-page": { icon: FileQuestion, label: "Missing Page", color: "text-purple-500" },
   confirm: { icon: MessageSquare, label: "Needs Confirmation", color: "text-foreground" },
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
+  modification: { icon: GitMerge, label: "Modification", color: "text-orange-500" },
 }
 
 export function ReviewView() {
   const items = useReviewStore((s) => s.items)
   const resolveItem = useReviewStore((s) => s.resolveItem)
+  const transitionToRejectionHandling = useReviewStore((s) => s.transitionToRejectionHandling)
   const dismissItem = useReviewStore((s) => s.dismissItem)
   const clearResolved = useReviewStore((s) => s.clearResolved)
   const project = useWikiStore((s) => s.project)
   const setFileTree = useWikiStore((s) => s.setFileTree)
+  const [tab, setTab] = useState<"reviews" | "pending">("reviews")
 
   const handleResolve = useCallback(async (id: string, action: string) => {
     const pp = project ? normalizePath(project.path) : ""
+
+    // Stage 4 — modification flow. Hand off to the dedicated resolver
+    // module (file moves + git commits) and refresh the file tree so
+    // the sidebar reflects the new state of pending/_proposals/...
+    const item = items.find((i) => i.id === id)
+    if (item?.type === "modification" && project) {
+      const proposal = item.proposal
+      if (!proposal) {
+        resolveItem(id, action)
+        return
+      }
+      try {
+        if (action === "modification:approve") {
+          await approveModification(pp, proposal)
+          resolveItem(id, "Approved")
+        } else if (action === "modification:merge") {
+          // Open the parked draft in the editor for hand-edit. The user
+          // edits, saves, then re-clicks Approve from the same card —
+          // the merge action itself doesn't move files or commit.
+          const draftAbs = `${pp}/${proposal.incomingDraftPath}`
+          try {
+            const content = await readFile(draftAbs)
+            useWikiStore.getState().setSelectedFile(draftAbs)
+            useWikiStore.getState().setFileContent(content)
+            useWikiStore.getState().setActiveView("wiki")
+          } catch {
+            // proposal file disappeared — fall through to no-op
+          }
+          return
+        } else if (action === "modification:reject") {
+          // Stage 1 → Stage 2 of the decision tree. No file effect.
+          transitionToRejectionHandling(id)
+          return
+        } else if (action === "modification:discard") {
+          await discardModification(pp, proposal)
+          resolveItem(id, "Discarded")
+        } else if (action === "modification:pending") {
+          await pendingModification(pp, proposal)
+          resolveItem(id, "Sent to pending")
+        } else if (action === "modification:counterexample") {
+          await counterexampleModification(pp, proposal)
+          resolveItem(id, "Saved as counterexample")
+        } else {
+          resolveItem(id, action)
+        }
+
+        // Refresh file tree so pending/_proposals removal & new
+        // pending/counterexamples files surface in the sidebar.
+        try {
+          const tree = await listDirectory(pp)
+          setFileTree(tree)
+          useWikiStore.getState().bumpDataVersion()
+        } catch {
+          // ignore
+        }
+      } catch (err) {
+        console.error("[review] modification action failed:", err)
+        resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return
+    }
+
     // Deep Research — must be checked FIRST before any fuzzy matching
     if (action === "__deep_research__" && project) {
       const searchConfig = useWikiStore.getState().searchApiConfig
@@ -219,7 +292,7 @@ export function ReviewView() {
     } else {
       resolveItem(id, action)
     }
-  }, [project, items, resolveItem, setFileTree])
+  }, [project, items, resolveItem, transitionToRejectionHandling, setFileTree])
 
   const pending = items.filter((i) => !i.resolved)
   const resolved = items.filter((i) => i.resolved)
@@ -227,15 +300,36 @@ export function ReviewView() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">
-          Review
-          {pending.length > 0 && (
-            <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
-              {pending.length}
-            </span>
-          )}
-        </h2>
-        {resolved.length > 0 && (
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setTab("reviews")}
+            className={`rounded-md px-2 py-1 text-sm font-semibold transition-colors ${
+              tab === "reviews"
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50"
+            }`}
+          >
+            Review
+            {pending.length > 0 && (
+              <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground">
+                {pending.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("pending")}
+            className={`rounded-md px-2 py-1 text-sm font-semibold transition-colors ${
+              tab === "pending"
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50"
+            }`}
+          >
+            Pending
+          </button>
+        </div>
+        {tab === "reviews" && resolved.length > 0 && (
           <Button variant="ghost" size="sm" onClick={clearResolved} className="text-xs">
             <Trash2 className="mr-1 h-3 w-3" />
             Clear resolved
@@ -243,38 +337,42 @@ export function ReviewView() {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
-            <CheckCircle2 className="h-8 w-8 text-muted-foreground/30" />
-            <p>All clear — nothing to review</p>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2 p-3">
-            {pending.map((item) => (
-              <ReviewCard
-                key={item.id}
-                item={item}
-                onResolve={handleResolve}
-                onDismiss={dismissItem}
-              />
-            ))}
-            {resolved.length > 0 && pending.length > 0 && (
-              <div className="my-2 text-center text-xs text-muted-foreground">
-                — Resolved —
-              </div>
-            )}
-            {resolved.map((item) => (
-              <ReviewCard
-                key={item.id}
-                item={item}
-                onResolve={handleResolve}
-                onDismiss={dismissItem}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      {tab === "pending" ? (
+        <PendingView />
+      ) : (
+        <div className="flex-1 overflow-y-auto">
+          {items.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
+              <CheckCircle2 className="h-8 w-8 text-muted-foreground/30" />
+              <p>All clear — nothing to review</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 p-3">
+              {pending.map((item) => (
+                <ReviewCard
+                  key={item.id}
+                  item={item}
+                  onResolve={handleResolve}
+                  onDismiss={dismissItem}
+                />
+              ))}
+              {resolved.length > 0 && pending.length > 0 && (
+                <div className="my-2 text-center text-xs text-muted-foreground">
+                  — Resolved —
+                </div>
+              )}
+              {resolved.map((item) => (
+                <ReviewCard
+                  key={item.id}
+                  item={item}
+                  onResolve={handleResolve}
+                  onDismiss={dismissItem}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -318,29 +416,39 @@ function ReviewCard({
         </div>
       )}
 
+      {item.type === "modification" && item.proposal && (
+        <ModificationDiff proposal={item.proposal} />
+      )}
+
       {!item.resolved ? (
         <div className="flex flex-wrap gap-1.5">
-          {(item.type === "suggestion" || item.type === "missing-page") && (
-            <Button
-              variant="default"
-              size="sm"
-              className="h-7 text-xs gap-1"
-              onClick={() => onResolve(item.id, "__deep_research__")}
-            >
-              🔍 Deep Research
-            </Button>
+          {item.type === "modification" ? (
+            <ModificationActions item={item} onResolve={onResolve} />
+          ) : (
+            <>
+              {(item.type === "suggestion" || item.type === "missing-page") && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="h-7 text-xs gap-1"
+                  onClick={() => onResolve(item.id, "__deep_research__")}
+                >
+                  🔍 Deep Research
+                </Button>
+              )}
+              {item.options.map((opt) => (
+                <Button
+                  key={opt.action}
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => onResolve(item.id, opt.action)}
+                >
+                  {opt.label}
+                </Button>
+              ))}
+            </>
           )}
-          {item.options.map((opt) => (
-            <Button
-              key={opt.action}
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => onResolve(item.id, opt.action)}
-            >
-              {opt.label}
-            </Button>
-          ))}
         </div>
       ) : (
         <div className="flex items-center gap-1 text-xs text-emerald-600">
@@ -349,6 +457,111 @@ function ReviewCard({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Two-pane diff for a Stage 4 modification proposal. Shows the existing
+ * page on the left and the parked draft on the right. Truncated to keep
+ * the card sane; the full content lives in `pending/_proposals/...`.
+ */
+function ModificationDiff({
+  proposal,
+}: {
+  proposal: NonNullable<ReviewItem["proposal"]>
+}) {
+  const truncate = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "\n…" : s)
+  return (
+    <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
+      <div className="rounded border bg-muted/30 p-2">
+        <div className="mb-1 font-semibold text-muted-foreground">기존 (existing)</div>
+        <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug">
+          {truncate(proposal.existingExcerpt)}
+        </pre>
+      </div>
+      <div className="rounded border border-orange-300 bg-orange-50 p-2 dark:bg-orange-950/30">
+        <div className="mb-1 font-semibold text-orange-600">신규 (incoming)</div>
+        <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug">
+          {truncate(proposal.incomingExcerpt)}
+        </pre>
+      </div>
+      <div className="col-span-2 text-[10px] text-muted-foreground">
+        Draft: <code>{proposal.incomingDraftPath}</code>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Stage-aware buttons for a modification card. Primary stage exposes
+ * Approve / Merge / Reject; clicking Reject flips the same card to the
+ * rejection-handling stage which shows Discard / Pending / Counterexample.
+ */
+function ModificationActions({
+  item,
+  onResolve,
+}: {
+  item: ReviewItem
+  onResolve: (id: string, action: string) => void
+}) {
+  const stage = item.stage ?? "primary"
+  if (stage === "primary") {
+    return (
+      <>
+        <Button
+          variant="default"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => onResolve(item.id, "modification:approve")}
+        >
+          Approve
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => onResolve(item.id, "modification:merge")}
+        >
+          Merge
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => onResolve(item.id, "modification:reject")}
+        >
+          Reject
+        </Button>
+      </>
+    )
+  }
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => onResolve(item.id, "modification:discard")}
+      >
+        Discard
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => onResolve(item.id, "modification:pending")}
+      >
+        Pending
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => onResolve(item.id, "modification:counterexample")}
+      >
+        Counterexample
+      </Button>
+    </>
   )
 }
 

@@ -1,9 +1,9 @@
 /**
  * Structural parity check for the translation bundles.
  *
- * If en.json grows a key that zh.json doesn't have (or vice-versa),
+ * If en.json grows a key that another bundle doesn't have (or vice-versa),
  * the app either falls back to the raw key at runtime (ugly) or
- * silently shows the English string to Chinese users. Both are
+ * silently shows the English string to non-English users. Both are
  * regressions we want to catch at test time.
  *
  * This test is deliberately string-based rather than going through
@@ -13,6 +13,7 @@
 import { describe, it, expect } from "vitest"
 import en from "./en.json"
 import zh from "./zh.json"
+import ko from "./ko.json"
 
 /** Flattens a nested translation object to "a.b.c" dot-path keys. */
 function flattenKeys(obj: unknown, prefix = ""): string[] {
@@ -29,9 +30,10 @@ function flattenKeys(obj: unknown, prefix = ""): string[] {
   return out
 }
 
-describe("i18n bundle parity (en.json ↔ zh.json)", () => {
+describe("i18n bundle parity (en.json ↔ zh.json ↔ ko.json)", () => {
   const enKeys = new Set(flattenKeys(en))
   const zhKeys = new Set(flattenKeys(zh))
+  const koKeys = new Set(flattenKeys(ko))
 
   it("every en.json key is also in zh.json", () => {
     const missing = [...enKeys].filter((k) => !zhKeys.has(k)).sort()
@@ -46,6 +48,22 @@ describe("i18n bundle parity (en.json ↔ zh.json)", () => {
     expect(
       orphaned,
       `Keys in zh.json but missing from en.json — either add English translations or remove the stale zh-only keys:\n  ${orphaned.join("\n  ")}`,
+    ).toEqual([])
+  })
+
+  it("every en.json key is also in ko.json", () => {
+    const missing = [...enKeys].filter((k) => !koKeys.has(k)).sort()
+    expect(
+      missing,
+      `Keys in en.json but missing from ko.json — add Korean translations for:\n  ${missing.join("\n  ")}`,
+    ).toEqual([])
+  })
+
+  it("every ko.json key is also in en.json (no orphaned ko-only strings)", () => {
+    const orphaned = [...koKeys].filter((k) => !enKeys.has(k)).sort()
+    expect(
+      orphaned,
+      `Keys in ko.json but missing from en.json — either add English translations or remove the stale ko-only keys:\n  ${orphaned.join("\n  ")}`,
     ).toEqual([])
   })
 
@@ -64,6 +82,7 @@ describe("i18n bundle parity (en.json ↔ zh.json)", () => {
     }
     check(en, "en.json")
     check(zh, "zh.json")
+    check(ko, "ko.json")
   })
 
   it("pluralization keys come in pairs: every foo_plural has a matching foo", () => {
@@ -83,5 +102,6 @@ describe("i18n bundle parity (en.json ↔ zh.json)", () => {
     }
     check(en, "en.json")
     check(zh, "zh.json")
+    check(ko, "ko.json")
   })
 })

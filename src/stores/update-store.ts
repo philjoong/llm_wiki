@@ -23,11 +23,14 @@ export interface UpdateStoreState {
   dismissedVersion: string | null
   /** User preference: run the automatic check on app startup. */
   enabled: boolean
+  /** GitHub repo (`owner/repo`) the user wants to monitor. Empty = unset. */
+  repo: string
 
   setChecking: (b: boolean) => void
   setResult: (result: UpdateStatus, at: number) => void
   setDismissed: (version: string | null) => void
   setEnabled: (b: boolean) => void
+  setRepo: (repo: string) => void
   hydrate: (partial: Partial<UpdateStoreState>) => void
 }
 
@@ -37,12 +40,14 @@ export const useUpdateStore = create<UpdateStoreState>((set) => ({
   lastCheckedAt: null,
   dismissedVersion: null,
   enabled: true,
+  repo: "",
 
   setChecking: (checking) => set({ checking }),
   setResult: (lastResult, lastCheckedAt) =>
     set({ lastResult, lastCheckedAt, checking: false }),
   setDismissed: (dismissedVersion) => set({ dismissedVersion }),
   setEnabled: (enabled) => set({ enabled }),
+  setRepo: (repo) => set({ repo }),
   hydrate: (partial) => set(partial),
 }))
 

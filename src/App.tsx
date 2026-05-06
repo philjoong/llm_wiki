@@ -51,6 +51,9 @@ function App() {
 
         const state = useUpdateStore.getState()
         if (!state.enabled) return
+        // No repo configured yet — skip silently. The Settings → About
+        // card lets the user enter one to enable update checks.
+        if (!state.repo) return
 
         const now = Date.now()
         const fresh =
@@ -61,7 +64,7 @@ function App() {
         useUpdateStore.getState().setChecking(true)
         const result = await checkForUpdates({
           currentVersion: __APP_VERSION__,
-          repo: "nashsu/llm_wiki",
+          repo: state.repo,
         })
         if (cancelled) return
         useUpdateStore.getState().setResult(result, Date.now())
@@ -69,6 +72,7 @@ function App() {
           enabled: useUpdateStore.getState().enabled,
           lastCheckedAt: Date.now(),
           dismissedVersion: useUpdateStore.getState().dismissedVersion,
+          repo: useUpdateStore.getState().repo,
         })
       } catch {
         // Silent — Settings → About lets the user retry manually.

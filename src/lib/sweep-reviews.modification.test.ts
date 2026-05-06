@@ -35,7 +35,7 @@ const mockReadFile = vi.mocked(readFile)
 function fileNode(name: string): FileNode {
   return {
     name,
-    path: `/proj/wiki/${name}`,
+    path: `/proj/db/${name}`,
     is_dir: false,
     children: [],
   } as FileNode

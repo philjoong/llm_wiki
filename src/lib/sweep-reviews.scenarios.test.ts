@@ -89,7 +89,6 @@ async function setupScenario(scenario: SweepScenario): Promise<RunContext> {
       title: r.title,
       description: r.description ?? "",
       affectedPages: r.affectedPages,
-      searchQueries: r.searchQueries,
       sourcePath: r.sourcePath,
       options: [],
       resolved: false,

@@ -109,7 +109,7 @@ beforeEach(async () => {
 
 describe("ingest-queue — enqueue & basic processing", () => {
   it("enqueueIngest adds a pending task and triggers processing", async () => {
-    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockAutoIngest.mockResolvedValue(["db/sources/foo.md"])
 
     const id = await enqueueIngest(TEST_ID, "raw/sources/a.md")
     expect(id).toMatch(/^ingest-/)
@@ -135,7 +135,7 @@ describe("ingest-queue — enqueue & basic processing", () => {
   })
 
   it("enqueueBatch queues multiple tasks and processes them serially", async () => {
-    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockAutoIngest.mockResolvedValue(["db/sources/foo.md"])
 
     await enqueueBatch(TEST_ID, [
       { sourcePath: "a.md", folderContext: "" },
@@ -169,7 +169,7 @@ describe("ingest-queue — retry & failure", () => {
     mockAutoIngest
       .mockRejectedValueOnce(new Error("transient"))
       .mockRejectedValueOnce(new Error("transient"))
-      .mockResolvedValueOnce(["wiki/sources/foo.md"])
+      .mockResolvedValueOnce(["db/sources/foo.md"])
 
     await enqueueIngest(TEST_ID, "flaky.md")
     await flushMicrotasks(30)
@@ -206,7 +206,7 @@ describe("ingest-queue — retry & failure", () => {
     expect(getQueue()[0].status).toBe("failed")
 
     const taskId = getQueue()[0].id
-    mockAutoIngest.mockResolvedValueOnce(["wiki/sources/foo.md"])
+    mockAutoIngest.mockResolvedValueOnce(["db/sources/foo.md"])
     await retryTask(taskId)
     await flushMicrotasks(10)
 
@@ -300,7 +300,7 @@ describe("ingest-queue — clearCompletedTasks & summary", () => {
 
 describe("ingest-queue — queue-drain triggers review sweep", () => {
   it("calls sweepResolvedReviews once after a successful task drains the queue", async () => {
-    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockAutoIngest.mockResolvedValue(["db/sources/foo.md"])
 
     await enqueueIngest(TEST_ID, "ok.md")
     await flushMicrotasks(30)
@@ -312,7 +312,7 @@ describe("ingest-queue — queue-drain triggers review sweep", () => {
   it("does NOT trigger sweep when no task has been processed since the last drain", async () => {
     // No tasks enqueued — processedSinceDrain flag stays false
     // (We simulate an idle condition by enqueueing, processing, draining once)
-    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockAutoIngest.mockResolvedValue(["db/sources/foo.md"])
     await enqueueIngest(TEST_ID, "a.md")
     await flushMicrotasks(20)
     expect(mockSweep).toHaveBeenCalledTimes(1)
@@ -351,7 +351,7 @@ describe("ingest-queue — clearQueueState", () => {
   })
 
   it("processedSinceDrain flag resets so a post-switch no-op won't trigger sweep", async () => {
-    mockAutoIngest.mockResolvedValue(["wiki/sources/foo.md"])
+    mockAutoIngest.mockResolvedValue(["db/sources/foo.md"])
     await enqueueIngest(TEST_ID, "x.md")
     await flushMicrotasks(20)
     mockSweep.mockClear()
@@ -513,7 +513,7 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
     await restoreQueue(TEST_ID_B, TEST_PATH_B)
 
     // Now the orphaned autoIngest for TEST_ID returns late.
-    resolveAutoIngest(["wiki/sources/foo.md"])
+    resolveAutoIngest(["db/sources/foo.md"])
     await flushMicrotasks(10)
 
     // The orphan must not have written to the ACTIVE (B) project's file.
@@ -543,14 +543,14 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     mockDeleteFile.mockResolvedValue(undefined)
 
     await cleanupWrittenFiles("/proj", [
-      "wiki/concepts/rope.md",
-      "wiki/entities/transformer.md",
+      "db/concepts/rope.md",
+      "db/entities/transformer.md",
     ])
 
     // File deletes use joined absolute paths.
     expect(mockDeleteFile).toHaveBeenCalledTimes(2)
-    expect(mockDeleteFile).toHaveBeenNthCalledWith(1, "/proj/wiki/concepts/rope.md")
-    expect(mockDeleteFile).toHaveBeenNthCalledWith(2, "/proj/wiki/entities/transformer.md")
+    expect(mockDeleteFile).toHaveBeenNthCalledWith(1, "/proj/db/concepts/rope.md")
+    expect(mockDeleteFile).toHaveBeenNthCalledWith(2, "/proj/db/entities/transformer.md")
 
     // Embedding cascade uses page slugs (basename minus .md).
     expect(removePageEmbeddingMock).toHaveBeenCalledTimes(2)
@@ -564,9 +564,9 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     mockDeleteFile.mockReset()
     mockDeleteFile.mockResolvedValue(undefined)
 
-    await cleanupWrittenFiles("/proj", ["/abs/elsewhere/wiki/concepts/foo.md"])
+    await cleanupWrittenFiles("/proj", ["/abs/elsewhere/db/concepts/foo.md"])
 
-    expect(mockDeleteFile).toHaveBeenCalledWith("/abs/elsewhere/wiki/concepts/foo.md")
+    expect(mockDeleteFile).toHaveBeenCalledWith("/abs/elsewhere/db/concepts/foo.md")
     // Slug derivation still works on absolute paths.
     expect(removePageEmbeddingMock).toHaveBeenCalledWith("/proj", "foo")
   })
@@ -581,8 +581,8 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
       .mockResolvedValueOnce(undefined)
 
     await cleanupWrittenFiles("/proj", [
-      "wiki/concepts/missing.md",
-      "wiki/concepts/present.md",
+      "db/concepts/missing.md",
+      "db/concepts/present.md",
     ])
 
     // Both deleteFile attempts happened — the helper kept going.
@@ -605,8 +605,8 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
       .mockResolvedValueOnce(undefined)
 
     await cleanupWrittenFiles("/proj", [
-      "wiki/concepts/a.md",
-      "wiki/concepts/b.md",
+      "db/concepts/a.md",
+      "db/concepts/b.md",
     ])
 
     // Both file deletes still happened.

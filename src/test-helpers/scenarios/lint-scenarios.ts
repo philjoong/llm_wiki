@@ -17,12 +17,12 @@ export const lintScenarios: LintScenario[] = [
       "Two content pages cross-link each other. No orphans, no broken " +
       "links, no no-outlinks. Structural lint returns an empty result.",
     initialWiki: {
-      "wiki/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
-      "wiki/attention.md": page(
+      "db/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
+      "db/attention.md": page(
         "Attention",
         "See the [[transformer]] architecture for how this is applied.",
       ),
-      "wiki/transformer.md": page(
+      "db/transformer.md": page(
         "Transformer",
         "Transformers are built on the [[attention]] mechanism.",
       ),
@@ -39,10 +39,10 @@ export const lintScenarios: LintScenario[] = [
       "orphan.md links out to attention.md but no content page links BACK " +
       "to orphan.md. Structural lint should flag it as orphan, nothing else.",
     initialWiki: {
-      "wiki/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
-      "wiki/attention.md": page("Attention", "Related: [[transformer]]."),
-      "wiki/transformer.md": page("Transformer", "Built on [[attention]]."),
-      "wiki/orphan.md": page(
+      "db/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
+      "db/attention.md": page("Attention", "Related: [[transformer]]."),
+      "db/transformer.md": page("Transformer", "Built on [[attention]]."),
+      "db/orphan.md": page(
         "Orphan",
         "This page links to [[attention]] but nobody links back here.",
       ),
@@ -60,12 +60,12 @@ export const lintScenarios: LintScenario[] = [
       "no corresponding file. Structural lint must flag the broken link " +
       "and name it in the detail.",
     initialWiki: {
-      "wiki/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
-      "wiki/attention.md": page(
+      "db/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
+      "db/attention.md": page(
         "Attention",
         "Related to [[transformer]] and also to [[nonexistent-page]].",
       ),
-      "wiki/transformer.md": page("Transformer", "Built on [[attention]]."),
+      "db/transformer.md": page("Transformer", "Built on [[attention]]."),
     },
     expected: {
       structural: [
@@ -85,13 +85,13 @@ export const lintScenarios: LintScenario[] = [
       "leaf.md is linked-to by transformer.md but has no outgoing links " +
       "of its own. Lint should flag 'no-outlinks' on leaf.md.",
     initialWiki: {
-      "wiki/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n- [[leaf]]\n",
-      "wiki/attention.md": page("Attention", "Related: [[transformer]]."),
-      "wiki/transformer.md": page(
+      "db/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n- [[leaf]]\n",
+      "db/attention.md": page("Attention", "Related: [[transformer]]."),
+      "db/transformer.md": page(
         "Transformer",
         "Uses [[attention]] and references [[leaf]] as a concept.",
       ),
-      "wiki/leaf.md": page(
+      "db/leaf.md": page(
         "Leaf",
         "This page describes a leaf concept and makes no external references.",
       ),
@@ -111,12 +111,12 @@ export const lintScenarios: LintScenario[] = [
       "sees no issues, but the mocked semantic LLM response emits a LINT " +
       "block that the parser extracts into a contradiction finding.",
     initialWiki: {
-      "wiki/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
-      "wiki/attention.md": page(
+      "db/index.md": "# Index\n\n- [[attention]]\n- [[transformer]]\n",
+      "db/attention.md": page(
         "Attention",
         "Attention ALWAYS uses the softmax function. See [[transformer]].",
       ),
-      "wiki/transformer.md": page(
+      "db/transformer.md": page(
         "Transformer",
         "The transformer's [[attention]] layer uses a linear kernel, not softmax.",
       ),

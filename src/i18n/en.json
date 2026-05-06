@@ -6,7 +6,6 @@
   "nav": {
     "wiki": "DB",
     "sources": "Raw",
-    "search": "Search",
     "graph": "Graph",
     "lint": "Lint",
     "review": "Modifications",
@@ -65,13 +64,7 @@
     "saved": "Saved!",
     "writeToWiki": "Write to Wiki",
     "emptyHint": "Ask a question or start an ingest to begin.",
-    "sources": "Sources"
-  },
-  "search": {
-    "title": "Search",
-    "placeholder": "Search wiki pages...",
-    "noResults": "No results found",
-    "startSearching": "Type to search wiki pages",
+    "sources": "Sources",
     "trace": {
       "headerWithType": "Judged: {{name}} · removed {{removed}} of {{initial}}",
       "headerNoType": "No type judged · {{initial}} candidates",
@@ -144,7 +137,6 @@
     "categories": {
       "llm": "LLM Models",
       "embedding": "Embeddings",
-      "webSearch": "Web Search",
       "output": "Output",
       "interface": "Interface",
       "about": "About"
@@ -190,15 +182,11 @@
         "dropLegacy": "Drop legacy index",
         "dropLegacyDone": "Legacy index removed."
       },
-      "webSearch": {
-        "title": "Web Search",
-        "description": "Used by Deep Research to pull fresh external context."
-      },
       "output": {
         "title": "Output Preferences",
         "description": "Controls for generated content — language, conversation history length.",
         "aiLanguage": "AI Output Language",
-        "aiLanguageHint": "Force AI-generated content (chat replies, wiki pages, research output, lint reports) to use the selected language. Pick \"Auto\" to let the AI follow the user's input or source document language.",
+        "aiLanguageHint": "Force AI-generated content (chat replies, wiki pages, lint reports) to use the selected language. Pick \"Auto\" to let the AI follow the user's input or source document language.",
         "historyLength": "Conversation History Length",
         "historyHint": "Number of prior messages sent to the AI on each request. More = richer context but more tokens.",
         "historyCurrent": "Currently {{count}} messages (about {{turns}} turns)"

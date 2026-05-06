@@ -328,6 +328,7 @@ fn extract_office_text(path: &str, ext: &str) -> Result<String, String> {
 }
 
 /// Extract DOCX using docx-rs library for proper structural parsing.
+#[allow(irrefutable_let_patterns)]
 fn extract_docx_with_library(path: &str) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|e| format!("Failed to read DOCX '{}': {}", path, e))?;
     let docx = docx_rs::read_docx(&bytes)
@@ -472,6 +473,7 @@ fn decode_xml_entities(text: &str) -> String {
 }
 
 /// Extract DOCX to Markdown preserving headings, paragraphs, lists, tables, bold/italic.
+#[allow(unused_assignments, unused_variables)]
 fn extract_docx_markdown(archive: &mut zip::ZipArchive<fs::File>) -> Result<String, String> {
     let xml = read_zip_file(archive, "word/document.xml")
         .ok_or_else(|| "No document.xml found".to_string())?;
@@ -710,11 +712,11 @@ fn extract_pptx_markdown(archive: &mut zip::ZipArchive<fs::File>) -> Result<Stri
     }
 }
 
-/// Extract XLSX/XLS/ODS to Markdown tables using calamine.
-fn extract_xlsx_markdown(_archive: &mut zip::ZipArchive<fs::File>) -> Result<String, String> {
-    // calamine needs the file path, not the archive
-    Err("Use extract_spreadsheet instead".to_string())
-}
+// /// Extract XLSX/XLS/ODS to Markdown tables using calamine.
+// fn extract_xlsx_markdown(_archive: &mut zip::ZipArchive<fs::File>) -> Result<String, String> {
+//     // calamine needs the file path, not the archive
+//     Err("Use extract_spreadsheet instead".to_string())
+// }
 
 /// Extract spreadsheet to Markdown using calamine (supports xlsx, xls, ods).
 fn extract_spreadsheet(path: &str) -> Result<String, String> {
@@ -996,18 +998,18 @@ pub fn delete_file(path: String) -> Result<(), String> {
     })
 }
 
-/// Find wiki pages that reference a given source file name.
-/// Scans all .md files under wiki/ for the source filename in frontmatter or content.
+/// Find db pages that reference a given source file name.
+/// Scans all .md files under db/ for the source filename in frontmatter or content.
 #[tauri::command]
 pub fn find_related_wiki_pages(project_path: String, source_name: String) -> Result<Vec<String>, String> {
     run_guarded("find_related_wiki_pages", || {
-        let wiki_dir = Path::new(&project_path).join("wiki");
-        if !wiki_dir.is_dir() {
+        let db_dir = Path::new(&project_path).join("db");
+        if !db_dir.is_dir() {
             return Ok(vec![]);
         }
 
         let mut related = Vec::new();
-        collect_related_pages(&wiki_dir, &source_name, &mut related)?;
+        collect_related_pages(&db_dir, &source_name, &mut related)?;
         Ok(related)
     })
 }
@@ -1053,7 +1055,7 @@ fn collect_related_pages(dir: &Path, source_name: &str, results: &mut Vec<String
                 let sources_match = content_lower.contains(&format!("\"{}\"", file_name_lower))
                     || content_lower.contains(&format!("'{}'", file_name_lower));
 
-                // Match 2: source summary page (wiki/sources/{stem}.md)
+                // Match 2: source summary page (db/sources/{stem}.md)
                 // Use Path component iteration to avoid hardcoded separator assumptions
                 let is_in_sources_dir = path
                     .components()

@@ -1,6 +1,7 @@
 import { readFile, listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
-import { normalizePath, getFileStem, getFileName } from "@/lib/path-utils"
+import { normalizePath, getFileName } from "@/lib/path-utils"
+import { pageIdFromRelPath } from "@/lib/embedding"
 
 export interface SearchResult {
   path: string
@@ -175,13 +176,13 @@ export async function searchWiki(
   const effectiveTokens = tokens.length > 0 ? tokens : [query.trim().toLowerCase()]
   const results: SearchResult[] = []
 
-  // Search wiki pages
+  // Search db pages
   try {
-    const wikiTree = await listDirectory(`${pp}/wiki`)
-    const wikiFiles = flattenMdFiles(wikiTree)
-    await searchFiles(wikiFiles, effectiveTokens, query, results)
+    const dbTree = await listDirectory(`${pp}/db`)
+    const dbFiles = flattenMdFiles(dbTree)
+    await searchFiles(dbFiles, effectiveTokens, query, results)
   } catch {
-    // no wiki directory
+    // no db directory
   }
 
   // Also search raw sources (extracted text)
@@ -193,18 +194,42 @@ export async function searchWiki(
     // no raw sources
   }
 
-  // ── Build the token-side ranking (still based on the score field
-  // populated by searchFiles above). Snapshot it BEFORE the vector
-  // step, so adding vector-only pages doesn't shift token ranks.
+  await fuseTokenAndVector(results, pp, query, null)
+
+  return results.slice(0, MAX_RESULTS)
+}
+
+/**
+ * Fuse token-search results with embedding-search results via RRF.
+ *
+ * Mutates `results` in place: replaces each entry's score with the RRF
+ * fused value, materializes vector-only pages, and sorts by score
+ * descending (ties broken alphabetically for determinism).
+ *
+ * `restrictedPaths`:
+ *   - null   → no restriction; vector-only pages are looked up across
+ *              the entire db/ tree. Used by `searchWiki`.
+ *   - Set<string> of normalized absolute paths → only vector results
+ *              whose page_id resolves into the set are considered, and
+ *              vector-only pages outside the set are not materialized.
+ *              Used by `searchPaths` so exclusions remain authoritative
+ *              over the candidate space (a vector hit on an excluded
+ *              page must not slip back in via embedding similarity).
+ */
+async function fuseTokenAndVector(
+  results: SearchResult[],
+  pp: string,
+  query: string,
+  restrictedPaths: ReadonlySet<string> | null,
+): Promise<void> {
+  // Snapshot token ranks BEFORE vector materialization so newly-added
+  // vector-only pages don't shift token ranks under us.
   const tokenSorted = [...results].sort((a, b) => b.score - a.score)
   const tokenRank = new Map<string, number>()
   tokenSorted.forEach((r, i) => {
     tokenRank.set(normalizePath(r.path), i + 1) // 1-indexed
   })
 
-  // ── Vector search: collect ranked list of page-ids and materialize
-  //    pages that token search missed. We do NOT add to results' score
-  //    here — that's done in the RRF step below.
   let vectorRank = new Map<string, number>()
   let vectorCount = 0
   try {
@@ -225,36 +250,59 @@ export async function searchWiki(
           : "")
       )
 
-      // Build vectorRank by page_id (slug); searchByEmbedding returns
-      // results pre-sorted by descending similarity.
-      vectorResults.forEach((vr, i) => vectorRank.set(vr.id, i + 1))
+      // Build the page_id → path lookup. When restrictedPaths is set, we
+      // build it from that set only, so vector hits on out-of-scope pages
+      // (excluded by IDEA.md exclusions, etc.) cannot resolve at all.
+      const idToPath = new Map<string, string>()
+      if (restrictedPaths) {
+        for (const p of restrictedPaths) {
+          idToPath.set(pageIdFromRelPath(p), p)
+        }
+      } else {
+        try {
+          const dbTree = await listDirectory(`${pp}/db`)
+          const dbFiles = flattenMdFiles(dbTree)
+          for (const f of dbFiles) {
+            idToPath.set(pageIdFromRelPath(f.path), f.path)
+          }
+        } catch {
+          // db tree unavailable — vector-only materialization best-effort
+        }
+      }
+
+      // Filter and rank the vector results that resolve into the
+      // allowed set. searchByEmbedding returns results pre-sorted by
+      // descending similarity; preserve order while skipping unresolved.
+      let rank = 0
+      for (const vr of vectorResults) {
+        if (!idToPath.has(vr.id)) continue
+        rank++
+        vectorRank.set(vr.id, rank)
+      }
 
       // Materialize any vector-result page that token search didn't
       // already include — without this, `results` has no entry for
       // them and they can't surface even with a top vector rank.
-      const knownIds = new Set(results.map((r) => getFileStem(r.path)))
+      const knownIds = new Set(results.map((r) => pageIdFromRelPath(r.path)))
       let added = 0
       for (const vr of vectorResults) {
         if (knownIds.has(vr.id)) continue
-        const dirs = ["entities", "concepts", "sources", "synthesis", "comparison", "queries"]
-        for (const dir of dirs) {
-          const tryPath = `${pp}/wiki/${dir}/${vr.id}.md`
-          try {
-            const content = await readFile(tryPath)
-            const title = extractTitle(content, `${vr.id}.md`)
-            results.push({
-              path: tryPath,
-              title,
-              snippet: buildSnippet(content, query),
-              titleMatch: false,
-              score: 0, // overwritten by RRF below
-            })
-            knownIds.add(vr.id)
-            added++
-            break
-          } catch {
-            // not in this directory
-          }
+        const tryPath = idToPath.get(vr.id)
+        if (!tryPath) continue
+        try {
+          const content = await readFile(tryPath)
+          const title = extractTitle(content, getFileName(tryPath))
+          results.push({
+            path: tryPath,
+            title,
+            snippet: buildSnippet(content, query),
+            titleMatch: false,
+            score: 0, // overwritten by RRF below
+          })
+          knownIds.add(vr.id)
+          added++
+        } catch {
+          // unreadable — skip
         }
       }
       if (added > 0) {
@@ -266,24 +314,19 @@ export async function searchWiki(
     vectorRank = new Map()
   }
 
-  // ── RRF fusion: replace each result's score with
+  // RRF fusion: replace each result's score with
   //   1/(K + token_rank) + 1/(K + vector_rank)
-  //
-  // Pages absent from either list contribute 0 from that side.
-  // Pages absent from BOTH never make it here (we only iterate the
-  // results array, which already contains every candidate).
+  // Pages absent from either list contribute 0 from that side; pages
+  // absent from BOTH never make it here.
   for (const r of results) {
     const tRank = tokenRank.get(normalizePath(r.path))
-    const vRank = vectorRank.get(getFileStem(r.path))
+    const vRank = vectorRank.get(pageIdFromRelPath(r.path))
     let rrf = 0
     if (tRank !== undefined) rrf += 1 / (RRF_K + tRank)
     if (vRank !== undefined) rrf += 1 / (RRF_K + vRank)
     r.score = rrf
   }
 
-  // Sort by RRF score descending. Ties (e.g. two pages both at vector
-  // rank 1 but neither in token list) are broken by alphabetical path
-  // order so output is deterministic for tests.
   results.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score
     return a.path.localeCompare(b.path)
@@ -293,18 +336,17 @@ export async function searchWiki(
   console.log(
     `[Search] query="${query}" | RRF fused: ${tokenHits} token + ${vectorCount} vector → ${results.length} unique`,
   )
-
-  return results.slice(0, MAX_RESULTS)
 }
 
 /**
  * Search a fixed list of file paths.
  *
- * Stage 11 entry point for the exclusion-aware pipeline: caller has
- * already pruned the candidate space (db/ tree minus excluded patterns)
- * and passes the absolute paths it wants scored. Token-only — db/ has no
- * vector index yet, and Stage 11 is explicitly out-of-scope for the
- * search algorithm itself.
+ * Entry point for the exclusion-aware pipeline: caller has already
+ * pruned the candidate space (db/ tree minus excluded patterns) and
+ * passes the absolute paths it wants scored. Token + vector hybrid:
+ * vector hits are restricted to the kept set so an excluded page can't
+ * slip back in via embedding similarity (IDEA.md §2.5 — "줄어든 후보
+ * 공간이 검색의 시작 상태").
  */
 export async function searchPaths(
   projectPath: string,
@@ -313,26 +355,25 @@ export async function searchPaths(
 ): Promise<SearchResult[]> {
   if (!query.trim()) return []
   if (absolutePaths.length === 0) return []
-  // projectPath kept for parity with searchWiki and for future RRF/vector
-  // hookup; the helper currently doesn't need it.
-  void projectPath
+
+  const pp = normalizePath(projectPath)
 
   const tokens = tokenizeQuery(query)
   const effectiveTokens = tokens.length > 0 ? tokens : [query.trim().toLowerCase()]
 
-  const files: FileNode[] = absolutePaths.map((p) => ({
+  const normalizedPaths = absolutePaths.map((p) => normalizePath(p))
+  const restrictedSet = new Set<string>(normalizedPaths)
+
+  const files: FileNode[] = normalizedPaths.map((p) => ({
     name: getFileName(p),
-    path: normalizePath(p),
+    path: p,
     is_dir: false,
   }))
 
   const results: SearchResult[] = []
   await searchFiles(files, effectiveTokens, query, results)
 
-  results.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score
-    return a.path.localeCompare(b.path)
-  })
+  await fuseTokenAndVector(results, pp, query, restrictedSet)
 
   return results.slice(0, MAX_RESULTS)
 }

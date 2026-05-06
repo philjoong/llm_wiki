@@ -24,7 +24,6 @@ const reviewInputArb = fc.record({
   description: fc.string({ maxLength: 100 }),
   options: fc.constant([]),
   affectedPages: fc.option(fc.array(fc.string(), { maxLength: 4 })),
-  searchQueries: fc.option(fc.array(fc.string(), { maxLength: 4 })),
 })
 
 function key(type: string, title: string): string {
@@ -44,7 +43,6 @@ describe("review-store addItems — dedupe invariants", () => {
             description: b.description,
             options: [...b.options],
             affectedPages: b.affectedPages ? [...b.affectedPages] : undefined,
-            searchQueries: b.searchQueries ? [...b.searchQueries] : undefined,
           }))
           useReviewStore.getState().addItems(input)
         }

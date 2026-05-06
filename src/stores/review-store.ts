@@ -53,7 +53,6 @@ export interface ReviewItem {
   description: string
   sourcePath?: string
   affectedPages?: string[]
-  searchQueries?: string[]
   options: ReviewOption[]
   resolved: boolean
   resolvedAction?: string
@@ -99,7 +98,7 @@ export const useReviewStore = create<ReviewState>((set) => ({
       // De-dupe against pending items with same type + normalized title (all
       // 5 types — bulk ingest can re-surface the same contradiction/confirm
       // from multiple files).
-      // Merge affectedPages / searchQueries / sourcePath instead of duplicating.
+      // Merge affectedPages / sourcePath instead of duplicating.
       // Modification items skip the dedupe path: each proposal is tied to
       // a distinct parked draft (incomingDraftPath) and merging two of them
       // would silently lose one of the parked files. Two raw ingests that
@@ -134,13 +133,11 @@ export const useReviewStore = create<ReviewState>((set) => ({
           // Merge into existing
           const old = result[existingIdx]
           const mergedPages = Array.from(new Set([...(old.affectedPages ?? []), ...(incoming.affectedPages ?? [])]))
-          const mergedQueries = Array.from(new Set([...(old.searchQueries ?? []), ...(incoming.searchQueries ?? [])]))
           result[existingIdx] = {
             ...old,
             description: incoming.description || old.description, // prefer newer description
             sourcePath: incoming.sourcePath ?? old.sourcePath,
             affectedPages: mergedPages.length > 0 ? mergedPages : undefined,
-            searchQueries: mergedQueries.length > 0 ? mergedQueries : undefined,
           }
         } else {
           const newItem = {

@@ -11,7 +11,6 @@
 import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
-import { useResearchStore } from "@/stores/research-store"
 
 export async function resetProjectState(): Promise<void> {
   // Zustand stores — clear all per-project data (synchronous)
@@ -31,11 +30,6 @@ export async function resetProjectState(): Promise<void> {
 
   useActivityStore.setState({
     items: [],
-  })
-
-  useResearchStore.setState({
-    tasks: [],
-    panelOpen: false,
   })
 
   // Module-level caches — load in parallel and clear each, surfacing any

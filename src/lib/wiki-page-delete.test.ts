@@ -36,10 +36,10 @@ beforeEach(() => {
 
 describe("cascadeDeleteWikiPage", () => {
   it("deletes the file, then drops the matching page's embedding chunks", async () => {
-    await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/rope.md")
+    await cascadeDeleteWikiPage("/proj", "/proj/db/concepts/rope.md")
 
     expect(mockDeleteFile).toHaveBeenCalledTimes(1)
-    expect(mockDeleteFile).toHaveBeenCalledWith("/proj/wiki/concepts/rope.md")
+    expect(mockDeleteFile).toHaveBeenCalledWith("/proj/db/concepts/rope.md")
 
     expect(mockRemovePageEmbedding).toHaveBeenCalledTimes(1)
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "rope")
@@ -60,7 +60,7 @@ describe("cascadeDeleteWikiPage", () => {
       order.push("removePageEmbedding")
     })
 
-    await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/foo.md")
+    await cascadeDeleteWikiPage("/proj", "/proj/db/concepts/foo.md")
     expect(order).toEqual(["deleteFile", "removePageEmbedding"])
   })
 
@@ -70,7 +70,7 @@ describe("cascadeDeleteWikiPage", () => {
     // its searchability while staying on disk.
     mockDeleteFile.mockRejectedValueOnce(new Error("EACCES"))
 
-    await expect(cascadeDeleteWikiPage("/proj", "/proj/wiki/foo.md")).rejects.toThrow("EACCES")
+    await expect(cascadeDeleteWikiPage("/proj", "/proj/db/foo.md")).rejects.toThrow("EACCES")
 
     expect(mockRemovePageEmbedding).not.toHaveBeenCalled()
   })
@@ -82,7 +82,7 @@ describe("cascadeDeleteWikiPage", () => {
     // from lint view) might want to surface the error.
     mockRemovePageEmbedding.mockRejectedValueOnce(new Error("lancedb table missing"))
 
-    await expect(cascadeDeleteWikiPage("/proj", "/proj/wiki/foo.md")).rejects.toThrow(
+    await expect(cascadeDeleteWikiPage("/proj", "/proj/db/foo.md")).rejects.toThrow(
       "lancedb table missing",
     )
     // File delete still happened — leaving the cascade half-done
@@ -91,7 +91,7 @@ describe("cascadeDeleteWikiPage", () => {
   })
 
   it("derives slug from the path's basename, ignoring directory segments", async () => {
-    await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/some-deep/nested/page.md")
+    await cascadeDeleteWikiPage("/proj", "/proj/db/concepts/some-deep/nested/page.md")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "page")
   })
 
@@ -99,9 +99,9 @@ describe("cascadeDeleteWikiPage", () => {
     // The desktop ingest pipeline can produce backslash-laden paths
     // before path-utils normalizes them. cascadeDeleteWikiPage's
     // slug derivation MUST cope with both separators in one string.
-    await cascadeDeleteWikiPage("C:/proj", "C:\\proj\\wiki\\entities\\transformer.md")
+    await cascadeDeleteWikiPage("C:/proj", "C:\\proj\\db\\entities\\transformer.md")
 
-    expect(mockDeleteFile).toHaveBeenCalledWith("C:\\proj\\wiki\\entities\\transformer.md")
+    expect(mockDeleteFile).toHaveBeenCalledWith("C:\\proj\\db\\entities\\transformer.md")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith("C:/proj", "transformer")
   })
 
@@ -109,7 +109,7 @@ describe("cascadeDeleteWikiPage", () => {
     // getFileStem strips only the LAST extension, so "foo.bar.md" → "foo.bar".
     // Pin it: a regression that strips ALL dots would turn this slug
     // into "foo" and orphan the LanceDB chunks for "foo.bar".
-    await cascadeDeleteWikiPage("/proj", "/proj/wiki/concepts/foo.bar.md")
+    await cascadeDeleteWikiPage("/proj", "/proj/db/concepts/foo.bar.md")
     expect(mockRemovePageEmbedding).toHaveBeenCalledWith("/proj", "foo.bar")
   })
 

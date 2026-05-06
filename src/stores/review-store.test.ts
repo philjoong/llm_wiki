@@ -128,16 +128,6 @@ describe("review-store addItems dedupe", () => {
     expect(merged.affectedPages).toEqual(["x.md", "y.md", "z.md"])
   })
 
-  it("merges searchQueries without duplicates", () => {
-    useReviewStore.getState().addItems([
-      makeInput({ title: "A", searchQueries: ["q1"] }),
-    ])
-    useReviewStore.getState().addItems([
-      makeInput({ title: "A", searchQueries: ["q1", "q2"] }),
-    ])
-    expect(useReviewStore.getState().items[0].searchQueries).toEqual(["q1", "q2"])
-  })
-
   it("sets affectedPages to undefined when the merged result is empty", () => {
     useReviewStore.getState().addItems([
       makeInput({ title: "A" }),

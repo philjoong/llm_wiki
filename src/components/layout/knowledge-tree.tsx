@@ -40,8 +40,8 @@ export function KnowledgeTree() {
     if (!project) return
     const pp = normalizePath(project.path)
     try {
-      const wikiTree = await listDirectory(`${pp}/wiki`)
-      const mdFiles = flattenMdFiles(wikiTree)
+      const dbTree = await listDirectory(`${pp}/db`)
+      const mdFiles = flattenMdFiles(dbTree)
 
       const pageInfos: WikiPageInfo[] = []
       for (const file of mdFiles) {
@@ -113,7 +113,7 @@ export function KnowledgeTree() {
 
         {sortedGroups.length === 0 && (
           <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-            No wiki pages yet. Import sources to get started.
+            No db pages yet. Import sources to get started.
           </div>
         )}
 

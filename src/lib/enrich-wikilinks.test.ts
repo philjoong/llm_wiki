@@ -55,7 +55,7 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
     mockReadFile.mockResolvedValue("some page content that is long enough to write back to disk")
     mockStreamChatReturns("some [[enriched]] page content that is long enough to write back to disk")
 
-    await enrichWithWikilinks("/project", "/project/wiki/note.md", fakeLlmConfig())
+    await enrichWithWikilinks("/project", "/project/db/note.md", fakeLlmConfig())
 
     const systemMsg = mockStreamChat.mock.calls[0][1][0]
     expect(systemMsg.role).toBe("system")
@@ -67,10 +67,10 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
     mockStreamChatReturns("content that is definitely long enough for the length guard [[link]]")
 
     useWikiStore.getState().setOutputLanguage("Japanese")
-    await enrichWithWikilinks("/p", "/p/wiki/a.md", fakeLlmConfig())
+    await enrichWithWikilinks("/p", "/p/db/a.md", fakeLlmConfig())
 
     useWikiStore.getState().setOutputLanguage("Korean")
-    await enrichWithWikilinks("/p", "/p/wiki/b.md", fakeLlmConfig())
+    await enrichWithWikilinks("/p", "/p/db/b.md", fakeLlmConfig())
 
     const first = mockStreamChat.mock.calls[0][1][0].content
     const second = mockStreamChat.mock.calls[1][1][0].content
@@ -83,7 +83,7 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
     mockReadFile.mockResolvedValue("这是一篇关于注意力机制的长中文页面，内容足够长所以能通过守卫")
     mockStreamChatReturns("这是一篇关于[[注意力机制]]的长中文页面，内容足够长所以能通过守卫")
 
-    await enrichWithWikilinks("/p", "/p/wiki/attention.md", fakeLlmConfig())
+    await enrichWithWikilinks("/p", "/p/db/attention.md", fakeLlmConfig())
 
     const content = mockStreamChat.mock.calls[0][1][0].content
     expect(content).toContain("MANDATORY OUTPUT LANGUAGE: Chinese")
@@ -94,7 +94,7 @@ describe("enrichWithWikilinks — language directive is built at call time", () 
     mockReadFile.mockResolvedValue("这段中文页面内容非常长，足够通过守卫，里面讲的是注意力机制")
     mockStreamChatReturns("This is english replacement content that is long enough to pass the guard [[link]]")
 
-    await enrichWithWikilinks("/p", "/p/wiki/x.md", fakeLlmConfig())
+    await enrichWithWikilinks("/p", "/p/db/x.md", fakeLlmConfig())
 
     const content = mockStreamChat.mock.calls[0][1][0].content
     expect(content).toContain("MANDATORY OUTPUT LANGUAGE: English")

@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, FolderOpen, Search, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, Globe, History,
+  FileText, FolderOpen, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
-import { useResearchStore } from "@/stores/research-store"
 import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
 import logoImg from "@/assets/logo.jpg"
@@ -16,7 +15,6 @@ type NavView = WikiState["activeView"]
 const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = [
   { view: "wiki", icon: FileText, labelKey: "nav.wiki" },
   { view: "sources", icon: FolderOpen, labelKey: "nav.sources" },
-  { view: "search", icon: Search, labelKey: "nav.search" },
   { view: "lint", icon: ClipboardCheck, labelKey: "nav.lint" },
   { view: "review", icon: ClipboardList, labelKey: "nav.review" },
   { view: "history", icon: History, labelKey: "nav.history" },
@@ -31,9 +29,6 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const activeView = useWikiStore((s) => s.activeView)
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const pendingCount = useReviewStore((s) => s.items.filter((i) => !i.resolved).length)
-  const researchPanelOpen = useResearchStore((s) => s.panelOpen)
-  const researchActiveCount = useResearchStore((s) => s.tasks.filter((t) => t.status !== "done" && t.status !== "error").length)
-  const toggleResearchPanel = useResearchStore((s) => s.setPanelOpen)
   const updateBannerVisible = useUpdateStore((s) => shouldShowUpdateBanner(s))
 
   // Daemon health check
@@ -64,7 +59,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             className="h-8 w-8 rounded-[22%]"
           />
         </div>
-        {/* Top: main nav items + Deep Research */}
+        {/* Top: main nav items */}
         <div className="flex flex-1 flex-col items-center gap-1">
           {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => (
             <Tooltip key={view}>
@@ -89,25 +84,6 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
               </TooltipContent>
             </Tooltip>
           ))}
-          {/* Deep Research — same row as other nav items */}
-          <Tooltip>
-            <TooltipTrigger
-              onClick={() => toggleResearchPanel(!researchPanelOpen)}
-              className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
-                researchPanelOpen
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
-              }`}
-            >
-              <Globe className="h-5 w-5" />
-              {researchActiveCount > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-bold text-white">
-                  {researchActiveCount}
-                </span>
-              )}
-            </TooltipTrigger>
-            <TooltipContent side="right">Deep Research</TooltipContent>
-          </Tooltip>
         </div>
         {/* Bottom: daemon status + settings + switch project */}
         <div className="flex flex-col items-center gap-1 pb-1">

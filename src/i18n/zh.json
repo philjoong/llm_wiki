@@ -6,7 +6,6 @@
   "nav": {
     "wiki": "DB",
     "sources": "Raw",
-    "search": "搜索",
     "graph": "关系图",
     "lint": "检查",
     "review": "修改请求",
@@ -65,13 +64,7 @@
     "saved": "已保存！",
     "writeToWiki": "写入 Wiki",
     "emptyHint": "提问或开始提取资料。",
-    "sources": "来源"
-  },
-  "search": {
-    "title": "搜索",
-    "placeholder": "搜索 Wiki 页面...",
-    "noResults": "未找到相关结果",
-    "startSearching": "输入关键词搜索 Wiki 页面",
+    "sources": "来源",
     "trace": {
       "headerWithType": "判定类型：{{name}} · 已排除 {{removed}} / {{initial}}",
       "headerNoType": "未判定类型 · 候选 {{initial}} 个",
@@ -144,7 +137,6 @@
     "categories": {
       "llm": "LLM 模型",
       "embedding": "向量嵌入",
-      "webSearch": "网页搜索",
       "output": "输出偏好",
       "interface": "界面",
       "about": "关于"
@@ -190,15 +182,11 @@
         "dropLegacy": "删除旧版索引",
         "dropLegacyDone": "旧版索引已删除。"
       },
-      "webSearch": {
-        "title": "网页搜索",
-        "description": "Deep Research 会用它拉取最新的外部上下文。"
-      },
       "output": {
         "title": "输出偏好",
         "description": "影响生成内容的语言、对话历史长度等参数。",
         "aiLanguage": "AI 输出语言",
-        "aiLanguageHint": "强制 AI 生成内容（chat 回复、wiki 页面、research 结果、lint 报告）使用指定语言。选 \"Auto\" 让 AI 跟随用户输入或源文档的语言。",
+        "aiLanguageHint": "强制 AI 生成内容（chat 回复、wiki 页面、lint 报告）使用指定语言。选 \"Auto\" 让 AI 跟随用户输入或源文档的语言。",
         "historyLength": "对话历史长度",
         "historyHint": "每次请求发给 AI 的历史消息条数。多 = 上下文更完整但更费 token。",
         "historyCurrent": "当前 {{count}} 条消息（约 {{turns}} 轮对话）"

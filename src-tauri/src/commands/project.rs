@@ -18,16 +18,15 @@ fn create_project_impl(name: String, path: String) -> Result<WikiProject, String
         return Err(format!("Directory already exists: '{}'", root.display()));
     }
 
-    // Create all required subdirectories
+    // IDEA.md externalises the per-project folder structure to schema.md, so
+    // we no longer pre-create category subdirectories. We only seed the two
+    // top-level buckets every project needs:
+    //   - raw/    : source documents and assets
+    //   - db/     : all 2차 산출물 (the previous "wiki/" tree, now unified)
     let dirs = [
         "raw/sources",
         "raw/assets",
-        "wiki/entities",
-        "wiki/concepts",
-        "wiki/sources",
-        "wiki/queries",
-        "wiki/comparisons",
-        "wiki/synthesis",
+        "db",
     ];
     for dir in &dirs {
         fs::create_dir_all(root.join(dir))
@@ -38,18 +37,18 @@ fn create_project_impl(name: String, path: String) -> Result<WikiProject, String
 
     // schema.md
     let schema_content = format!(
-        r#"# Wiki Schema
+        r#"# DB Schema
 
 ## Page Types
 
 | Type | Directory | Purpose |
 |------|-----------|---------|
-| entity | wiki/entities/ | Named things (models, companies, people, datasets) |
-| concept | wiki/concepts/ | Ideas, techniques, phenomena |
-| source | wiki/sources/ | Papers, articles, talks, blog posts |
-| query | wiki/queries/ | Open questions under investigation |
-| comparison | wiki/comparisons/ | Side-by-side analysis of related entities |
-| synthesis | wiki/synthesis/ | Cross-cutting summaries and conclusions |
+| entity | db/entities/ | Named things (models, companies, people, datasets) |
+| concept | db/concepts/ | Ideas, techniques, phenomena |
+| source | db/sources/ | Papers, articles, talks, blog posts |
+| query | db/queries/ | Open questions under investigation |
+| comparison | db/comparisons/ | Side-by-side analysis of related entities |
+| synthesis | db/synthesis/ | Cross-cutting summaries and conclusions |
 
 ## Naming Conventions
 
@@ -84,14 +83,14 @@ venue: ""
 
 ## Index Format
 
-`wiki/index.md` lists all pages grouped by type. Each entry:
+`db/index.md` lists all pages grouped by type. Each entry:
 ```
 - [[page-slug]] — one-line description
 ```
 
 ## Log Format
 
-`wiki/log.md` records research activity in reverse chronological order:
+`db/log.md` records research activity in reverse chronological order:
 ```
 ## YYYY-MM-DD
 
@@ -100,8 +99,8 @@ venue: ""
 
 ## Cross-referencing Rules
 
-- Use `[[page-slug]]` syntax to link between wiki pages
-- Every entity and concept should appear in `wiki/index.md`
+- Use `[[page-slug]]` syntax to link between db pages
+- Every entity and concept should appear in `db/index.md`
 - Queries link to the sources and concepts they draw on
 - Synthesis pages cite all contributing sources via `related:`
 
@@ -149,8 +148,8 @@ When sources contradict each other:
 "#;
     write_file_inner(root.join("purpose.md"), purpose_content)?;
 
-    // wiki/index.md
-    let index_content = r#"# Wiki Index
+    // db/index.md
+    let index_content = r#"# DB Index
 
 ## Entities
 
@@ -164,9 +163,9 @@ When sources contradict each other:
 
 ## Synthesis
 "#;
-    write_file_inner(root.join("wiki/index.md"), index_content)?;
+    write_file_inner(root.join("db/index.md"), index_content)?;
 
-    // wiki/log.md
+    // db/log.md
     let log_content = format!(
         r#"# Research Log
 
@@ -175,9 +174,9 @@ When sources contradict each other:
 - Project created
 "#
     );
-    write_file_inner(root.join("wiki/log.md"), &log_content)?;
+    write_file_inner(root.join("db/log.md"), &log_content)?;
 
-    // wiki/overview.md
+    // db/overview.md
     let overview_content = r#"---
 type: overview
 title: Project Overview
@@ -187,9 +186,9 @@ related: []
 
 # Overview
 
-<!-- Provide a high-level summary of what this wiki covers and its current state. Update regularly as understanding deepens. -->
+<!-- Provide a high-level summary of what this db covers and its current state. Update regularly as understanding deepens. -->
 "#;
-    write_file_inner(root.join("wiki/overview.md"), overview_content)?;
+    write_file_inner(root.join("db/overview.md"), overview_content)?;
 
     // .obsidian config for Obsidian compatibility
     fs::create_dir_all(root.join(".obsidian"))
@@ -248,16 +247,20 @@ pub fn open_project(path: String) -> Result<WikiProject, String> {
             return Err(format!("Path is not a directory: '{}'", path));
         }
 
-        // Validate that this looks like a wiki project
+        // Validate that this looks like an llm_wiki project. We accept either
+        // a `db/` directory (post-Phase-B layout) or a legacy `wiki/`
+        // directory; the latter is migrated to `db/` on first open by
+        // `migrate_wiki_to_db`. Validation here only requires schema.md plus
+        // at least one of the two roots.
         if !root.join("schema.md").exists() {
             return Err(format!(
-                "Not a valid wiki project (missing schema.md): '{}'",
+                "Not a valid project (missing schema.md): '{}'",
                 path
             ));
         }
-        if !root.join("wiki").is_dir() {
+        if !root.join("db").is_dir() && !root.join("wiki").is_dir() {
             return Err(format!(
-                "Not a valid wiki project (missing wiki/ directory): '{}'",
+                "Not a valid project (missing db/ or wiki/ directory): '{}'",
                 path
             ));
         }

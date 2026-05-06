@@ -714,6 +714,38 @@ pub async fn vector_drop_legacy(project_path: String) -> Result<(), String> {
     .await
 }
 
+/// Drop the v2 chunks table. Used by the wiki→db migration to invalidate
+/// the stale `page_id` index that was built from the pre-migration
+/// (stem-only) encoding. After this, the user must re-index to repopulate
+/// chunks under the new relative-path-encoded ids. No-op if v2 isn't
+/// present.
+#[tauri::command]
+pub async fn vector_drop_v2(project_path: String) -> Result<(), String> {
+    run_guarded_async("vector_drop_v2", async move {
+        let db = connect(&db_path(&project_path))
+            .execute()
+            .await
+            .map_err(|e| format!("DB connect error: {e}"))?;
+
+        let tables = db
+            .table_names()
+            .execute()
+            .await
+            .map_err(|e| format!("List tables error: {e}"))?;
+
+        if !tables.contains(&TABLE_V2.to_string()) {
+            return Ok(());
+        }
+
+        db.drop_table(TABLE_V2, &[])
+            .await
+            .map_err(|e| format!("Drop table error: {e}"))?;
+
+        Ok(())
+    })
+    .await
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Tests
 //

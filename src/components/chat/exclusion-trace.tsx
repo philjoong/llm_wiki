@@ -1,10 +1,7 @@
 /**
- * Stage 11 — exclusion trace block.
- *
- * Renders the SearchTrace returned by runExcludeSearch as a collapsible
- * panel above the result list. Pattern follows chat-message.tsx
- * ThinkingBlock: header with summary counts, click to expand the
- * per-entry breakdown.
+ * Exclusion trace block rendered above chat messages. Renders the
+ * SearchTrace returned by runExcludeSearch as a collapsible panel —
+ * header with summary counts, click to expand the per-entry breakdown.
  */
 import { useState } from "react"
 import { Filter, ChevronDown, ChevronRight } from "lucide-react"
@@ -33,12 +30,12 @@ export function ExclusionTrace({ trace }: { trace: SearchTrace }) {
         <Filter className="h-3 w-3 shrink-0" />
         <span className="font-medium">
           {hasType
-            ? t("search.trace.headerWithType", {
+            ? t("chat.trace.headerWithType", {
                 name: trace.judgedType!.name,
                 removed: removedCount,
                 initial: trace.initialCandidateCount,
               })
-            : t("search.trace.headerNoType", {
+            : t("chat.trace.headerNoType", {
                 initial: trace.initialCandidateCount,
               })}
         </span>
@@ -54,7 +51,7 @@ export function ExclusionTrace({ trace }: { trace: SearchTrace }) {
           {hasType && (
             <div>
               <div className="font-medium">
-                {t("search.trace.judgedType")}: {trace.judgedType!.name}
+                {t("chat.trace.judgedType")}: {trace.judgedType!.name}
                 <span className="ml-1 text-blue-600/60 dark:text-blue-400/60">
                   ({Math.round(trace.judgedType!.confidence * 100)}%)
                 </span>
@@ -69,8 +66,8 @@ export function ExclusionTrace({ trace }: { trace: SearchTrace }) {
 
           <div>
             <div className="font-medium">
-              {t("search.trace.appliedExclusions")}:{" "}
-              {t("search.trace.removedOfInitial", {
+              {t("chat.trace.appliedExclusions")}:{" "}
+              {t("chat.trace.removedOfInitial", {
                 removed: removedCount,
                 initial: trace.initialCandidateCount,
               })}
@@ -92,13 +89,13 @@ export function ExclusionTrace({ trace }: { trace: SearchTrace }) {
               </ul>
             ) : (
               <div className="text-blue-800/60 dark:text-blue-300/50 mt-0.5">
-                {t("search.trace.noEntriesFired")}
+                {t("chat.trace.noEntriesFired")}
               </div>
             )}
           </div>
 
           <div className="font-medium">
-            {t("search.trace.residueCount", { count: trace.residueCount })}
+            {t("chat.trace.residueCount", { count: trace.residueCount })}
           </div>
         </div>
       )}

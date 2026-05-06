@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Bot,
   Binary,
-  Globe,
   Languages,
   Palette,
   Info,
@@ -16,7 +15,6 @@ import { saveLanguage } from "@/lib/project-store"
 import type { SettingsDraft, DraftSetter } from "./settings-types"
 import { LlmProviderSection } from "./sections/llm-provider-section"
 import { EmbeddingSection } from "./sections/embedding-section"
-import { WebSearchSection } from "./sections/web-search-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { AboutSection } from "./sections/about-section"
@@ -24,7 +22,6 @@ import { AboutSection } from "./sections/about-section"
 type CategoryId =
   | "llm"
   | "embedding"
-  | "web-search"
   | "output"
   | "interface"
   | "about"
@@ -41,7 +38,6 @@ interface Category {
 const CATEGORIES: Category[] = [
   { id: "llm", labelKey: "settings.categories.llm", icon: Bot },
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
-  { id: "web-search", labelKey: "settings.categories.webSearch", icon: Globe },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
@@ -49,7 +45,6 @@ const CATEGORIES: Category[] = [
 
 function initialDraft(
   llm: ReturnType<typeof useWikiStore.getState>["llmConfig"],
-  search: ReturnType<typeof useWikiStore.getState>["searchApiConfig"],
   embed: ReturnType<typeof useWikiStore.getState>["embeddingConfig"],
   outputLanguage: ReturnType<typeof useWikiStore.getState>["outputLanguage"],
   maxHistoryMessages: number,
@@ -69,8 +64,6 @@ function initialDraft(
     embeddingModel: embed.model,
     embeddingMaxChunkChars: embed.maxChunkChars,
     embeddingOverlapChunkChars: embed.overlapChunkChars,
-    searchProvider: search.provider,
-    searchApiKey: search.apiKey,
     outputLanguage,
     maxHistoryMessages,
     uiLanguage,
@@ -81,8 +74,6 @@ export function SettingsView() {
   const { t } = useTranslation()
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const setLlmConfig = useWikiStore((s) => s.setLlmConfig)
-  const searchApiConfig = useWikiStore((s) => s.searchApiConfig)
-  const setSearchApiConfig = useWikiStore((s) => s.setSearchApiConfig)
   const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
   const setEmbeddingConfig = useWikiStore((s) => s.setEmbeddingConfig)
   const outputLanguage = useWikiStore((s) => s.outputLanguage)
@@ -95,7 +86,6 @@ export function SettingsView() {
   const [draft, setDraftState] = useState<SettingsDraft>(() =>
     initialDraft(
       llmConfig,
-      searchApiConfig,
       embeddingConfig,
       outputLanguage,
       maxHistoryMessages,
@@ -108,7 +98,6 @@ export function SettingsView() {
     setDraftState(
       initialDraft(
         llmConfig,
-        searchApiConfig,
         embeddingConfig,
         outputLanguage,
         maxHistoryMessages,
@@ -117,7 +106,6 @@ export function SettingsView() {
     )
   }, [
     llmConfig,
-    searchApiConfig,
     embeddingConfig,
     outputLanguage,
     maxHistoryMessages,
@@ -130,7 +118,6 @@ export function SettingsView() {
   const handleSave = useCallback(async () => {
     const {
       saveLlmConfig,
-      saveSearchApiConfig,
       saveEmbeddingConfig,
       saveOutputLanguage,
     } = await import("@/lib/project-store")
@@ -144,7 +131,6 @@ export function SettingsView() {
       maxContextSize: draft.maxContextSize,
       apiMode: draft.provider === "custom" ? draft.apiMode : undefined,
     }
-    const newSearch = { provider: draft.searchProvider, apiKey: draft.searchApiKey }
     const newEmbed = {
       enabled: draft.embeddingEnabled,
       endpoint: draft.embeddingEndpoint,
@@ -156,8 +142,6 @@ export function SettingsView() {
 
     setLlmConfig(newLlm)
     await saveLlmConfig(newLlm)
-    setSearchApiConfig(newSearch)
-    await saveSearchApiConfig(newSearch)
     setEmbeddingConfig(newEmbed)
     await saveEmbeddingConfig(newEmbed)
     setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
@@ -174,7 +158,6 @@ export function SettingsView() {
   }, [
     draft,
     setLlmConfig,
-    setSearchApiConfig,
     setEmbeddingConfig,
     setOutputLanguage,
     setMaxHistoryMessages,
@@ -190,8 +173,6 @@ export function SettingsView() {
         return <LlmProviderSection />
       case "embedding":
         return <EmbeddingSection draft={draft} setDraft={setDraft} />
-      case "web-search":
-        return <WebSearchSection draft={draft} setDraft={setDraft} />
       case "output":
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":

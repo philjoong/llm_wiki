@@ -11,6 +11,7 @@ import {
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { lastQueryPages } from "@/components/chat/chat-panel"
+import { ExclusionTrace } from "@/components/chat/exclusion-trace"
 import type { DisplayMessage } from "@/stores/chat-store"
 import type { FileNode } from "@/types/wiki"
 
@@ -81,6 +82,9 @@ export function ChatMessage({ message, isLastAssistant, onRegenerate }: ChatMess
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
       </div>
       <div className="max-w-[80%] flex flex-col gap-1.5">
+        {isAssistant && message.trace && (
+          <ExclusionTrace trace={message.trace} />
+        )}
         <div
           className={`rounded-lg px-3 py-2 text-sm ${
             isUser
@@ -163,7 +167,7 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
       const firstLine = content.split("\n")[0].replace(/^#+\s*/, "").trim()
       const title = firstLine.slice(0, 60) || "Saved Query"
       const { date, fileName } = makeQueryFileName(title)
-      const filePath = `${pp}/wiki/queries/${fileName}`
+      const filePath = `${pp}/db/queries/${fileName}`
 
       // Strip hidden sources comment and thinking blocks from content
       const cleanContent = content
@@ -185,12 +189,12 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
       await writeFile(filePath, frontmatter + cleanContent)
 
       // Update index.md — append under ## Queries section
-      const indexPath = `${pp}/wiki/index.md`
+      const indexPath = `${pp}/db/index.md`
       let indexContent = ""
       try {
         indexContent = await readFile(indexPath)
       } catch {
-        indexContent = "# Wiki Index\n\n## Queries\n"
+        indexContent = "# DB Index\n\n## Queries\n"
       }
       // The wikilink target is the filename WITHOUT the `.md`
       // extension — must match `fileName` exactly (including the
@@ -208,12 +212,12 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
       await writeFile(indexPath, indexContent)
 
       // Append to log.md
-      const logPath = `${pp}/wiki/log.md`
+      const logPath = `${pp}/db/log.md`
       let logContent = ""
       try {
         logContent = await readFile(logPath)
       } catch {
-        logContent = "# Wiki Log\n\n"
+        logContent = "# DB Log\n\n"
       }
       const logEntry = `- ${date}: Saved query page \`${fileName}\`\n`
       await writeFile(logPath, logContent.trimEnd() + "\n" + logEntry)
@@ -333,13 +337,13 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
                 const id = getFileName(page.path.replace(/^wiki\//, "").replace(/\.md$/, ""))
                 const candidates = [
                   `${pp}/${page.path}`,
-                  `${pp}/wiki/entities/${id}.md`,
-                  `${pp}/wiki/concepts/${id}.md`,
-                  `${pp}/wiki/sources/${id}.md`,
-                  `${pp}/wiki/queries/${id}.md`,
-                  `${pp}/wiki/synthesis/${id}.md`,
-                  `${pp}/wiki/comparisons/${id}.md`,
-                  `${pp}/wiki/${id}.md`,
+                  `${pp}/db/entities/${id}.md`,
+                  `${pp}/db/concepts/${id}.md`,
+                  `${pp}/db/sources/${id}.md`,
+                  `${pp}/db/queries/${id}.md`,
+                  `${pp}/db/synthesis/${id}.md`,
+                  `${pp}/db/comparisons/${id}.md`,
+                  `${pp}/db/${id}.md`,
                 ]
                 for (const candidate of candidates) {
                   try {
@@ -423,20 +427,20 @@ function extractCitedPages(text: string): CitedPage[] {
         if (seen.has(id)) continue
         seen.add(id)
 
-        // Try to find the file in known wiki subdirectories
+        // Try to find the file in known db subdirectories
         let resolvedPath = ""
         if (id.includes("/")) {
           // Already has directory like "queries/my-query"
-          resolvedPath = `wiki/${id}.md`
+          resolvedPath = `db/${id}.md`
         } else {
           // Search in common directories
           for (const dir of WIKI_DIRS) {
-            resolvedPath = `wiki/${dir}/${id}.md`
+            resolvedPath = `db/${dir}/${id}.md`
             // We can't do async file checking here, so try all known patterns
             // The click handler will try multiple paths
             break // Use first candidate, click handler resolves the rest
           }
-          if (!resolvedPath) resolvedPath = `wiki/${id}.md`
+          if (!resolvedPath) resolvedPath = `db/${id}.md`
         }
 
         pages.push({ title: display, path: resolvedPath })
@@ -662,13 +666,13 @@ function WikiLink({ pageName, children }: { pageName: string; children: React.Re
     if (!project) return
     const pp = normalizePath(project.path)
     const candidates = [
-      `${pp}/wiki/entities/${pageName}.md`,
-      `${pp}/wiki/concepts/${pageName}.md`,
-      `${pp}/wiki/sources/${pageName}.md`,
-      `${pp}/wiki/queries/${pageName}.md`,
-      `${pp}/wiki/comparisons/${pageName}.md`,
-      `${pp}/wiki/synthesis/${pageName}.md`,
-      `${pp}/wiki/${pageName}.md`,
+      `${pp}/db/entities/${pageName}.md`,
+      `${pp}/db/concepts/${pageName}.md`,
+      `${pp}/db/sources/${pageName}.md`,
+      `${pp}/db/queries/${pageName}.md`,
+      `${pp}/db/comparisons/${pageName}.md`,
+      `${pp}/db/synthesis/${pageName}.md`,
+      `${pp}/db/${pageName}.md`,
     ]
 
     let cancelled = false

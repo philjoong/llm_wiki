@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react"
-import { queueResearch } from "@/lib/deep-research"
 import {
   AlertTriangle,
   Copy,
@@ -108,26 +107,6 @@ export function ReviewView() {
       return
     }
 
-    // Deep Research — must be checked FIRST before any fuzzy matching
-    if (action === "__deep_research__" && project) {
-      const searchConfig = useWikiStore.getState().searchApiConfig
-      if (searchConfig.provider === "none" || !searchConfig.apiKey) {
-        window.alert("Web Search not configured. Go to Settings → Web Search to add a Tavily API key first.")
-        return
-      }
-      const item = items.find((i) => i.id === id)
-      if (item) {
-        const llmConfig = useWikiStore.getState().llmConfig
-        // Use pre-generated search queries if available, otherwise fall back to title
-        const topic = item.title.replace(/^(Save to Wiki|Create|Research)[:\s]*/i, "").trim() || item.description.split("\n")[0]
-        queueResearch(pp, topic, llmConfig, searchConfig, item.searchQueries)
-        resolveItem(id, "Queued for research")
-      } else {
-        resolveItem(id, action)
-      }
-      return
-    }
-
     if (action.startsWith("save:") && project) {
       // Decode and save the content to wiki
       try {
@@ -146,15 +125,15 @@ export function ReviewView() {
         const slug = title.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 50)
         const date = new Date().toISOString().slice(0, 10)
         const fileName = `${slug}-${date}.md`
-        const filePath = `${pp}/wiki/queries/${fileName}`
+        const filePath = `${pp}/db/queries/${fileName}`
 
         const frontmatter = `---\ntype: query\ntitle: "${title.replace(/"/g, '\\"')}"\ncreated: ${date}\ntags: []\n---\n\n`
         await writeFile(filePath, frontmatter + cleanContent)
 
         // Update index
-        const indexPath = `${pp}/wiki/index.md`
+        const indexPath = `${pp}/db/index.md`
         let indexContent = ""
-        try { indexContent = await readFile(indexPath) } catch { indexContent = "# Wiki Index\n" }
+        try { indexContent = await readFile(indexPath) } catch { indexContent = "# DB Index\n" }
         const entry = `- [[queries/${slug}-${date}|${title}]]`
         if (indexContent.includes("## Queries")) {
           indexContent = indexContent.replace(/(## Queries\n)/, `$1${entry}\n`)
@@ -164,9 +143,9 @@ export function ReviewView() {
         await writeFile(indexPath, indexContent)
 
         // Append log
-        const logPath = `${pp}/wiki/log.md`
+        const logPath = `${pp}/db/log.md`
         let logContent = ""
-        try { logContent = await readFile(logPath) } catch { logContent = "# Wiki Log\n" }
+        try { logContent = await readFile(logPath) } catch { logContent = "# DB Log\n" }
         await writeFile(logPath, logContent.trimEnd() + `\n- ${date}: Saved query page \`${fileName}\`\n`)
 
         // Refresh tree
@@ -182,8 +161,8 @@ export function ReviewView() {
       // Open a page for editing
       const page = action.slice(5)
       const candidates = [
-        `${pp}/wiki/${page}`,
-        `${pp}/wiki/${page}.md`,
+        `${pp}/db/${page}`,
+        `${pp}/db/${page}.md`,
       ]
       for (const path of candidates) {
         try {
@@ -209,26 +188,6 @@ export function ReviewView() {
         console.error("Failed to delete:", err)
         resolveItem(id, "Delete failed")
       }
-    } else if (actionLooksLikeResearch(action) && project) {
-      // Actions with "research" trigger deep research, not just page creation
-      const searchConfig = useWikiStore.getState().searchApiConfig
-      if (searchConfig.provider === "none" || !searchConfig.apiKey) {
-        // No search API — fall through to create a page instead
-        const item = items.find((i) => i.id === id)
-        if (item) {
-          handleResolve(id, "__create_page__:" + action)
-        }
-        return
-      }
-      const item = items.find((i) => i.id === id)
-      if (item) {
-        const llmConfig = useWikiStore.getState().llmConfig
-        const topic = action.replace(/^research\s*/i, "").trim() || item.description.split("\n")[0]
-        queueResearch(pp, topic, llmConfig, searchConfig)
-        resolveItem(id, "Queued for deep research")
-      } else {
-        resolveItem(id, action)
-      }
     } else if (
       (action.startsWith("__create_page__:") || actionLooksLikeCreate(action))
       && project
@@ -251,16 +210,16 @@ export function ReviewView() {
           const pageType = detectPageType(realAction, item.type)
           const dir = pageType === "query" ? "queries" : pageType === "entity" ? "entities" : pageType === "concept" ? "concepts" : "queries"
           const fileName = `${slug}-${date}.md`
-          const filePath = `${pp}/wiki/${dir}/${fileName}`
+          const filePath = `${pp}/db/${dir}/${fileName}`
 
           const frontmatter = `---\ntype: ${pageType}\ntitle: "${title.replace(/"/g, '\\"')}"\ncreated: ${date}\ntags: []\nrelated: []\n---\n\n`
           const body = `# ${title}\n\n${item.description}\n`
           await writeFile(filePath, frontmatter + body)
 
           // Update index
-          const indexPath = `${pp}/wiki/index.md`
+          const indexPath = `${pp}/db/index.md`
           let indexContent = ""
-          try { indexContent = await readFile(indexPath) } catch { indexContent = "# Wiki Index\n" }
+          try { indexContent = await readFile(indexPath) } catch { indexContent = "# DB Index\n" }
           const sectionHeader = `## ${dir.charAt(0).toUpperCase() + dir.slice(1)}`
           const entry = `- [[${dir}/${slug}-${date}|${title}]]`
           if (indexContent.includes(sectionHeader)) {
@@ -271,9 +230,9 @@ export function ReviewView() {
           await writeFile(indexPath, indexContent)
 
           // Log
-          const logPath = `${pp}/wiki/log.md`
+          const logPath = `${pp}/db/log.md`
           let logContent = ""
-          try { logContent = await readFile(logPath) } catch { logContent = "# Wiki Log\n" }
+          try { logContent = await readFile(logPath) } catch { logContent = "# DB Log\n" }
           await writeFile(logPath, logContent.trimEnd() + `\n- ${date}: Created ${pageType} page \`${fileName}\` from review\n`)
 
           // Refresh
@@ -281,7 +240,7 @@ export function ReviewView() {
           setFileTree(tree)
           useWikiStore.getState().bumpDataVersion()
 
-          resolveItem(id, `Created: wiki/${dir}/${fileName}`)
+          resolveItem(id, `Created: db/${dir}/${fileName}`)
         } catch (err) {
           console.error("Failed to create page from review:", err)
           resolveItem(id, "Create failed")
@@ -426,16 +385,6 @@ function ReviewCard({
             <ModificationActions item={item} onResolve={onResolve} />
           ) : (
             <>
-              {(item.type === "suggestion" || item.type === "missing-page") && (
-                <Button
-                  variant="default"
-                  size="sm"
-                  className="h-7 text-xs gap-1"
-                  onClick={() => onResolve(item.id, "__deep_research__")}
-                >
-                  🔍 Deep Research
-                </Button>
-              )}
               {item.options.map((opt) => (
                 <Button
                   key={opt.action}
@@ -562,22 +511,6 @@ function ModificationActions({
         Counterexample
       </Button>
     </>
-  )
-}
-
-/** Detect if an action implies deep research (web search + LLM synthesis) */
-function actionLooksLikeResearch(action: string): boolean {
-  // Skip internal action identifiers
-  if (action.startsWith("__")) return false
-  const lower = action.toLowerCase()
-  return (
-    lower.includes("research") ||
-    lower.includes("investigate") ||
-    lower.includes("explore") ||
-    lower.includes("look into") ||
-    lower.includes("研究") ||
-    lower.includes("调研") ||
-    lower.includes("探索")
   )
 }
 

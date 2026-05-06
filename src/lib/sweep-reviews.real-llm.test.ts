@@ -73,7 +73,6 @@ async function setup(scenario: typeof sweepScenarios[number]): Promise<Ctx> {
       title: r.title,
       description: r.description ?? "",
       affectedPages: r.affectedPages,
-      searchQueries: r.searchQueries,
       sourcePath: r.sourcePath,
       options: [],
       resolved: false,

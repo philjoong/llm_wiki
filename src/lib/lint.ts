@@ -39,24 +39,24 @@ function extractWikilinks(content: string): string[] {
 }
 
 function relativeToSlug(relativePath: string): string {
-  // relativePath relative to wiki/ dir, e.g. "entities/foo-bar" or "queries/my-page-2024-01-01"
+  // relativePath relative to db/ dir, e.g. "entities/foo-bar" or "queries/my-page-2024-01-01"
   return relativePath.replace(/\.md$/, "")
 }
 
 /**
- * Build a slug → absolute path map from wiki files. Keys are lowercased
+ * Build a slug → absolute path map from db/ files. Keys are lowercased
  * so [[Transformer]] matches transformer.md — wikilink matching should
  * be case-insensitive (matching typical wiki conventions). Callers must
  * also lowercase their lookup keys.
  */
 function buildSlugMap(
-  wikiFiles: FileNode[],
-  wikiRoot: string,
+  dbFiles: FileNode[],
+  dbRoot: string,
 ): Map<string, string> {
   const map = new Map<string, string>()
-  for (const f of wikiFiles) {
-    // e.g. /path/to/project/wiki/entities/foo.md → entities/foo
-    const rel = getRelativePath(f.path, wikiRoot).replace(/\.md$/, "")
+  for (const f of dbFiles) {
+    // e.g. /path/to/project/db/entities/foo.md → entities/foo
+    const rel = getRelativePath(f.path, dbRoot).replace(/\.md$/, "")
     map.set(rel.toLowerCase(), f.path)
     // also index by basename without extension
     map.set(f.name.replace(/\.md$/, "").toLowerCase(), f.path)
@@ -67,21 +67,21 @@ function buildSlugMap(
 // ── Structural lint ───────────────────────────────────────────────────────────
 
 export async function runStructuralLint(projectPath: string): Promise<LintResult[]> {
-  const wikiRoot = `${normalizePath(projectPath)}/wiki`
+  const dbRoot = `${normalizePath(projectPath)}/db`
   let tree: FileNode[]
   try {
-    tree = await listDirectory(wikiRoot)
+    tree = await listDirectory(dbRoot)
   } catch {
     return []
   }
 
-  const wikiFiles = flattenMdFiles(tree)
+  const dbFiles = flattenMdFiles(tree)
   // Exclude index.md and log.md from orphan checks
-  const contentFiles = wikiFiles.filter(
+  const contentFiles = dbFiles.filter(
     (f) => f.name !== "index.md" && f.name !== "log.md"
   )
 
-  const slugMap = buildSlugMap(contentFiles, wikiRoot)
+  const slugMap = buildSlugMap(contentFiles, dbRoot)
 
   // Read all content files
   type PageData = { path: string; slug: string; content: string; outlinks: string[] }
@@ -90,7 +90,7 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
   for (const f of contentFiles) {
     try {
       const content = await readFile(f.path)
-      const slug = relativeToSlug(getRelativePath(f.path, wikiRoot))
+      const slug = relativeToSlug(getRelativePath(f.path, dbRoot))
       const outlinks = extractWikilinks(content)
       pages.push({ path: f.path, slug, content, outlinks })
     } catch {
@@ -105,7 +105,7 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
     for (const link of p.outlinks) {
       const lookup = link.toLowerCase()
       const target = slugMap.has(lookup)
-        ? relativeToSlug(getRelativePath(slugMap.get(lookup)!, wikiRoot)).toLowerCase()
+        ? relativeToSlug(getRelativePath(slugMap.get(lookup)!, dbRoot)).toLowerCase()
         : lookup
       inboundCounts.set(target, (inboundCounts.get(target) ?? 0) + 1)
     }
@@ -114,7 +114,7 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
   const results: LintResult[] = []
 
   for (const p of pages) {
-    const shortName = getRelativePath(p.path, wikiRoot)
+    const shortName = getRelativePath(p.path, dbRoot)
 
     // Orphan: no inbound links (lowercased slug for case-insensitive match)
     const inbound = inboundCounts.get(p.slug.toLowerCase()) ?? 0
@@ -169,32 +169,32 @@ export async function runSemanticLint(
   const activity = useActivityStore.getState()
   const activityId = activity.addItem({
     type: "lint",
-    title: "Semantic wiki lint",
+    title: "Semantic db lint",
     status: "running",
-    detail: "Reading wiki pages...",
+    detail: "Reading db pages...",
     filesWritten: [],
   })
 
-  const wikiRoot = `${pp}/wiki`
+  const dbRoot = `${pp}/db`
   let tree: FileNode[]
   try {
-    tree = await listDirectory(wikiRoot)
+    tree = await listDirectory(dbRoot)
   } catch {
-    activity.updateItem(activityId, { status: "error", detail: "Failed to read wiki directory." })
+    activity.updateItem(activityId, { status: "error", detail: "Failed to read db directory." })
     return []
   }
 
-  const wikiFiles = flattenMdFiles(tree).filter(
+  const dbFiles = flattenMdFiles(tree).filter(
     (f) => f.name !== "log.md"
   )
 
   // Build a compact summary of each page (frontmatter + first 500 chars)
   const summaries: string[] = []
-  for (const f of wikiFiles) {
+  for (const f of dbFiles) {
     try {
       const content = await readFile(f.path)
       const preview = content.slice(0, 500) + (content.length > 500 ? "..." : "")
-      const shortPath = getRelativePath(f.path, wikiRoot)
+      const shortPath = getRelativePath(f.path, dbRoot)
       summaries.push(`### ${shortPath}\n${preview}`)
     } catch {
       // skip
@@ -202,7 +202,7 @@ export async function runSemanticLint(
   }
 
   if (summaries.length === 0) {
-    activity.updateItem(activityId, { status: "done", detail: "No wiki pages to lint." })
+    activity.updateItem(activityId, { status: "done", detail: "No db pages to lint." })
     return []
   }
 
@@ -213,7 +213,7 @@ export async function runSemanticLint(
   const summarySample = summaries.join("\n").slice(0, 2000)
 
   const prompt = [
-    "You are a wiki quality analyst. Review the following wiki page summaries and identify issues.",
+    "You are a db quality analyst. Review the following db page summaries and identify issues.",
     "",
     buildLanguageDirective(summarySample),
     "",
@@ -236,7 +236,7 @@ export async function runSemanticLint(
     "",
     "Only report genuine issues. Do not invent problems. Output ONLY the ---LINT--- blocks, no other text.",
     "",
-    "## Wiki Pages",
+    "## DB Pages",
     "",
     summaries.join("\n\n"),
   ].join("\n")

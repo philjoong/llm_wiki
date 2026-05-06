@@ -8,7 +8,7 @@ import type { CustomApiMode } from "./llm-presets"
  */
 export interface SettingsDraft {
   // LLM provider
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli" | "gemini-cli"
   apiKey: string
   model: string
   ollamaUrl: string
@@ -25,10 +25,6 @@ export interface SettingsDraft {
   embeddingMaxChunkChars: number | undefined
   /** Overlap characters between adjacent chunks. Empty = default (200). */
   embeddingOverlapChunkChars: number | undefined
-
-  // Web search
-  searchProvider: "tavily" | "none"
-  searchApiKey: string
 
   // Output preferences
   outputLanguage: string

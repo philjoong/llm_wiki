@@ -25,7 +25,7 @@
 
 /** Info about a page that was actually deleted (not just source-pruned). */
 export interface DeletedPageInfo {
-  /** File-path slug, e.g. "kv-cache" from "wiki/concepts/kv-cache.md". */
+  /** File-path slug, e.g. "kv-cache" from "db/concepts/kv-cache.md". */
   slug: string
   /** Frontmatter title, e.g. "KV Cache". Empty when unknown. */
   title: string

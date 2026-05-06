@@ -119,10 +119,12 @@ function PresetRow({
   const baseUrl = ov.baseUrl ?? preset.baseUrl ?? ""
   const context = ov.maxContextSize ?? preset.suggestedContextSize ?? 131072
   const hasConfig = !!apiKey || !!ov.baseUrl || !!ov.model
-  // Claude Code CLI authenticates via the user's existing ~/.claude OAuth
-  // (inherited from the spawned subprocess), so no API key field is
-  // shown. Ollama ditto for its local-only model.
-  const needsApiKey = preset.provider !== "ollama" && preset.provider !== "claude-code"
+  // Local-CLI providers (claude-code, codex-cli, gemini-cli) authenticate
+  // via the user's existing CLI login (~/.claude, ~/.codex, ~/.gemini)
+  // inherited by the spawned subprocess, so no API key field is shown.
+  // Ollama ditto for its local-only model.
+  const cliProviders = new Set(["claude-code", "codex-cli", "gemini-cli"])
+  const needsApiKey = preset.provider !== "ollama" && !cliProviders.has(preset.provider)
 
   return (
     <div
@@ -245,7 +247,27 @@ function PresetRow({
             />
           )}
 
-          {preset.provider === "claude-code" && <ClaudeCliStatusPill />}
+          {preset.provider === "claude-code" && (
+            <CliStatusPill
+              binary="claude"
+              detectCmd="claude_cli_detect"
+              installHint="npm i -g @anthropic-ai/claude-code"
+            />
+          )}
+          {preset.provider === "codex-cli" && (
+            <CliStatusPill
+              binary="codex"
+              detectCmd="codex_cli_detect"
+              installHint="npm i -g @openai/codex"
+            />
+          )}
+          {preset.provider === "gemini-cli" && (
+            <CliStatusPill
+              binary="gemini"
+              detectCmd="gemini_cli_detect"
+              installHint="npm i -g @google/gemini-cli"
+            />
+          )}
 
           {needsApiKey && (
             <div className="space-y-2">
@@ -420,21 +442,29 @@ interface DetectResult {
   error: string | null
 }
 
+interface CliStatusPillProps {
+  /** Display name of the binary (claude / codex / gemini). */
+  binary: string
+  /** Tauri command name that returns DetectResult. */
+  detectCmd: string
+  /** Install command shown when detection fails. */
+  installHint: string
+}
+
 /**
- * Health-check pill for the Claude Code CLI provider. Auto-runs
- * `claude --version` on mount, with a refresh button for when the user
- * just installed the binary and wants to re-check without reopening the
- * panel. The error message comes straight from the Rust side — it
- * already tailors the hint (macOS quarantine, missing binary, etc).
+ * Health-check pill for local-CLI LLM providers. Auto-runs the matching
+ * `*_cli_detect` Tauri command on mount, with a refresh button for when
+ * the user just installed the binary. The error message comes from the
+ * Rust side — it already tailors the hint per OS where it can.
  */
-function ClaudeCliStatusPill() {
+function CliStatusPill({ binary, detectCmd, installHint }: CliStatusPillProps) {
   const [state, setState] = useState<"loading" | "ok" | "err">("loading")
   const [result, setResult] = useState<DetectResult | null>(null)
 
   async function detect() {
     setState("loading")
     try {
-      const r = await invoke<DetectResult>("claude_cli_detect")
+      const r = await invoke<DetectResult>(detectCmd)
       setResult(r)
       setState(r.installed ? "ok" : "err")
     } catch (e) {
@@ -450,7 +480,9 @@ function ClaudeCliStatusPill() {
 
   useEffect(() => {
     void detect()
-  }, [])
+    // Re-detect when the user switches between presets that share this
+    // component — detectCmd identifies the binary uniquely.
+  }, [detectCmd])
 
   return (
     <div className="space-y-1.5">
@@ -478,7 +510,7 @@ function ClaudeCliStatusPill() {
         {state === "ok" && <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
         {state === "err" && <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
         <div className="min-w-0 flex-1 space-y-0.5">
-          {state === "loading" && <div>Detecting local claude binary…</div>}
+          {state === "loading" && <div>Detecting local {binary} binary…</div>}
           {state === "ok" && (
             <>
               <div>
@@ -494,11 +526,11 @@ function ClaudeCliStatusPill() {
           )}
           {state === "err" && (
             <>
-              <div>{result?.error ?? "claude CLI not available."}</div>
+              <div>{result?.error ?? `${binary} CLI not available.`}</div>
               <div className="text-muted-foreground">
                 Install from{" "}
                 <code className="rounded bg-background/60 px-1 py-0.5 font-mono text-[10px]">
-                  npm i -g @anthropic-ai/claude-code
+                  {installHint}
                 </code>{" "}
                 then re-check.
               </div>

@@ -25,7 +25,7 @@ import { parseFileBlocks, isSafeIngestPath } from "./ingest"
 describe("parseFileBlocks — canonical shapes", () => {
   it("extracts a single well-formed block", () => {
     const text = [
-      "---FILE: wiki/concepts/rope.md---",
+      "---FILE: db/concepts/rope.md---",
       "# RoPE",
       "Rotary positional embedding.",
       "---END FILE---",
@@ -33,36 +33,36 @@ describe("parseFileBlocks — canonical shapes", () => {
     const { blocks, warnings } = parseFileBlocks(text)
     expect(warnings).toHaveLength(0)
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].path).toBe("wiki/concepts/rope.md")
+    expect(blocks[0].path).toBe("db/concepts/rope.md")
     expect(blocks[0].content).toContain("# RoPE")
   })
 
   it("extracts multiple consecutive blocks", () => {
     const text = [
-      "---FILE: wiki/entities/qwen.md---",
+      "---FILE: db/entities/qwen.md---",
       "# Qwen",
       "---END FILE---",
       "",
-      "---FILE: wiki/concepts/moe.md---",
+      "---FILE: db/concepts/moe.md---",
       "# MoE",
       "---END FILE---",
       "",
-      "---FILE: wiki/sources/paper.md---",
+      "---FILE: db/sources/paper.md---",
       "# Source summary",
       "---END FILE---",
     ].join("\n")
     const { blocks, warnings } = parseFileBlocks(text)
     expect(warnings).toHaveLength(0)
     expect(blocks.map((b) => b.path)).toEqual([
-      "wiki/entities/qwen.md",
-      "wiki/concepts/moe.md",
-      "wiki/sources/paper.md",
+      "db/entities/qwen.md",
+      "db/concepts/moe.md",
+      "db/sources/paper.md",
     ])
   })
 
   it("accepts hyphenated paths", () => {
     const text = [
-      "---FILE: wiki/concepts/multi-head-attention.md---",
+      "---FILE: db/concepts/multi-head-attention.md---",
       "body",
       "---END FILE---",
     ].join("\n")
@@ -73,7 +73,7 @@ describe("parseFileBlocks — canonical shapes", () => {
     const text = [
       "Here are the wiki files:",
       "",
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "body",
       "---END FILE---",
     ].join("\n")
@@ -86,11 +86,11 @@ describe("parseFileBlocks — canonical shapes", () => {
 describe("parseFileBlocks — H1: CRLF line endings", () => {
   it("extracts all blocks when input uses Windows CRLF", () => {
     const text = [
-      "---FILE: wiki/entities/qwen.md---",
+      "---FILE: db/entities/qwen.md---",
       "# Qwen",
       "---END FILE---",
       "",
-      "---FILE: wiki/concepts/moe.md---",
+      "---FILE: db/concepts/moe.md---",
       "# MoE",
       "---END FILE---",
     ].join("\r\n")
@@ -98,8 +98,8 @@ describe("parseFileBlocks — H1: CRLF line endings", () => {
     expect(warnings).toHaveLength(0)
     expect(blocks).toHaveLength(2)
     expect(blocks.map((b) => b.path)).toEqual([
-      "wiki/entities/qwen.md",
-      "wiki/concepts/moe.md",
+      "db/entities/qwen.md",
+      "db/concepts/moe.md",
     ])
     // Content should have LF only (normalized).
     for (const b of blocks) {
@@ -109,7 +109,7 @@ describe("parseFileBlocks — H1: CRLF line endings", () => {
 
   it("handles mixed CRLF body with LF markers", () => {
     const text =
-      "---FILE: wiki/concepts/foo.md---\nline1\r\nline2\r\n---END FILE---"
+      "---FILE: db/concepts/foo.md---\nline1\r\nline2\r\n---END FILE---"
     const { blocks } = parseFileBlocks(text)
     expect(blocks).toHaveLength(1)
     expect(blocks[0].content).toBe("line1\nline2")
@@ -121,25 +121,25 @@ describe("parseFileBlocks — H1: CRLF line endings", () => {
 describe("parseFileBlocks — H2: truncated streams (surface, don't hide)", () => {
   it("emits a warning when the final block has no closer", () => {
     const text = [
-      "---FILE: wiki/entities/qwen.md---",
+      "---FILE: db/entities/qwen.md---",
       "# Qwen",
       "---END FILE---",
       "",
-      "---FILE: wiki/concepts/moe.md---",
+      "---FILE: db/concepts/moe.md---",
       "# Mixture of Exp", // stream cut here
     ].join("\n")
     const { blocks, warnings } = parseFileBlocks(text)
     // Completed block makes it through.
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].path).toBe("wiki/entities/qwen.md")
+    expect(blocks[0].path).toBe("db/entities/qwen.md")
     // Unclosed block is surfaced as a warning rather than silently lost.
     expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toMatch(/wiki\/concepts\/moe\.md/)
+    expect(warnings[0]).toMatch(/db\/concepts\/moe\.md/)
     expect(warnings[0]).toMatch(/not closed/i)
   })
 
   it("warns when the only block is unclosed", () => {
-    const text = "---FILE: wiki/concepts/rope.md---\n# RoPE\nIt rotates"
+    const text = "---FILE: db/concepts/rope.md---\n# RoPE\nIt rotates"
     const { blocks, warnings } = parseFileBlocks(text)
     expect(blocks).toHaveLength(0)
     expect(warnings).toHaveLength(1)
@@ -152,7 +152,7 @@ describe("parseFileBlocks — H2: truncated streams (surface, don't hide)", () =
 describe("parseFileBlocks — H3: tolerant marker matching", () => {
   it("accepts `--- END FILE ---` (inner spaces)", () => {
     const text = [
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "body",
       "--- END FILE ---",
     ].join("\n")
@@ -161,7 +161,7 @@ describe("parseFileBlocks — H3: tolerant marker matching", () => {
 
   it("accepts `---end file---` (lowercase)", () => {
     const text = [
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "body",
       "---end file---",
     ].join("\n")
@@ -170,17 +170,17 @@ describe("parseFileBlocks — H3: tolerant marker matching", () => {
 
   it("accepts `--- FILE: path ---` (spaces after leading dashes)", () => {
     const text = [
-      "--- FILE: wiki/concepts/foo.md ---",
+      "--- FILE: db/concepts/foo.md ---",
       "body",
       "---END FILE---",
     ].join("\n")
     const { blocks } = parseFileBlocks(text)
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].path).toBe("wiki/concepts/foo.md")
+    expect(blocks[0].path).toBe("db/concepts/foo.md")
   })
 
   it("tolerates trailing whitespace on the opener line", () => {
-    const text = "---FILE: wiki/concepts/foo.md---   \nbody\n---END FILE---"
+    const text = "---FILE: db/concepts/foo.md---   \nbody\n---END FILE---"
     expect(parseFileBlocks(text).blocks).toHaveLength(1)
   })
 
@@ -188,7 +188,7 @@ describe("parseFileBlocks — H3: tolerant marker matching", () => {
     // `---END FILE---` inside a list item is NOT on its own line, so
     // must not end the block. The regex is anchored ^...$.
     const text = [
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "Not to be written:",
       "- `---END FILE---` in backticks (this is prose)",
       "real content continues",
@@ -209,7 +209,7 @@ describe("parseFileBlocks — H5: code-fence awareness", () => {
     // marker in a code example. Naive parsers truncate the outer block
     // at the first inner marker; the fence-aware parser keeps going.
     const text = [
-      "---FILE: wiki/concepts/ingest-format.md---",
+      "---FILE: db/concepts/ingest-format.md---",
       "# Ingest Format",
       "",
       "Example of a FILE block:",
@@ -226,7 +226,7 @@ describe("parseFileBlocks — H5: code-fence awareness", () => {
     const { blocks, warnings } = parseFileBlocks(text)
     expect(warnings).toHaveLength(0)
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].path).toBe("wiki/concepts/ingest-format.md")
+    expect(blocks[0].path).toBe("db/concepts/ingest-format.md")
     // Content must include BOTH the fenced example AND the post-fence
     // prose — which the old parser silently dropped.
     expect(blocks[0].content).toContain("```plaintext")
@@ -235,7 +235,7 @@ describe("parseFileBlocks — H5: code-fence awareness", () => {
 
   it("handles multiple fenced blocks in one page", () => {
     const text = [
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "```",
       "---END FILE---",
       "```",
@@ -256,7 +256,7 @@ describe("parseFileBlocks — H5: code-fence awareness", () => {
 
   it("handles nested-length fences per CommonMark (outer 4-tick, inner 3-tick)", () => {
     const text = [
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "````markdown",
       "```",
       "---END FILE---",
@@ -276,7 +276,7 @@ describe("parseFileBlocks — H5: code-fence awareness", () => {
     // If we wrongly treated 3-tick as closing, `---END FILE---` after
     // it would exit the block prematurely.
     const text = [
-      "---FILE: wiki/concepts/foo.md---",
+      "---FILE: db/concepts/foo.md---",
       "````",
       "```",
       "---END FILE---", // still inside the 4-tick fence
@@ -318,11 +318,11 @@ describe("parseFileBlocks — H6: empty-path blocks", () => {
 // regression that loosens the regex shows up immediately.
 
 describe("isSafeIngestPath — what the validator accepts and rejects", () => {
-  it("accepts canonical wiki paths", () => {
-    expect(isSafeIngestPath("wiki/concepts/foo.md")).toBe(true)
-    expect(isSafeIngestPath("wiki/index.md")).toBe(true)
-    expect(isSafeIngestPath("wiki/sources/some-paper.md")).toBe(true)
-    expect(isSafeIngestPath("wiki/entities/transformer.md")).toBe(true)
+  it("accepts canonical db paths", () => {
+    expect(isSafeIngestPath("db/concepts/foo.md")).toBe(true)
+    expect(isSafeIngestPath("db/index.md")).toBe(true)
+    expect(isSafeIngestPath("db/sources/some-paper.md")).toBe(true)
+    expect(isSafeIngestPath("db/entities/transformer.md")).toBe(true)
   })
 
   it("rejects empty / whitespace-only paths", () => {
@@ -331,19 +331,21 @@ describe("isSafeIngestPath — what the validator accepts and rejects", () => {
     expect(isSafeIngestPath("\t\n")).toBe(false)
   })
 
-  it("rejects paths outside wiki/ (no leading wiki/ prefix)", () => {
-    // Even relative-looking paths that don't start with wiki/ get
-    // rejected — the ingest pipeline is supposed to write to wiki/
-    // ONLY, and any other tree (raw/, src-tauri/, …) is a red flag.
+  it("rejects paths outside the safe prefixes", () => {
+    // Phase B drops `wiki/` from the allowed list — only db/, processed_1/,
+    // pending/, counterexamples/, question_types/, and exclusions/ are safe
+    // ingest destinations. Anything else (raw/, src-tauri/, even legacy
+    // wiki/) is rejected.
     expect(isSafeIngestPath("notes/foo.md")).toBe(false)
     expect(isSafeIngestPath("foo.md")).toBe(false)
     expect(isSafeIngestPath("raw/sources/leaked.md")).toBe(false)
+    expect(isSafeIngestPath("wiki/concepts/foo.md")).toBe(false)
   })
 
   it("rejects absolute POSIX paths", () => {
     expect(isSafeIngestPath("/etc/passwd")).toBe(false)
     expect(isSafeIngestPath("/Users/nash_su/.ssh/authorized_keys")).toBe(false)
-    expect(isSafeIngestPath("/wiki/foo.md")).toBe(false) // even with wiki/ in the path
+    expect(isSafeIngestPath("/db/foo.md")).toBe(false) // absolute paths are rejected even under db/
   })
 
   it("rejects Windows absolute paths and drive letters", () => {
@@ -355,35 +357,35 @@ describe("isSafeIngestPath — what the validator accepts and rejects", () => {
   })
 
   it("rejects any segment exactly equal to .. (every position)", () => {
-    expect(isSafeIngestPath("wiki/../etc/passwd")).toBe(false)
-    expect(isSafeIngestPath("wiki/concepts/../../etc/passwd")).toBe(false)
-    expect(isSafeIngestPath("wiki/..")).toBe(false)
+    expect(isSafeIngestPath("db/../etc/passwd")).toBe(false)
+    expect(isSafeIngestPath("db/concepts/../../etc/passwd")).toBe(false)
+    expect(isSafeIngestPath("db/..")).toBe(false)
     expect(isSafeIngestPath("..")).toBe(false)
     // Backslash-separated traversal must also be caught (we normalize).
-    expect(isSafeIngestPath("wiki\\..\\etc\\passwd")).toBe(false)
+    expect(isSafeIngestPath("db\\..\\etc\\passwd")).toBe(false)
   })
 
   it("does NOT reject filenames that merely CONTAIN double dots (e.g. version suffix)", () => {
     // `..` is a path SEGMENT, not a substring. A filename like
     // `qwen-2.5..notes.md` is unusual but legal — our split-on-/
     // means each segment is checked independently.
-    expect(isSafeIngestPath("wiki/concepts/qwen-2.5..notes.md")).toBe(true)
-    expect(isSafeIngestPath("wiki/concepts/foo..bar.md")).toBe(true)
+    expect(isSafeIngestPath("db/concepts/qwen-2.5..notes.md")).toBe(true)
+    expect(isSafeIngestPath("db/concepts/foo..bar.md")).toBe(true)
   })
 
   it("rejects NUL bytes and control characters", () => {
     // Classic CGI / shell path-truncation tricks. Even if the underlying
     // FS would accept them, surface them as suspicious and refuse.
-    expect(isSafeIngestPath("wiki/concepts/foo\x00.md")).toBe(false)
-    expect(isSafeIngestPath("wiki/concepts/foo\nbar.md")).toBe(false)
-    expect(isSafeIngestPath("wiki/\x07alarm.md")).toBe(false)
+    expect(isSafeIngestPath("db/concepts/foo\x00.md")).toBe(false)
+    expect(isSafeIngestPath("db/concepts/foo\nbar.md")).toBe(false)
+    expect(isSafeIngestPath("db/\x07alarm.md")).toBe(false)
   })
 })
 
 describe("parseFileBlocks — path-traversal guard end-to-end", () => {
   it("drops blocks with ../ paths and surfaces a warning", () => {
     const text = [
-      "---FILE: wiki/concepts/legit.md---",
+      "---FILE: db/concepts/legit.md---",
       "Real page.",
       "---END FILE---",
       "---FILE: ../../etc/passwd---",
@@ -393,7 +395,7 @@ describe("parseFileBlocks — path-traversal guard end-to-end", () => {
     const { blocks, warnings } = parseFileBlocks(text)
     // Only the legit block survives.
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].path).toBe("wiki/concepts/legit.md")
+    expect(blocks[0].path).toBe("db/concepts/legit.md")
     // The traversal block triggers a visible warning, not a silent drop.
     expect(warnings.some((w) => w.includes("../../etc/passwd"))).toBe(true)
     expect(warnings.some((w) => w.includes("unsafe path"))).toBe(true)
@@ -410,7 +412,7 @@ describe("parseFileBlocks — path-traversal guard end-to-end", () => {
     expect(warnings.some((w) => w.includes("unsafe path"))).toBe(true)
   })
 
-  it("drops blocks not under wiki/", () => {
+  it("drops blocks not under db/ (or any safe prefix)", () => {
     const text = [
       "---FILE: src-tauri/src/main.rs---",
       "fn main() { panic!(\"injected\"); }",
@@ -427,20 +429,20 @@ describe("parseFileBlocks — path-traversal guard end-to-end", () => {
     // confused and emits both. We keep the legitimate output and drop
     // the traversal silently-but-loudly (warning, not crash).
     const text = [
-      "---FILE: wiki/concepts/topic-a.md---",
+      "---FILE: db/concepts/topic-a.md---",
       "topic A page",
       "---END FILE---",
       "---FILE: ../config.json---",
       "{\"hijacked\": true}",
       "---END FILE---",
-      "---FILE: wiki/entities/topic-b.md---",
+      "---FILE: db/entities/topic-b.md---",
       "topic B page",
       "---END FILE---",
     ].join("\n")
     const { blocks, warnings } = parseFileBlocks(text)
     expect(blocks.map((b) => b.path)).toEqual([
-      "wiki/concepts/topic-a.md",
-      "wiki/entities/topic-b.md",
+      "db/concepts/topic-a.md",
+      "db/entities/topic-b.md",
     ])
     expect(warnings.some((w) => w.includes("../config.json"))).toBe(true)
   })

@@ -38,7 +38,7 @@ function makeFileNode(name: string, content: string): { node: FileNode; content:
   return {
     node: {
       name,
-      path: `/project/wiki/${name}`,
+      path: `/project/db/${name}`,
       is_dir: false,
       children: [],
     } as FileNode,
@@ -134,7 +134,7 @@ describe("runSemanticLint — activity & early returns", () => {
     expect(["done", "error"]).toContain(items[0].status)
   })
 
-  it("returns empty and marks done when wiki has no pages", async () => {
+  it("returns empty and marks done when db has no pages", async () => {
     mockListDirectory.mockResolvedValue([])
 
     const result = await runSemanticLint("/project", fakeLlmConfig())
@@ -142,10 +142,10 @@ describe("runSemanticLint — activity & early returns", () => {
     expect(mockStreamChat).not.toHaveBeenCalled()
 
     const items = useActivityStore.getState().items
-    expect(items[0].detail).toMatch(/no wiki pages/i)
+    expect(items[0].detail).toMatch(/no db pages/i)
   })
 
-  it("marks error status when wiki directory read fails", async () => {
+  it("marks error status when db directory read fails", async () => {
     mockListDirectory.mockRejectedValue(new Error("ENOENT"))
     await runSemanticLint("/project", fakeLlmConfig())
     const items = useActivityStore.getState().items

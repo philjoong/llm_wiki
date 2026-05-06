@@ -8,7 +8,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { executeIngestWrites } from "@/lib/ingest"
 import { listDirectory, readFile, deleteFile } from "@/commands/fs"
-import { searchWiki } from "@/lib/search"
+import { runExcludeSearch, type SearchTrace } from "@/lib/exclude-search"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
@@ -169,6 +169,7 @@ export function ChatPanel() {
       const systemMessages: LLMMessage[] = []
       let queryRefs: { title: string; path: string }[] = []
       let langReminder: string | undefined
+      let searchTrace: SearchTrace | undefined
       // Pure greetings ("hi", "你好", "嗨") don't warrant running the whole
       // retrieval pipeline — it's slow, costs context, and drags in random
       // wiki pages the user clearly didn't ask about. Short-circuit with a
@@ -202,13 +203,35 @@ export function ChatPanel() {
         } = computeContextBudget(llmConfig.maxContextSize)
 
         const [rawIndex, purpose] = await Promise.all([
-          readFile(`${pp}/wiki/index.md`).catch(() => ""),
+          readFile(`${pp}/db/index.md`).catch(() => ""),
           readFile(`${pp}/purpose.md`).catch(() => ""),
         ])
 
-        // ── Phase 1: Tokenized search → top 10 ────────────────
-        const searchResults = await searchWiki(pp, text)
-        const topSearchResults = searchResults.slice(0, 10)
+        // ── Phase 1: Exclusion-aware retrieval (IDEA.md Part 2) ───
+        // Replaces the prior `searchWiki` call. Pipeline:
+        //   classifyQuestion → load exclusions for that type
+        //   → applyExclusions over the db/ tree → searchPaths
+        //     (token + vector hybrid restricted to the residue)
+        // The trace is persisted on the assistant message so the user
+        // can see what was ruled out and why (§2.9). When the residue
+        // is empty AND the question was classified, we surface the
+        // type's `zeroResidueMeaning` instead of fabricating an answer
+        // (§2.10) — see the early return below.
+        const exclude = await runExcludeSearch(text, pp, llmConfig)
+        searchTrace = exclude.trace
+        const keptPathSet = new Set(exclude.keptPaths)
+        const topSearchResults = exclude.hits.slice(0, 10)
+
+        if (
+          exclude.trace.residueCount === 0 &&
+          exclude.trace.judgedType !== null &&
+          exclude.trace.zeroResidueMeaning
+        ) {
+          lastQueryPages = []
+          finalizeStream(exclude.trace.zeroResidueMeaning, [], exclude.trace)
+          abortRef.current = null
+          return
+        }
 
         // ── Trim index by relevance if over budget ─────────────
         let index = rawIndex
@@ -237,9 +260,13 @@ export function ChatPanel() {
           }
         }
 
-        // ── Phase 2: Graph 1-level expansion ───────────────────
-        // Note: Vector search (if enabled) is already merged into searchResults
-        // by searchWiki() in search.ts — no duplicate code needed here.
+        // ── Phase 2: Graph 1-level expansion (residue-bounded) ─
+        // Hybrid token+vector fusion already happened inside
+        // `searchPaths`. Here we widen the candidate set via the
+        // wiki-link / source-overlap graph, but ONLY to nodes that are
+        // still in the residue. Pulling an excluded page back in via
+        // graph traversal would silently undo the pre-exclusion
+        // contract (IDEA.md §2.5).
         const graph = await buildRetrievalGraph(pp, dataVersion)
         const expandedIds = new Set<string>()
         const searchHitPaths = new Set(topSearchResults.map((r) => r.path))
@@ -253,6 +280,7 @@ export function ChatPanel() {
             if (relevance < 2.0) continue
             if (searchHitPaths.has(node.path)) continue
             if (expandedIds.has(node.id)) continue
+            if (!keptPathSet.has(normalizePath(node.path))) continue
             expandedIds.add(node.id)
             graphExpansions.push({ title: node.title, path: node.path, relevance })
           }
@@ -293,20 +321,37 @@ export function ChatPanel() {
         }
         // P3: Overview fallback
         if (relevantPages.length === 0) {
-          await tryAddPage("Overview", `${pp}/wiki/overview.md`, 3)
+          await tryAddPage("Overview", `${pp}/db/overview.md`, 3)
         }
 
         const pagesContext = relevantPages.length > 0
           ? relevantPages.map((p, i) =>
               `### [${i + 1}] ${p.title}\nPath: ${p.path}\n\n${p.content}`
             ).join("\n\n---\n\n")
-          : "(No wiki pages found)"
+          : "(No db pages found)"
 
         const pageList = relevantPages.map((p, i) =>
           `[${i + 1}] ${p.title} (${p.path})`
         ).join("\n")
 
         const outLang = getOutputLanguage(text)
+
+        // Residue meta block: tell the model the candidate space was
+        // already pruned for this question type, so it shouldn't pull
+        // in memory from the excluded regions. When no type was
+        // judged, we still note that no exclusions were applied — gives
+        // the model a stable shape regardless of classification outcome.
+        const judged = exclude.trace.judgedType
+        const residueMeta = judged
+          ? [
+              "## Retrieval Context",
+              `The wiki pages below are the RESIDUE — what remains after pre-excluding regions known not to apply to question type "${judged.name}". The exclusions are deliberate domain rules, not noise.`,
+              "Do NOT supplement these pages with information you remember about topics outside this residue. The excluded regions have been ruled out for this question type and using them would defeat the whole point of pre-exclusion.",
+            ].join("\n")
+          : [
+              "## Retrieval Context",
+              "No question type was classified for this turn, so no exclusions were applied — the wiki pages below come from the unfiltered candidate space.",
+            ].join("\n")
 
         systemMessages.push({
           role: "system",
@@ -318,10 +363,17 @@ export function ChatPanel() {
             "- If the provided pages don't contain enough information, say so honestly.",
             "- Use [[wikilink]] syntax to reference wiki pages.",
             "- When citing information, use the page number in brackets, e.g. [1], [2].",
-            "- At the VERY END of your response, add a hidden comment listing which page numbers you used:",
+            "- At the END of your response, add a `## Sources` section listing every page you cited as a wikilink, one per line, in the order you cited them.",
+            "  Example:",
+            "  ## Sources",
+            "  - [[entities/foo]]",
+            "  - [[concepts/bar]]",
+            "- After the `## Sources` section, add a hidden comment listing which page numbers you used:",
             "  <!-- cited: 1, 3, 5 -->",
             "",
             "Use markdown formatting for clarity.",
+            "",
+            residueMeta,
             "",
             purpose ? `## Wiki Purpose\n${purpose}` : "",
             index ? `## Wiki Index\n${index}` : "",
@@ -389,12 +441,12 @@ export function ChatPanel() {
             appendStreamToken(token)
           },
           onDone: () => {
-            finalizeStream(accumulated, queryRefs)
+            finalizeStream(accumulated, queryRefs, searchTrace)
             abortRef.current = null
             // save-worthy detection removed — user has direct "Save to Wiki" button on each message
           },
           onError: (err) => {
-            finalizeStream(`Error: ${err.message}`, undefined)
+            finalizeStream(`Error: ${err.message}`, undefined, searchTrace)
             abortRef.current = null
           },
         },

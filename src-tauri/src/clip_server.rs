@@ -28,6 +28,7 @@ pub fn get_daemon_status() -> &'static str {
 
 pub fn start_clip_server() {
     thread::spawn(|| {
+        #[allow(unused_assignments)]
         let mut restart_count: u32 = 0;
 
         loop {

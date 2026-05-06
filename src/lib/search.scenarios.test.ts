@@ -72,7 +72,7 @@ describe("search scenarios (fixture-driven)", () => {
 
       const results = await searchWiki(ctx.tmp.path, scenario.query)
 
-      // Helper: does a scenario-relative path (e.g. "wiki/attention.md")
+      // Helper: does a scenario-relative path (e.g. "db/attention.md")
       // match any result in the list?
       function resultFor(relPath: string) {
         // Results have absolute paths; compare by suffix-ending-in-relPath

@@ -26,9 +26,13 @@ vi.mock("@/commands/fs", () => realFs)
 // of vector results coming from LanceDB, with no real model calls.
 const mockSearchByEmbedding =
   vi.fn<(...args: unknown[]) => Promise<Array<{ id: string; score: number }>>>()
-vi.mock("./embedding", () => ({
-  searchByEmbedding: (...args: unknown[]) => mockSearchByEmbedding(...args),
-}))
+vi.mock("./embedding", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embedding")>()
+  return {
+    ...actual,
+    searchByEmbedding: (...args: unknown[]) => mockSearchByEmbedding(...args),
+  }
+})
 
 import { searchWiki } from "./search"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -38,7 +42,7 @@ interface Ctx {
 }
 let ctx: Ctx | undefined
 
-/** Lay out a small project on disk: just the wiki/* files we need. */
+/** Lay out a small project on disk: just the db/* files we need. */
 async function setupProject(files: Record<string, string>): Promise<Ctx> {
   const tmp = await createTempProject("search-rrf")
   for (const [rel, content] of Object.entries(files)) {
@@ -82,18 +86,19 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
     // vector match wins because it ranks #1 in vector list while the
     // token match ranks deep in token list.
     ctx = await setupProject({
-      "wiki/concepts/flash-attention.md":
+      "db/concepts/flash-attention.md":
         "---\ntitle: Flash Attention\n---\n\n# Flash Attention\n\nIO-aware tiled attention.",
-      "wiki/concepts/memory-leak.md":
+      "db/concepts/memory-leak.md":
         "---\ntitle: Memory Leak Diagnosis\n---\n\n# Memory Leak\n\nRSS growing over time.",
     })
 
     // Token search will find "memory-leak" (literal "Memory" hit) and
     // possibly nothing for flash-attention. Vector search ranks
     // flash-attention #1.
+    // page_id encodes the path under db/ (Phase B): db/concepts/flash-attention.md → "concepts_flash-attention".
     mockSearchByEmbedding.mockResolvedValueOnce([
-      { id: "flash-attention", score: 0.85 },
-      { id: "memory-leak", score: 0.4 },
+      { id: "concepts_flash-attention", score: 0.85 },
+      { id: "concepts_memory-leak", score: 0.4 },
     ])
 
     const out = await searchWiki(ctx.tmp.path, "GPU memory bandwidth optimization for attention")
@@ -119,14 +124,14 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
     //
     // → A wins clearly; B and C tie (broken by alphabetical path).
     ctx = await setupProject({
-      "wiki/concepts/aaa.md": "---\ntitle: AAA\n---\n\n# AAA\n\nrope rope rope.",
-      "wiki/concepts/bbb.md": "---\ntitle: BBB\n---\n\n# BBB\n\nrope.",
-      "wiki/concepts/ccc.md": "---\ntitle: CCC\n---\n\n# CCC\n\nunrelated.",
+      "db/concepts/aaa.md": "---\ntitle: AAA\n---\n\n# AAA\n\nrope rope rope.",
+      "db/concepts/bbb.md": "---\ntitle: BBB\n---\n\n# BBB\n\nrope.",
+      "db/concepts/ccc.md": "---\ntitle: CCC\n---\n\n# CCC\n\nunrelated.",
     })
 
     mockSearchByEmbedding.mockResolvedValueOnce([
-      { id: "aaa", score: 0.95 },
-      { id: "ccc", score: 0.7 },
+      { id: "concepts_aaa", score: 0.95 },
+      { id: "concepts_ccc", score: 0.7 },
     ])
 
     const out = await searchWiki(ctx.tmp.path, "rope")
@@ -152,9 +157,9 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
     })
 
     ctx = await setupProject({
-      "wiki/concepts/attention.md":
+      "db/concepts/attention.md":
         "---\ntitle: Attention\n---\n\n# Attention\n\nbody about attention.",
-      "wiki/concepts/random.md":
+      "db/concepts/random.md":
         "---\ntitle: Random\n---\n\n# Random\n\nattention is mentioned briefly.",
     })
 
@@ -171,14 +176,14 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
 
   it("token list empty (no keyword match anywhere) → vector ranks alone determine order", async () => {
     ctx = await setupProject({
-      "wiki/concepts/foo.md": "---\ntitle: Foo\n---\n\n# Foo\n\nfoo body.",
-      "wiki/concepts/bar.md": "---\ntitle: Bar\n---\n\n# Bar\n\nbar body.",
+      "db/concepts/foo.md": "---\ntitle: Foo\n---\n\n# Foo\n\nfoo body.",
+      "db/concepts/bar.md": "---\ntitle: Bar\n---\n\n# Bar\n\nbar body.",
     })
 
     // Query has no token overlap with either page; vector finds them.
     mockSearchByEmbedding.mockResolvedValueOnce([
-      { id: "bar", score: 0.7 },
-      { id: "foo", score: 0.3 },
+      { id: "concepts_bar", score: 0.7 },
+      { id: "concepts_foo", score: 0.3 },
     ])
 
     const out = await searchWiki(ctx.tmp.path, "completely unrelated query terms")
@@ -200,16 +205,16 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
     // Expected: B (in top-1 of vector) MUST appear at the top
     // alongside A — under the old behavior, B never made it in.
     ctx = await setupProject({
-      "wiki/concepts/quick-mention.md":
+      "db/concepts/quick-mention.md":
         "---\ntitle: Quick Mention\n---\n\n# Quick Mention\n\nrope is mentioned once.",
-      "wiki/concepts/positional-encoding.md":
+      "db/concepts/positional-encoding.md":
         "---\ntitle: Positional Encoding\n---\n\n# Positional Encoding\n\nstrong semantic match.",
     })
 
     // Token search will hit "rope" only in quick-mention.md.
     // Vector search puts positional-encoding at rank 1.
     mockSearchByEmbedding.mockResolvedValueOnce([
-      { id: "positional-encoding", score: 0.92 },
+      { id: "concepts_positional-encoding", score: 0.92 },
     ])
 
     const out = await searchWiki(ctx.tmp.path, "rope")
@@ -235,13 +240,13 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
     // search returns an id whose .md file doesn't exist, the search
     // pipeline must not crash and must not surface a phantom result.
     ctx = await setupProject({
-      "wiki/concepts/exists.md":
+      "db/concepts/exists.md":
         "---\ntitle: Exists\n---\n\n# Exists\n\nbody.",
     })
 
     mockSearchByEmbedding.mockResolvedValueOnce([
-      { id: "exists", score: 0.9 },
-      { id: "ghost", score: 0.85 }, // no file with this slug
+      { id: "concepts_exists", score: 0.9 },
+      { id: "concepts_ghost", score: 0.85 }, // no file with this slug
     ])
 
     const out = await searchWiki(ctx.tmp.path, "anything")

@@ -345,6 +345,40 @@ describe("runExcludeSearch", () => {
     expect(out.trace.appliedEntries[0].pattern).toBe("db/policy.md")
   })
 
+  it("returns keptPaths so callers can constrain downstream expansion to the residue", async () => {
+    // Phase A: chat-panel uses keptPaths to bound its graph 1-level
+    // expansion. If the residue isn't surfaced, expansion silently
+    // pulls excluded pages back in (IDEA.md §2.5 violation).
+    mockLoadTypes.mockResolvedValue([
+      { id: "t", name: "T", description: "" },
+    ])
+    mockClassify.mockResolvedValue({
+      typeId: "t",
+      confidence: 0.5,
+      reasoning: "",
+    })
+    mockLoadExcl.mockResolvedValue([
+      {
+        questionTypeIds: ["t"],
+        level: "pattern",
+        filePath: "exclusions/by_question_type/t.md",
+        entries: [
+          {
+            pattern: "db/instance_server/**",
+            rationale: "infra excluded",
+            sources: [],
+          },
+        ],
+      },
+    ])
+    mockSearch.mockResolvedValue([])
+
+    const out = await runExcludeSearch("q", PP, cfg)
+
+    // policy.md survives; both instance_server/* files are excluded.
+    expect(out.keptPaths).toEqual([`${PP}/db/policy.md`])
+  })
+
   it("treats a missing db/ tree as 0 candidates without throwing", async () => {
     mockList.mockImplementation(async () => {
       throw new Error("not found")

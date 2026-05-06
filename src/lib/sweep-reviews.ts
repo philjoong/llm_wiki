@@ -54,7 +54,7 @@ async function buildWikiIndex(projectPath: string): Promise<WikiIndex> {
   const pages: WikiPageSummary[] = []
 
   try {
-    const tree = await listDirectory(`${pp}/wiki`)
+    const tree = await listDirectory(`${pp}/db`)
     const files = flattenMdFiles(tree)
 
     for (const file of files) {

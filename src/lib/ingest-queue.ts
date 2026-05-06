@@ -472,8 +472,11 @@ async function processNext(projectId: string): Promise<void> {
 
   const llmConfig = useWikiStore.getState().llmConfig
 
-  // Check if LLM is configured
-  if (!llmConfig.apiKey && llmConfig.provider !== "ollama" && llmConfig.provider !== "custom") {
+  // Check if LLM is configured. Local-CLI providers (claude-code, codex-cli,
+  // gemini-cli) and self-hosted endpoints (ollama, custom) authenticate
+  // out-of-band, so a missing apiKey is expected for them.
+  const keylessProviders = new Set(["ollama", "custom", "claude-code", "codex-cli", "gemini-cli"])
+  if (!llmConfig.apiKey && !keylessProviders.has(llmConfig.provider)) {
     next.status = "failed"
     next.error = "LLM not configured — set API key in Settings"
     processing = false

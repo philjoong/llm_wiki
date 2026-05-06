@@ -5,16 +5,16 @@
  * time, asks the LLM to emit an updated `index.md`, then overwrites
  * the file at write time. If two ingests run concurrently for the
  * SAME project (queue-driven ingest happening while a Save-to-Wiki
- * or deep-research auto-ingest fires), each LLM sees the same
- * pre-state of `index.md`, each emits its own "updated" version,
- * and whichever finishes second silently overwrites the first.
- * Net effect: pages from the first ingest disappear from the index
- * with no error surfaced anywhere.
+ * auto-ingest fires), each LLM sees the same pre-state of
+ * `index.md`, each emits its own "updated" version, and whichever
+ * finishes second silently overwrites the first. Net effect: pages
+ * from the first ingest disappear from the index with no error
+ * surfaced anywhere.
  *
- * The queue itself is already serial — but Save-to-Wiki and
- * deep-research bypass the queue (`autoIngest(...).catch(...)`).
- * Wrapping `autoIngest`'s body in `withProjectLock(projectPath, …)`
- * forces all entry points to take turns.
+ * The queue itself is already serial — but Save-to-Wiki bypasses
+ * the queue (`autoIngest(...).catch(...)`). Wrapping `autoIngest`'s
+ * body in `withProjectLock(projectPath, …)` forces all entry points
+ * to take turns.
  *
  * The lock is a simple promise chain. No timeouts, no fairness, no
  * re-entrancy detection — those would all be overkill. If `fn`

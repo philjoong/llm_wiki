@@ -67,8 +67,8 @@ export function LintView() {
     if (!project) return
     const pp = normalizePath(project.path)
     const candidates = [
-      `${pp}/wiki/${page}`,
-      `${pp}/wiki/${page}.md`,
+      `${pp}/db/${page}`,
+      `${pp}/db/${page}.md`,
     ]
     setActiveView("wiki")
     for (const path of candidates) {
@@ -95,9 +95,9 @@ export function LintView() {
       switch (result.type) {
         case "orphan": {
           // Add a link to this page from index.md
-          const indexPath = `${pp}/wiki/index.md`
+          const indexPath = `${pp}/db/index.md`
           let indexContent = ""
-          try { indexContent = await readFile(indexPath) } catch { indexContent = "# Wiki Index\n" }
+          try { indexContent = await readFile(indexPath) } catch { indexContent = "# DB Index\n" }
 
           const pageName = result.page.replace(".md", "").replace(/^.*\//, "")
           const entry = `- [[${pageName}]]`
@@ -112,7 +112,7 @@ export function LintView() {
 
         case "broken-link": {
           // Option: remove the broken link from the page, or send to Review for manual fix
-          const pagePath = `${pp}/wiki/${result.page}`
+          const pagePath = `${pp}/db/${result.page}`
           useReviewStore.getState().addItem({
             type: "confirm",
             title: `Fix broken link in ${result.page}`,
@@ -175,7 +175,7 @@ export function LintView() {
   async function handleDeleteOrphan(result: LintResult, index: number) {
     if (!project) return
     const pp = normalizePath(project.path)
-    const pagePath = `${pp}/wiki/${result.page}`
+    const pagePath = `${pp}/db/${result.page}`
     const confirmed = window.confirm(`Delete orphan page "${result.page}"?`)
     if (!confirmed) return
 

@@ -159,11 +159,11 @@ function fileNameToId(fileName: string): string {
 export async function buildWikiGraph(
   projectPath: string,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; communities: CommunityInfo[] }> {
-  const wikiRoot = `${normalizePath(projectPath)}/wiki`
+  const dbRoot = `${normalizePath(projectPath)}/db`
 
   let tree: FileNode[]
   try {
-    tree = await listDirectory(wikiRoot)
+    tree = await listDirectory(dbRoot)
   } catch {
     return { nodes: [], edges: [], communities: [] }
   }

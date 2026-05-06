@@ -20,7 +20,7 @@ const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
 
 function getFileTypeInfo(path: string): { icon: typeof FileText; type: string } {
   for (const [dir, icon] of Object.entries(FILE_TYPE_ICONS)) {
-    if (path.includes(`/${dir}/`) || path.startsWith(`wiki/${dir}/`)) {
+    if (path.includes(`/${dir}/`) || path.startsWith(`db/${dir}/`)) {
       return { icon, type: dir.charAt(0).toUpperCase() + dir.slice(1, -1) }
     }
   }

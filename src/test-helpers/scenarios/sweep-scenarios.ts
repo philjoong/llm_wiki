@@ -40,8 +40,8 @@ export const sweepScenarios: SweepScenario[] = [
       "attention.md has since been added. Rule stage matches by filename.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/index.md": SHARED_INDEX,
-      "wiki/attention.md": page(
+      "db/index.md": SHARED_INDEX,
+      "db/attention.md": page(
         "Attention",
         "Attention assigns per-token weights within a sequence and lets " +
           "[[transformer]] models capture long-range dependencies.",
@@ -54,7 +54,7 @@ export const sweepScenarios: SweepScenario[] = [
         title: "Missing page: attention",
         description:
           "Transformer page references attention but no dedicated page exists.",
-        affectedPages: ["wiki/transformer.md"],
+        affectedPages: ["db/transformer.md"],
       },
     ],
     expected: {
@@ -72,8 +72,8 @@ export const sweepScenarios: SweepScenario[] = [
       "but the frontmatter title matches — byTitle lookup should resolve it.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/index.md": SHARED_INDEX,
-      "wiki/attn.md": page(
+      "db/index.md": SHARED_INDEX,
+      "db/attn.md": page(
         "Attention Mechanism",
         "The attention mechanism computes a weighted sum of value vectors.",
       ),
@@ -101,8 +101,8 @@ export const sweepScenarios: SweepScenario[] = [
       "match the same dedupe/match key as an English 'Missing page:' variant.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/index.md": "# 索引\n\n- [[注意力机制]]\n",
-      "wiki/注意力机制.md": page(
+      "db/index.md": "# 索引\n\n- [[注意力机制]]\n",
+      "db/注意力机制.md": page(
         "注意力机制",
         "注意力机制是 [[transformer]] 架构的核心组件之一，用于加权聚合序列信息。",
       ),
@@ -129,8 +129,8 @@ export const sweepScenarios: SweepScenario[] = [
       "yet. With no LLM configured, the sweep must leave it pending.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/index.md": SHARED_INDEX,
-      "wiki/attention.md": page("Attention", "..."),
+      "db/index.md": SHARED_INDEX,
+      "db/attention.md": page("Attention", "..."),
     },
     reviews: [
       {
@@ -154,7 +154,7 @@ export const sweepScenarios: SweepScenario[] = [
       "case-insensitive.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/attention.md": page("Attention", "..."),
+      "db/attention.md": page("Attention", "..."),
     },
     reviews: [
       {
@@ -178,7 +178,7 @@ export const sweepScenarios: SweepScenario[] = [
       "space→hyphen fallback so the match still works.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/attention-mechanism.md": page("Attention Mechanism", "..."),
+      "db/attention-mechanism.md": page("Attention Mechanism", "..."),
     },
     reviews: [
       {
@@ -202,7 +202,7 @@ export const sweepScenarios: SweepScenario[] = [
       "so the duplicate situation no longer exists — rule stage must resolve.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/attention.md": page("Attention", "..."),
+      "db/attention.md": page("Attention", "..."),
       // attention-v2.md intentionally absent (user deleted it after the review)
     },
     reviews: [
@@ -213,7 +213,7 @@ export const sweepScenarios: SweepScenario[] = [
         description:
           "attention.md and attention-v2.md cover the same material and " +
           "should be merged or one deleted.",
-        affectedPages: ["wiki/attention.md", "wiki/attention-v2.md"],
+        affectedPages: ["db/attention.md", "db/attention-v2.md"],
       },
     ],
     expected: {
@@ -230,15 +230,15 @@ export const sweepScenarios: SweepScenario[] = [
       "Rule stage must NOT auto-resolve; needs human judgment.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/attention.md": page("Attention", "..."),
-      "wiki/attention-v2.md": page("Attention (v2)", "..."),
+      "db/attention.md": page("Attention", "..."),
+      "db/attention-v2.md": page("Attention (v2)", "..."),
     },
     reviews: [
       {
         id: "r-dup-pending",
         type: "duplicate",
         title: "Duplicate page: Attention concept split",
-        affectedPages: ["wiki/attention.md", "wiki/attention-v2.md"],
+        affectedPages: ["db/attention.md", "db/attention-v2.md"],
       },
     ],
     expected: {
@@ -256,8 +256,8 @@ export const sweepScenarios: SweepScenario[] = [
       "still exist. Would only be resolved by a conservative-LLM scenario.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/attention.md": page("Attention", "Uses softmax over scores."),
-      "wiki/transformer.md": page("Transformer", "Uses linear attention."),
+      "db/attention.md": page("Attention", "Uses softmax over scores."),
+      "db/transformer.md": page("Transformer", "Uses linear attention."),
     },
     reviews: [
       {
@@ -267,7 +267,7 @@ export const sweepScenarios: SweepScenario[] = [
         description:
           "attention.md says softmax, transformer.md says linear. One must " +
           "be wrong or underspecified.",
-        affectedPages: ["wiki/attention.md", "wiki/transformer.md"],
+        affectedPages: ["db/attention.md", "db/transformer.md"],
       },
     ],
     expected: {
@@ -284,7 +284,7 @@ export const sweepScenarios: SweepScenario[] = [
       "doesn't touch them. Without LLM configured, they stay pending.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/attention.md": page("Attention", "..."),
+      "db/attention.md": page("Attention", "..."),
     },
     reviews: [
       {
@@ -310,8 +310,8 @@ export const sweepScenarios: SweepScenario[] = [
       "Uses a fenced JSON response to exercise extractJsonObject.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/index.md": SHARED_INDEX,
-      "wiki/attention.md": page(
+      "db/index.md": SHARED_INDEX,
+      "db/attention.md": page(
         "Attention",
         "Attention defines an effective context window — the span of tokens " +
           "that can influence each output. Modern models extend this to " +
@@ -344,12 +344,12 @@ export const sweepScenarios: SweepScenario[] = [
       "confirms as resolved, one suggestion the LLM conservatively keeps.",
     initialWiki: {
       "purpose.md": SHARED_PURPOSE,
-      "wiki/index.md": SHARED_INDEX,
-      "wiki/attention.md": page(
+      "db/index.md": SHARED_INDEX,
+      "db/attention.md": page(
         "Attention",
         "Attention mechanism details. Covers context windows too.",
       ),
-      "wiki/transformer.md": page("Transformer", "..."),
+      "db/transformer.md": page("Transformer", "..."),
     },
     reviews: [
       {
@@ -361,7 +361,7 @@ export const sweepScenarios: SweepScenario[] = [
         id: "r-mix-contra",
         type: "contradiction",
         title: "Contradiction: attention details differ",
-        affectedPages: ["wiki/attention.md", "wiki/transformer.md"],
+        affectedPages: ["db/attention.md", "db/transformer.md"],
       },
       {
         id: "r-mix-llm",

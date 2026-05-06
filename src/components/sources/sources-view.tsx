@@ -114,13 +114,13 @@ export function SourcesView() {
     setImporting(false)
     await loadSources()
 
-    // Enqueue for serial ingest (runs in background via ingest queue)
-    if (llmConfig.apiKey || llmConfig.provider === "ollama" || llmConfig.provider === "custom") {
-      for (const destPath of importedPaths) {
-        enqueueIngest(project.id, destPath).catch((err) =>
-          console.error(`Failed to enqueue ingest:`, err)
-        )
-      }
+    // Enqueue for serial ingest (runs in background via ingest queue).
+    // The queue itself fails the task with a visible error if no LLM is
+    // configured — do not pre-gate here, or imports vanish without signal.
+    for (const destPath of importedPaths) {
+      enqueueIngest(project.id, destPath).catch((err) =>
+        console.error(`Failed to enqueue ingest:`, err)
+      )
     }
   }
 
@@ -156,35 +156,35 @@ export function SourcesView() {
       setImporting(false)
       await loadSources()
 
-      // Build ingest tasks with folder context
-      if (llmConfig.apiKey || llmConfig.provider === "ollama" || llmConfig.provider === "custom") {
-        const tasks = copiedFiles
-          .filter((fp) => {
-            const ext = fp.split(".").pop()?.toLowerCase() ?? ""
-            // Only ingest text-based files, skip images/media
-            return ["md", "mdx", "txt", "pdf", "docx", "pptx", "xlsx", "xls",
-                    "csv", "json", "html", "htm", "rtf", "xml", "yaml", "yml"].includes(ext)
-          })
-          .map((filePath) => {
-            // Build folder context from relative path. On Windows the
-            // Rust-returned filePath uses backslashes while destDir was
-            // composed with forward slashes — normalize both sides before
-            // the replace so this works on every platform.
-            const normFilePath = normalizePath(filePath)
-            const normDestDir = normalizePath(destDir)
-            const relPath = normFilePath.replace(normDestDir + "/", "")
-            const parts = relPath.split("/")
-            parts.pop() // remove filename
-            const context = parts.length > 0
-              ? `${folderName} > ${parts.join(" > ")}`
-              : folderName
-            return { sourcePath: filePath, folderContext: context }
-          })
+      // Build ingest tasks with folder context. The queue itself fails the
+      // task with a visible error if no LLM is configured — do not pre-gate
+      // here, or imports vanish without signal.
+      const tasks = copiedFiles
+        .filter((fp) => {
+          const ext = fp.split(".").pop()?.toLowerCase() ?? ""
+          // Only ingest text-based files, skip images/media
+          return ["md", "mdx", "txt", "pdf", "docx", "pptx", "xlsx", "xls",
+                  "csv", "json", "html", "htm", "rtf", "xml", "yaml", "yml"].includes(ext)
+        })
+        .map((filePath) => {
+          // Build folder context from relative path. On Windows the
+          // Rust-returned filePath uses backslashes while destDir was
+          // composed with forward slashes — normalize both sides before
+          // the replace so this works on every platform.
+          const normFilePath = normalizePath(filePath)
+          const normDestDir = normalizePath(destDir)
+          const relPath = normFilePath.replace(normDestDir + "/", "")
+          const parts = relPath.split("/")
+          parts.pop() // remove filename
+          const context = parts.length > 0
+            ? `${folderName} > ${parts.join(" > ")}`
+            : folderName
+          return { sourcePath: filePath, folderContext: context }
+        })
 
-        if (tasks.length > 0) {
-          await enqueueBatch(project.id, tasks)
-          console.log(`[Folder Import] Enqueued ${tasks.length} files for ingest`)
-        }
+      if (tasks.length > 0) {
+        await enqueueBatch(project.id, tasks)
+        console.log(`[Folder Import] Enqueued ${tasks.length} files for ingest`)
       }
     } catch (err) {
       console.error(`Failed to import folder:`, err)
@@ -295,12 +295,12 @@ export function SourcesView() {
       const deletedKeys = buildDeletedKeys(deletedInfos)
       if (deletedKeys.size > 0) {
         try {
-          const wikiTree = await listDirectory(`${pp}/wiki`)
-          const allMdFiles = flattenMdFiles(wikiTree)
+          const dbTree = await listDirectory(`${pp}/db`)
+          const allMdFiles = flattenMdFiles(dbTree)
           for (const file of allMdFiles) {
             try {
               const content = await readFile(file.path)
-              const isIndex = file.path === `${pp}/wiki/index.md` ||
+              const isIndex = file.path === `${pp}/db/index.md` ||
                 file.name === "index.md"
               // For index: first drop whole entry lines for deleted
               // pages, then still strip any secondary `[[...]]` refs
@@ -323,11 +323,11 @@ export function SourcesView() {
 
       // Step 7: Append deletion record to log.md
       try {
-        const logPath = `${pp}/wiki/log.md`
-        const logContent = await readFile(logPath).catch(() => "# Wiki Log\n")
+        const logPath = `${pp}/db/log.md`
+        const logContent = await readFile(logPath).catch(() => "# DB Log\n")
         const date = new Date().toISOString().slice(0, 10)
         const keptCount = relatedPages.length - actuallyDeleted.length
-        const logEntry = `\n## [${date}] delete | ${fileName}\n\nDeleted source file and ${actuallyDeleted.length} wiki pages.${keptCount > 0 ? ` ${keptCount} shared pages kept (have other sources).` : ""}\n`
+        const logEntry = `\n## [${date}] delete | ${fileName}\n\nDeleted source file and ${actuallyDeleted.length} db pages.${keptCount > 0 ? ` ${keptCount} shared pages kept (have other sources).` : ""}\n`
         await writeFile(logPath, logContent.trimEnd() + logEntry)
       } catch {
         // non-critical

@@ -256,6 +256,33 @@ function enrichChunkForEmbedding(
   return parts.join("\n\n")
 }
 
+// ── page_id encoding ─────────────────────────────────────────────────────
+
+/**
+ * page_id encoding rule (Phase B):
+ *
+ *   db/<rest>/<name>.md  →  <rest>_<name>   (with `/` replaced by `_`)
+ *   db/<name>.md         →  <name>
+ *
+ * Stem-only IDs (the pre-Phase-B scheme) collide whenever two pages in
+ * different categories share the same filename — e.g.
+ *   db/dungeon/dungeon_a/rewards.md
+ *   db/dungeon/dungeon_b/rewards.md
+ * both used to embed under id `rewards`. The relative-path encoding makes
+ * those distinct without changing `validate_page_id` (it already permits
+ * `[A-Za-z0-9._-]`, and `_` is allowed).
+ *
+ * The input may be either a project-relative path (`db/foo/bar.md`) or an
+ * absolute project path; in both cases we slice off everything up to and
+ * including the first `db/` segment before encoding.
+ */
+export function pageIdFromRelPath(relPath: string): string {
+  const norm = relPath.replace(/\\/g, "/")
+  const dbIdx = norm.indexOf("db/")
+  const tail = dbIdx >= 0 ? norm.slice(dbIdx + 3) : norm
+  return tail.replace(/\.md$/, "").replace(/\//g, "_")
+}
+
 // ── Public API: embedPage / embedAllPages / searchByEmbedding ────────────
 
 /**
@@ -313,10 +340,14 @@ export async function embedPage(
 }
 
 /**
- * Embed every wiki content page that isn't already indexed (or re-embed
+ * Embed every db content page that isn't already indexed (or re-embed
  * all when `force === true`). Driven from Settings → Embedding or on
  * first enable. Skips structural pages (index / log / overview /
  * purpose / schema) — they're aggregate views, not retrieval targets.
+ *
+ * Phase B: walks `db/` (the pre-B `wiki/` tree was renamed) and uses the
+ * relative-path-encoded `page_id` so pages in different subdirectories
+ * with the same stem don't collide.
  */
 export async function embedAllPages(
   projectPath: string,
@@ -329,25 +360,34 @@ export async function embedAllPages(
 
   let tree: FileNode[]
   try {
-    tree = await listDirectory(`${pp}/wiki`)
+    tree = await listDirectory(`${pp}/db`)
   } catch {
     return 0
   }
 
-  const mdFiles: { id: string; path: string }[] = []
-  function walk(nodes: FileNode[]) {
+  const mdFiles: { id: string; path: string; relPath: string }[] = []
+  function walk(nodes: FileNode[], prefix: string) {
     for (const node of nodes) {
       if (node.is_dir && node.children) {
-        walk(node.children)
+        walk(node.children, `${prefix}/${node.name}`)
       } else if (!node.is_dir && node.name.endsWith(".md")) {
-        const id = node.name.replace(/\.md$/, "")
-        if (!["index", "log", "overview", "purpose", "schema"].includes(id)) {
-          mdFiles.push({ id, path: node.path })
+        const stem = node.name.replace(/\.md$/, "")
+        // Structural pages live at the db/ root. The block below skips
+        // them only there; a content page named e.g. db/topics/index.md
+        // would still be indexed.
+        if (
+          prefix === "db" &&
+          ["index", "log", "overview", "purpose", "schema"].includes(stem)
+        ) {
+          continue
         }
+        const relPath = `${prefix}/${node.name}`
+        const id = pageIdFromRelPath(relPath)
+        mdFiles.push({ id, path: node.path, relPath })
       }
     }
   }
-  walk(tree)
+  walk(tree, "db")
 
   let done = 0
   for (const file of mdFiles) {

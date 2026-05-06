@@ -55,6 +55,13 @@ export interface SearchTrace {
 export interface ExcludeSearchResult {
   hits: SearchResult[]
   trace: SearchTrace
+  /**
+   * Absolute paths of every page in the residue (post-exclusion candidate
+   * space). Chat needs this to constrain graph 1-level expansion to the
+   * residue — pulling an excluded page back in via the graph would
+   * silently violate IDEA.md §2.5.
+   */
+  keptPaths: string[]
 }
 
 export async function runExcludeSearch(
@@ -129,7 +136,7 @@ export async function runExcludeSearch(
       : {}),
   }
 
-  return { hits, trace }
+  return { hits, trace, keptPaths: absoluteKept }
 }
 
 /**

@@ -24,6 +24,28 @@ async function streamViaClaudeCodeCli(
   return mod.streamClaudeCodeCli(config, messages, callbacks, signal, requestOverrides)
 }
 
+async function streamViaCodexCli(
+  config: LlmConfig,
+  messages: import("./llm-providers").ChatMessage[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+  requestOverrides?: RequestOverrides,
+) {
+  const mod = await import("./codex-cli-transport")
+  return mod.streamCodexCli(config, messages, callbacks, signal, requestOverrides)
+}
+
+async function streamViaGeminiCli(
+  config: LlmConfig,
+  messages: import("./llm-providers").ChatMessage[],
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal,
+  requestOverrides?: RequestOverrides,
+) {
+  const mod = await import("./gemini-cli-transport")
+  return mod.streamGeminiCli(config, messages, callbacks, signal, requestOverrides)
+}
+
 const DECODER = new TextDecoder()
 
 function parseLines(chunk: Uint8Array, buffer: string): [string[], string] {
@@ -50,11 +72,17 @@ export async function streamChat(
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
 
-  // Claude Code CLI uses a subprocess transport (stdin/stdout), not
+  // Local-CLI providers use subprocess transports (stdin/stdout), not
   // HTTP. Dispatch before getProviderConfig — that function throws for
-  // this provider because it has no URL/headers.
+  // these providers because they have no URL/headers.
   if (config.provider === "claude-code") {
     return streamViaClaudeCodeCli(config, messages, callbacks, signal, requestOverrides)
+  }
+  if (config.provider === "codex-cli") {
+    return streamViaCodexCli(config, messages, callbacks, signal, requestOverrides)
+  }
+  if (config.provider === "gemini-cli") {
+    return streamViaGeminiCli(config, messages, callbacks, signal, requestOverrides)
   }
 
   const providerConfig = getProviderConfig(config)

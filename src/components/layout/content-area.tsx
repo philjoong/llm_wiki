@@ -4,7 +4,6 @@ import { SettingsView } from "@/components/settings/settings-view"
 import { SourcesView } from "@/components/sources/sources-view"
 import { ReviewView } from "@/components/review/review-view"
 import { LintView } from "@/components/lint/lint-view"
-import { SearchView } from "@/components/search/search-view"
 import { GraphView } from "@/components/graph/graph-view"
 import { HistoryView } from "@/components/history/history-view"
 
@@ -20,8 +19,6 @@ export function ContentArea() {
       return <ReviewView />
     case "lint":
       return <LintView />
-    case "search":
-      return <SearchView />
     case "graph":
       return <GraphView />
     case "history":

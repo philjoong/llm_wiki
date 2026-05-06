@@ -1,6 +1,6 @@
 import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
-import type { LlmConfig, SearchApiConfig, EmbeddingConfig, OutputLanguage, ProviderConfigs } from "@/stores/wiki-store"
+import type { LlmConfig, EmbeddingConfig, OutputLanguage, ProviderConfigs } from "@/stores/wiki-store"
 
 const STORE_NAME = "app-state.json"
 const RECENT_PROJECTS_KEY = "recentProjects"
@@ -70,18 +70,6 @@ export async function saveActivePresetId(id: string | null): Promise<void> {
 export async function loadActivePresetId(): Promise<string | null> {
   const store = await getStore()
   return (await store.get<string | null>(ACTIVE_PRESET_KEY)) ?? null
-}
-
-const SEARCH_API_KEY = "searchApiConfig"
-
-export async function saveSearchApiConfig(config: SearchApiConfig): Promise<void> {
-  const store = await getStore()
-  await store.set(SEARCH_API_KEY, config)
-}
-
-export async function loadSearchApiConfig(): Promise<SearchApiConfig | null> {
-  const store = await getStore()
-  return (await store.get<SearchApiConfig>(SEARCH_API_KEY)) ?? null
 }
 
 const EMBEDDING_KEY = "embeddingConfig"

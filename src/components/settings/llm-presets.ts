@@ -16,6 +16,8 @@ export type Provider =
   | "custom"
   | "minimax"
   | "claude-code"
+  | "codex-cli"
+  | "gemini-cli"
 
 export interface LlmPreset {
   /** Stable id used as the dropdown value. */
@@ -90,6 +92,39 @@ export const LLM_PRESETS: LlmPreset[] = [
       "claude-haiku-4-5-20251001",
     ],
     suggestedContextSize: 200000,
+  },
+  {
+    id: "codex-cli",
+    label: "Codex CLI (local)",
+    hint: "Uses the local `codex` binary — no API key needed",
+    provider: "codex-cli",
+    defaultModel: "gpt-5-codex",
+    // Models the OpenAI Codex CLI accepts via `--model`. The CLI talks
+    // to api.openai.com under the user's existing login, so the catalog
+    // mirrors what's available on the chat/completions wire.
+    suggestedModels: [
+      "gpt-5-codex",
+      "gpt-5",
+      "gpt-4.1",
+      "gpt-4o",
+      "o3",
+      "o3-mini",
+    ],
+    suggestedContextSize: 200000,
+  },
+  {
+    id: "gemini-cli",
+    label: "Gemini CLI (local)",
+    hint: "Uses the local `gemini` binary — no API key needed",
+    provider: "gemini-cli",
+    defaultModel: "gemini-2.5-pro",
+    suggestedModels: [
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-2.0-flash",
+    ],
+    suggestedContextSize: 1000000,
   },
   {
     id: "openai",

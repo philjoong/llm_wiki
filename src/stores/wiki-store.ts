@@ -10,18 +10,13 @@ import type { WikiProject, FileNode } from "@/types/wiki"
 export type CustomApiMode = "chat_completions" | "anthropic_messages"
 
 interface LlmConfig {
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli" | "gemini-cli"
   apiKey: string
   model: string
   ollamaUrl: string
   customEndpoint: string
   maxContextSize: number // max context window in characters
   apiMode?: CustomApiMode
-}
-
-interface SearchApiConfig {
-  provider: "tavily" | "none"
-  apiKey: string
 }
 
 interface EmbeddingConfig {
@@ -47,7 +42,7 @@ interface EmbeddingConfig {
 }
 
 /**
- * Output language for LLM-generated content (wiki pages, chat responses, research).
+ * Output language for LLM-generated content (wiki pages, chat responses).
  * "auto" = detect from user input / source document language.
  * Otherwise = force all LLM output to use the specified language.
  */
@@ -95,13 +90,12 @@ interface WikiState {
   selectedFile: string | null
   fileContent: string
   chatExpanded: boolean
-  activeView: "wiki" | "sources" | "search" | "graph" | "lint" | "review" | "history" | "settings"
+  activeView: "wiki" | "sources" | "graph" | "lint" | "review" | "history" | "settings"
   llmConfig: LlmConfig
   /** Per-provider-preset stored overrides (API key, model, endpoint, …). */
   providerConfigs: ProviderConfigs
   /** Which preset is currently active. `null` = no LLM configured. */
   activePresetId: string | null
-  searchApiConfig: SearchApiConfig
   embeddingConfig: EmbeddingConfig
   outputLanguage: OutputLanguage
   dataVersion: number
@@ -115,7 +109,6 @@ interface WikiState {
   setLlmConfig: (config: LlmConfig) => void
   setProviderConfigs: (configs: ProviderConfigs) => void
   setActivePresetId: (id: string | null) => void
-  setSearchApiConfig: (config: SearchApiConfig) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
   setOutputLanguage: (lang: OutputLanguage) => void
   bumpDataVersion: () => void
@@ -147,11 +140,6 @@ export const useWikiStore = create<WikiState>((set) => ({
   setFileContent: (fileContent) => set({ fileContent }),
   setChatExpanded: (chatExpanded) => set({ chatExpanded }),
   setActiveView: (activeView) => set({ activeView }),
-  searchApiConfig: {
-    provider: "none",
-    apiKey: "",
-  },
-
   embeddingConfig: {
     enabled: false,
     endpoint: "",
@@ -164,10 +152,9 @@ export const useWikiStore = create<WikiState>((set) => ({
   setLlmConfig: (llmConfig) => set({ llmConfig }),
   setProviderConfigs: (providerConfigs) => set({ providerConfigs }),
   setActivePresetId: (activePresetId) => set({ activePresetId }),
-  setSearchApiConfig: (searchApiConfig) => set({ searchApiConfig }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 
-export type { WikiState, LlmConfig, SearchApiConfig, EmbeddingConfig, OutputLanguage }
+export type { WikiState, LlmConfig, EmbeddingConfig, OutputLanguage }

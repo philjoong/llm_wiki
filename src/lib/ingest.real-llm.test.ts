@@ -86,16 +86,16 @@ const EN_SEED_WIKI: Record<string, string> = {
     "# Purpose\n\n" +
     "This wiki tracks deep-learning research: papers, concepts, and\n" +
     "architectures.\n",
-  "wiki/index.md":
+  "db/index.md":
     "# Index\n\n## Concepts\n- [[attention]]\n- [[transformer]]\n\n## Papers\n(none yet)\n",
-  "wiki/attention.md": page(
+  "db/attention.md": page(
     "Attention",
     "Attention assigns per-token weights within a sequence. Given queries, " +
       "keys and values, it computes a weighted sum of values where weights " +
       "come from a **softmax** of the dot products between queries and keys. " +
       "See also [[transformer]].",
   ),
-  "wiki/transformer.md": page(
+  "db/transformer.md": page(
     "Transformer",
     "Transformer is an encoder-decoder neural architecture built entirely " +
       "on [[attention]] without recurrence. Introduced in Vaswani et al. " +
@@ -105,12 +105,12 @@ const EN_SEED_WIKI: Record<string, string> = {
 
 const ZH_SEED_WIKI: Record<string, string> = {
   "purpose.md": "# 用途\n\n深度学习研究笔记。\n",
-  "wiki/index.md": "# 索引\n\n- [[注意力机制]]\n- [[transformer]]\n",
-  "wiki/注意力机制.md": page(
+  "db/index.md": "# 索引\n\n- [[注意力机制]]\n- [[transformer]]\n",
+  "db/注意力机制.md": page(
     "注意力机制",
     "注意力机制是 [[transformer]] 架构的核心组件，对序列中每个位置做加权聚合。",
   ),
-  "wiki/transformer.md": page(
+  "db/transformer.md": page(
     "Transformer",
     "Transformer 是基于 [[注意力机制]] 的神经网络架构。",
   ),
@@ -119,7 +119,7 @@ const ZH_SEED_WIKI: Record<string, string> = {
 function minimalSeedWiki(targetLang: string): Record<string, string> {
   return {
     "purpose.md": `# Purpose\n\nKnowledge base. Primary language: ${targetLang}.\n`,
-    "wiki/index.md": `# Index\n\n(no pages yet)\n`,
+    "db/index.md": `# Index\n\n(no pages yet)\n`,
   }
 }
 
@@ -461,8 +461,8 @@ async function assertContracts(
 
   // 2. Source summary exists (either LLM-created or fallback)
   expect(
-    writtenPaths.some((p) => p.startsWith("wiki/sources/")),
-    "no wiki/sources/*.md file was written",
+    writtenPaths.some((p) => p.startsWith("db/sources/")),
+    "no db/sources/*.md file was written",
   ).toBe(true)
 
   // 3. Every file on disk + non-empty
@@ -481,9 +481,9 @@ async function assertContracts(
   // philosophy source summary naturally cites Russian philosophers —
   // causing legitimate per-page language drift that isn't a bug).
   for (const p of writtenPaths) {
-    if (p.endsWith("/log.md") || p === "wiki/log.md") continue
-    if (p.startsWith("wiki/entities/") || p.includes("/entities/")) continue
-    if (p.startsWith("wiki/sources/") || p.includes("/sources/")) continue
+    if (p.endsWith("/log.md") || p === "db/log.md") continue
+    if (p.startsWith("db/entities/") || p.includes("/entities/")) continue
+    if (p.startsWith("db/sources/") || p.includes("/sources/")) continue
     const raw = await readFileRaw(path.join(tmpPath, p))
     const fmEnd = raw.indexOf("\n---\n", 3)
     let body = fmEnd > 0 ? raw.slice(fmEnd + 5) : raw

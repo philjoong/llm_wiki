@@ -96,15 +96,15 @@ describe("getFileStem", () => {
 
 describe("getRelativePath", () => {
   it("strips the base prefix", () => {
-    expect(getRelativePath("/project/wiki/note.md", "/project")).toBe("wiki/note.md")
+    expect(getRelativePath("/project/db/note.md", "/project")).toBe("db/note.md")
   })
 
   it("handles base with trailing slash", () => {
-    expect(getRelativePath("/project/wiki/note.md", "/project/")).toBe("wiki/note.md")
+    expect(getRelativePath("/project/db/note.md", "/project/")).toBe("db/note.md")
   })
 
   it("normalizes separators on both sides", () => {
-    expect(getRelativePath("C:\\project\\wiki\\note.md", "C:\\project")).toBe("wiki/note.md")
+    expect(getRelativePath("C:\\project\\db\\note.md", "C:\\project")).toBe("db/note.md")
   })
 
   it("returns the full path if base doesn't prefix it", () => {
@@ -143,7 +143,7 @@ describe("isAbsolutePath", () => {
     expect(isAbsolutePath("foo/bar.md")).toBe(false)
     expect(isAbsolutePath("./foo")).toBe(false)
     expect(isAbsolutePath("../foo")).toBe(false)
-    expect(isAbsolutePath("wiki/concepts/attention.md")).toBe(false)
+    expect(isAbsolutePath("db/concepts/attention.md")).toBe(false)
   })
 
   it("rejects drive-letter WITHOUT a separator (ambiguous)", () => {

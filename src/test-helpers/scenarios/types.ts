@@ -25,7 +25,6 @@ export interface ReviewFixture {
   title: string
   description?: string
   affectedPages?: string[]
-  searchQueries?: string[]
   sourcePath?: string
 }
 
@@ -45,7 +44,7 @@ export interface SweepScenarioExpected {
 export interface LintScenario {
   name: string
   description: string
-  /** Virtual project tree. Must include a wiki/ subfolder. */
+  /** Virtual project tree. Must include a db/ subfolder. */
   initialWiki: Record<string, string>
   /**
    * Optional raw LLM response for semantic lint. When absent, the semantic
@@ -56,7 +55,7 @@ export interface LintScenario {
     /** Expected structural lint findings. Order-independent. */
     structural: Array<{
       type: "orphan" | "broken-link" | "no-outlinks"
-      /** Page path relative to wiki/ (e.g. "attention.md") */
+      /** Page path relative to db/ (e.g. "attention.md") */
       page: string
       /** For broken-link, the substring that should appear in the detail */
       linkName?: string
@@ -78,9 +77,9 @@ export interface LintScenario {
 export interface EnrichScenario {
   name: string
   description: string
-  /** Virtual project tree. Must include wiki/index.md. */
+  /** Virtual project tree. Must include db/index.md. */
   initialWiki: Record<string, string>
-  /** Project-relative path of the page to enrich (e.g. "wiki/transformer.md"). */
+  /** Project-relative path of the page to enrich (e.g. "db/transformer.md"). */
   pageToEnrich: string
   /** Raw streamChat response text (including fences, prose wrappers, etc). */
   llmResponse: string
@@ -103,7 +102,7 @@ export interface EnrichScenario {
 export interface IngestScenario {
   name: string
   description: string
-  /** Project state before ingest runs (purpose.md, schema.md, wiki/*.md). */
+  /** Project state before ingest runs (purpose.md, schema.md, db/*.md). */
   initialWiki: Record<string, string>
   /** The source document being ingested. */
   source: {
@@ -138,12 +137,12 @@ export interface IngestScenario {
 export interface SearchScenario {
   name: string
   description: string
-  /** Project state (must include wiki/). */
+  /** Project state (must include db/). */
   initialWiki: Record<string, string>
   query: string
   expected: {
     /**
-     * File paths (under wiki/, relative to project root) expected in the top
+     * File paths (under db/, relative to project root) expected in the top
      * results, IN ORDER. Extra results beyond this prefix are allowed.
      */
     topResultPaths: string[]
@@ -173,8 +172,8 @@ export interface SweepScenario {
    * Example:
    *   {
    *     "purpose.md": "...",
-   *     "wiki/index.md": "...",
-   *     "wiki/attention.md": "---\ntitle: Attention\n---\n..."
+   *     "db/index.md": "...",
+   *     "db/attention.md": "---\ntitle: Attention\n---\n..."
    *   }
    */
   initialWiki: Record<string, string>

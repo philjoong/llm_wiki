@@ -609,7 +609,7 @@ what the mechanism computes.
 
 /**
  * Geoffrey Hinton biography — packed with named entities (people,
- * institutions, papers). Expected: many wiki/entities/*.md pages.
+ * institutions, papers). Expected: many db/entities/*.md pages.
  */
 const BIOGRAPHICAL_HINTON = `# Geoffrey Hinton: A Biography
 

@@ -161,10 +161,10 @@ export async function buildRetrievalGraph(
     return cachedGraph
   }
 
-  const wikiRoot = `${normalizePath(projectPath)}/wiki`
+  const dbRoot = `${normalizePath(projectPath)}/db`
   let tree: FileNode[]
   try {
-    tree = await listDirectory(wikiRoot)
+    tree = await listDirectory(dbRoot)
   } catch {
     const emptyGraph: RetrievalGraph = { nodes: new Map(), dataVersion }
     cachedGraph = emptyGraph

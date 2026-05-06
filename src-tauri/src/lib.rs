@@ -37,6 +37,10 @@ pub fn run() {
             // frontend-generated stream id. Populated by claude_cli_spawn,
             // drained on process exit or by claude_cli_kill.
             app.manage(commands::claude_cli::ClaudeCliState::default());
+            // Same pattern for the codex / gemini CLI providers — each
+            // owns its own child registry so kill targets the right pid.
+            app.manage(commands::codex_cli::CodexCliState::default());
+            app.manage(commands::gemini_cli::GeminiCliState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -52,6 +56,7 @@ pub fn run() {
             commands::fs::file_exists,
             commands::project::create_project,
             commands::project::open_project,
+            commands::migrate::migrate_wiki_to_db,
             clip_server_status,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,
@@ -63,9 +68,16 @@ pub fn run() {
             commands::vectorstore::vector_count_chunks,
             commands::vectorstore::vector_legacy_row_count,
             commands::vectorstore::vector_drop_legacy,
+            commands::vectorstore::vector_drop_v2,
             commands::claude_cli::claude_cli_detect,
             commands::claude_cli::claude_cli_spawn,
             commands::claude_cli::claude_cli_kill,
+            commands::codex_cli::codex_cli_detect,
+            commands::codex_cli::codex_cli_spawn,
+            commands::codex_cli::codex_cli_kill,
+            commands::gemini_cli::gemini_cli_detect,
+            commands::gemini_cli::gemini_cli_spawn,
+            commands::gemini_cli::gemini_cli_kill,
             commands::git_ops::git_init,
             commands::git_ops::git_commit,
             commands::git_ops::git_status,

@@ -47,13 +47,13 @@ function page(title: string, body: string): string {
 
 const EN_SEED_WIKI: Record<string, string> = {
   "purpose.md": "# Purpose\n\nDeep-learning research notes.\n",
-  "wiki/index.md":
+  "db/index.md":
     "# Index\n\n## Concepts\n- [[attention]]\n- [[transformer]]\n\n## Papers\n(none yet)\n",
-  "wiki/attention.md": page(
+  "db/attention.md": page(
     "Attention",
     "Attention assigns per-token weights within a sequence. See also [[transformer]].",
   ),
-  "wiki/transformer.md": page(
+  "db/transformer.md": page(
     "Transformer",
     "Transformer is built on [[attention]]. Introduced in 2017.",
   ),
@@ -208,7 +208,7 @@ describe("real-LLM sweep chained (ingest → ingest → sweep)", () => {
 
       // Confirm a Layer Normalization page was actually written. The
       // resolver doc is explicit enough that the LLM should always
-      // produce a wiki/concepts/*normalization*.md-ish file.
+      // produce a db/concepts/*normalization*.md-ish file.
       const hasLayerNormPage = secondWritten.some((p) =>
         /layer[-_]?norm|normalization/i.test(p.toLowerCase()),
       )

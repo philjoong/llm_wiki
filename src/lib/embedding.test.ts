@@ -612,19 +612,19 @@ describe("embedAllPages", () => {
   })
 
   const makeTree = () => [
-    { name: "rope.md", path: "/proj/wiki/rope.md", is_dir: false },
-    { name: "index.md", path: "/proj/wiki/index.md", is_dir: false }, // skip
-    { name: "log.md", path: "/proj/wiki/log.md", is_dir: false }, // skip
-    { name: "overview.md", path: "/proj/wiki/overview.md", is_dir: false }, // skip
-    { name: "purpose.md", path: "/proj/wiki/purpose.md", is_dir: false }, // skip
-    { name: "schema.md", path: "/proj/wiki/schema.md", is_dir: false }, // skip
-    { name: "notes.txt", path: "/proj/wiki/notes.txt", is_dir: false }, // non-md
+    { name: "rope.md", path: "/proj/db/rope.md", is_dir: false },
+    { name: "index.md", path: "/proj/db/index.md", is_dir: false }, // skip
+    { name: "log.md", path: "/proj/db/log.md", is_dir: false }, // skip
+    { name: "overview.md", path: "/proj/db/overview.md", is_dir: false }, // skip
+    { name: "purpose.md", path: "/proj/db/purpose.md", is_dir: false }, // skip
+    { name: "schema.md", path: "/proj/db/schema.md", is_dir: false }, // skip
+    { name: "notes.txt", path: "/proj/db/notes.txt", is_dir: false }, // non-md
     {
       name: "sub",
-      path: "/proj/wiki/sub",
+      path: "/proj/db/sub",
       is_dir: true,
       children: [
-        { name: "attention.md", path: "/proj/wiki/sub/attention.md", is_dir: false },
+        { name: "attention.md", path: "/proj/db/sub/attention.md", is_dir: false },
       ],
     },
   ]
@@ -644,12 +644,15 @@ describe("embedAllPages", () => {
     const upsertCalls = mockInvoke.mock.calls.filter((c) => c[0] === "vector_upsert_chunks")
     expect(upsertCalls).toHaveLength(2)
     const pageIds = upsertCalls.map((c) => (c[1] as { pageId: string }).pageId).sort()
-    expect(pageIds).toEqual(["attention", "rope"])
+    // Phase B encodes page_id from the path under db/ with `/` → `_`,
+    // so the nested `db/sub/attention.md` becomes `sub_attention` and a
+    // hypothetical sibling `db/other/attention.md` would not collide.
+    expect(pageIds).toEqual(["rope", "sub_attention"])
   })
 
   it("extracts the title from YAML frontmatter when present", async () => {
     listDirectoryMock.mockResolvedValueOnce([
-      { name: "rope.md", path: "/proj/wiki/rope.md", is_dir: false },
+      { name: "rope.md", path: "/proj/db/rope.md", is_dir: false },
     ])
     readFileMock.mockResolvedValueOnce(
       `---\ntitle: "RoPE 旋转位置编码"\ntype: concept\n---\n# RoPE\n\nBody.`,
@@ -662,7 +665,7 @@ describe("embedAllPages", () => {
 
   it("falls back to the file id (without .md) when frontmatter has no title", async () => {
     listDirectoryMock.mockResolvedValueOnce([
-      { name: "mystery.md", path: "/proj/wiki/mystery.md", is_dir: false },
+      { name: "mystery.md", path: "/proj/db/mystery.md", is_dir: false },
     ])
     readFileMock.mockResolvedValueOnce("no frontmatter here, just body.")
     mockHttpFetch.mockImplementation(async () => okResponse([0.5]))
@@ -693,7 +696,7 @@ describe("embedAllPages", () => {
     expect(mockHttpFetch).not.toHaveBeenCalled()
   })
 
-  it("returns 0 when listDirectory throws (project has no wiki dir yet)", async () => {
+  it("returns 0 when listDirectory throws (project has no db dir yet)", async () => {
     listDirectoryMock.mockRejectedValueOnce(new Error("ENOENT: no such file"))
     const out = await embedAllPages("/proj", cfg)
     expect(out).toBe(0)
@@ -701,8 +704,8 @@ describe("embedAllPages", () => {
 
   it("continues with remaining files when one file's readFile throws", async () => {
     listDirectoryMock.mockResolvedValueOnce([
-      { name: "a.md", path: "/proj/wiki/a.md", is_dir: false },
-      { name: "b.md", path: "/proj/wiki/b.md", is_dir: false },
+      { name: "a.md", path: "/proj/db/a.md", is_dir: false },
+      { name: "b.md", path: "/proj/db/b.md", is_dir: false },
     ])
     // First file fails, second succeeds.
     readFileMock

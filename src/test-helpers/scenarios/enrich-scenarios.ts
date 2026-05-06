@@ -26,14 +26,14 @@ export const enrichScenarios: EnrichScenario[] = [
       "terms to link. Code applies [[brackets]] around the first literal " +
       "occurrence of each.",
     initialWiki: {
-      "wiki/index.md": WIKI_INDEX_WITH_TRANSFORMER,
-      "wiki/survey.md":
+      "db/index.md": WIKI_INDEX_WITH_TRANSFORMER,
+      "db/survey.md":
         "# Deep Learning Survey\n\n" +
         "Modern NLP relies on Transformer architectures for most tasks. " +
         "The Transformer was introduced in 2017 and has since dominated. " +
         "Attention is the key mechanism that makes it work.\n",
     },
-    pageToEnrich: "wiki/survey.md",
+    pageToEnrich: "db/survey.md",
     llmResponse: JSON.stringify({
       links: [
         { term: "Transformer", target: "transformer" },
@@ -60,8 +60,8 @@ export const enrichScenarios: EnrichScenario[] = [
       "applier splits off the frontmatter and only operates on the body. " +
       "LLM just returns the term→target list.",
     initialWiki: {
-      "wiki/index.md": WIKI_INDEX_WITH_TRANSFORMER,
-      "wiki/attention.md":
+      "db/index.md": WIKI_INDEX_WITH_TRANSFORMER,
+      "db/attention.md":
         "---\n" +
         "title: Attention\n" +
         "tags: [deep-learning, transformer]\n" +
@@ -71,7 +71,7 @@ export const enrichScenarios: EnrichScenario[] = [
         "Attention scores are computed by the encoder. The encoder layer " +
         "uses these scores to weight values. Detailed derivation below.\n",
     },
-    pageToEnrich: "wiki/attention.md",
+    pageToEnrich: "db/attention.md",
     llmResponse: JSON.stringify({
       links: [{ term: "encoder", target: "encoder" }],
     }),
@@ -96,13 +96,13 @@ export const enrichScenarios: EnrichScenario[] = [
       "LLM returns {links:[]} — nothing to substitute. writeFile is not " +
       "called; the file stays unchanged.",
     initialWiki: {
-      "wiki/index.md": WIKI_INDEX_WITH_TRANSFORMER,
-      "wiki/unrelated.md":
+      "db/index.md": WIKI_INDEX_WITH_TRANSFORMER,
+      "db/unrelated.md":
         "# Unrelated Page\n\n" +
         "This page is about cats and dogs and has nothing to do with the " +
         "wiki's main topics. No terms should be linked here.\n",
     },
-    pageToEnrich: "wiki/unrelated.md",
+    pageToEnrich: "db/unrelated.md",
     llmResponse: JSON.stringify({ links: [] }),
     expected: {
       writeCalled: false,
@@ -116,13 +116,13 @@ export const enrichScenarios: EnrichScenario[] = [
       "Chinese content; LLM returns list with Chinese term / target. " +
       "Byte-accurate substitution through UTF-8.",
     initialWiki: {
-      "wiki/index.md": "# 索引\n\n- [[注意力机制]]\n- [[transformer]]\n",
-      "wiki/intro.md":
+      "db/index.md": "# 索引\n\n- [[注意力机制]]\n- [[transformer]]\n",
+      "db/intro.md":
         "# 简介\n\n" +
         "注意力机制是 transformer 架构的核心组件之一。" +
         "注意力机制让模型能够关注序列中最相关的部分。\n",
     },
-    pageToEnrich: "wiki/intro.md",
+    pageToEnrich: "db/intro.md",
     llmResponse: JSON.stringify({
       links: [
         { term: "注意力机制", target: "注意力机制" },

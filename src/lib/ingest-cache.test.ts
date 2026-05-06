@@ -38,13 +38,13 @@ describe("ingest-cache — checkIngestCache", () => {
       persisted = c
     })
     await saveIngestCache("/project", "foo.pdf", "hello", [
-      "wiki/sources/foo.md",
-      "wiki/entities/bar.md",
+      "db/sources/foo.md",
+      "db/entities/bar.md",
     ])
 
     mockFileExists.mockResolvedValue(true)
     const result = await checkIngestCache("/project", "foo.pdf", "hello")
-    expect(result).toEqual(["wiki/sources/foo.md", "wiki/entities/bar.md"])
+    expect(result).toEqual(["db/sources/foo.md", "db/entities/bar.md"])
   })
 
   it("returns null when hash matches but a cached file no longer exists on disk", async () => {
@@ -55,11 +55,11 @@ describe("ingest-cache — checkIngestCache", () => {
       persisted = c
     })
     await saveIngestCache("/project", "foo.pdf", "hello", [
-      "wiki/sources/foo.md",
-      "wiki/entities/bar.md",
+      "db/sources/foo.md",
+      "db/entities/bar.md",
     ])
 
-    // wiki/entities/bar.md has been deleted since the cache was written.
+    // db/entities/bar.md has been deleted since the cache was written.
     mockFileExists.mockImplementation(async (p: string) => {
       return !p.includes("entities/bar.md")
     })
@@ -74,7 +74,7 @@ describe("ingest-cache — checkIngestCache", () => {
     mockWriteFile.mockImplementation(async (_p: string, c: string) => {
       persisted = c
     })
-    await saveIngestCache("/project", "foo.pdf", "hello", ["wiki/sources/foo.md"])
+    await saveIngestCache("/project", "foo.pdf", "hello", ["db/sources/foo.md"])
 
     const result = await checkIngestCache("/project", "foo.pdf", "different content")
     expect(result).toBeNull()
@@ -86,7 +86,7 @@ describe("ingest-cache — checkIngestCache", () => {
     mockWriteFile.mockImplementation(async (_p: string, c: string) => {
       persisted = c
     })
-    await saveIngestCache("/project", "foo.pdf", "hello", ["wiki/sources/foo.md"])
+    await saveIngestCache("/project", "foo.pdf", "hello", ["db/sources/foo.md"])
 
     mockFileExists.mockRejectedValue(new Error("stat failed"))
 

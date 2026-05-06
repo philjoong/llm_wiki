@@ -31,7 +31,7 @@ export async function enrichWithWikilinks(
   const fp = normalizePath(filePath)
   const [content, index] = await Promise.all([
     readFile(fp),
-    readFile(`${pp}/wiki/index.md`).catch(() => ""),
+    readFile(`${pp}/db/index.md`).catch(() => ""),
   ])
 
   if (!content || !index) return

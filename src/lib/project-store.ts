@@ -130,6 +130,12 @@ export interface PersistedUpdateCheckState {
   enabled: boolean
   lastCheckedAt: number | null
   dismissedVersion: string | null
+  /**
+   * GitHub repo to query for releases, in `owner/repo` form. Empty
+   * string means the user hasn't configured one yet — the checker
+   * skips silently in that case.
+   */
+  repo: string
 }
 
 export async function saveUpdateCheckState(

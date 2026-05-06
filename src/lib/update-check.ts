@@ -140,3 +140,32 @@ export async function checkForUpdates(opts: {
 
 /** Cache duration: don't re-hit the API if we checked more recently than this. */
 export const UPDATE_CHECK_CACHE_MS = 6 * 60 * 60 * 1000 // 6 hours
+
+/**
+ * Normalize whatever the user pasted into the update-check repo field
+ * down to the `owner/repo` form that the GitHub API expects. Accepts:
+ *   - "owner/repo"
+ *   - "https://github.com/owner/repo"
+ *   - "github.com/owner/repo"
+ *   - any of the above with surrounding whitespace or a trailing slash
+ *   - ".git" suffix (in case someone pastes a clone URL)
+ * Returns null when the input doesn't contain a recognizable owner/repo
+ * pair, so callers can distinguish "user hasn't configured this" from
+ * "user configured something usable".
+ */
+export function normalizeRepo(input: string): string | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+  let s = trimmed
+    .replace(/^https?:\/\//i, "")
+    .replace(/^github\.com\//i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "")
+  // After stripping, we need exactly "owner/repo" (no extra path segments)
+  const parts = s.split("/").filter(Boolean)
+  if (parts.length < 2) return null
+  const owner = parts[0]
+  const repo = parts[1]
+  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) return null
+  return `${owner}/${repo}`
+}

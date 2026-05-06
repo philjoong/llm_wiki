@@ -4,13 +4,21 @@ import { useTranslation } from "react-i18next"
 import { clipServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
-import { checkForUpdates } from "@/lib/update-check"
+import { checkForUpdates, normalizeRepo } from "@/lib/update-check"
 import { saveUpdateCheckState } from "@/lib/project-store"
 
 export function AboutSection() {
   const { t } = useTranslation()
   const [clipStatus, setClipStatus] = useState<string>("...")
   const updateStore = useUpdateStore()
+  const [repoDraft, setRepoDraft] = useState(updateStore.repo)
+  // Keep the input in sync if the store value changes (e.g. hydrate
+  // from disk completes after this component mounts).
+  useEffect(() => {
+    setRepoDraft(updateStore.repo)
+  }, [updateStore.repo])
+  const normalizedRepo = normalizeRepo(repoDraft)
+  const repoInvalid = repoDraft.trim().length > 0 && normalizedRepo === null
 
   useEffect(() => {
     let alive = true
@@ -27,10 +35,12 @@ export function AboutSection() {
   }, [])
 
   const handleCheckNow = useCallback(async () => {
+    const repo = useUpdateStore.getState().repo
+    if (!repo) return
     useUpdateStore.getState().setChecking(true)
     const result = await checkForUpdates({
       currentVersion: __APP_VERSION__,
-      repo: "nashsu/llm_wiki",
+      repo,
     })
     const now = Date.now()
     useUpdateStore.getState().setResult(result, now)
@@ -42,6 +52,7 @@ export function AboutSection() {
       enabled: useUpdateStore.getState().enabled,
       lastCheckedAt: now,
       dismissedVersion: null,
+      repo,
     })
   }, [])
 
@@ -53,6 +64,7 @@ export function AboutSection() {
       enabled: useUpdateStore.getState().enabled,
       lastCheckedAt: useUpdateStore.getState().lastCheckedAt ?? Date.now(),
       dismissedVersion: result.remote,
+      repo: useUpdateStore.getState().repo,
     })
   }, [])
 
@@ -63,8 +75,22 @@ export function AboutSection() {
       enabled: next,
       lastCheckedAt: useUpdateStore.getState().lastCheckedAt,
       dismissedVersion: useUpdateStore.getState().dismissedVersion,
+      repo: useUpdateStore.getState().repo,
     })
   }, [])
+
+  const handleSaveRepo = useCallback(async () => {
+    const next = normalizeRepo(repoDraft) ?? ""
+    if (next === useUpdateStore.getState().repo) return
+    useUpdateStore.getState().setRepo(next)
+    setRepoDraft(next)
+    await saveUpdateCheckState({
+      enabled: useUpdateStore.getState().enabled,
+      lastCheckedAt: useUpdateStore.getState().lastCheckedAt,
+      dismissedVersion: useUpdateStore.getState().dismissedVersion,
+      repo: next,
+    })
+  }, [repoDraft])
 
   const rows: Array<{ label: string; value: string; mono?: boolean }> = [
     { label: t("settings.sections.about.version"), value: `v${__APP_VERSION__}`, mono: true },
@@ -114,7 +140,7 @@ export function AboutSection() {
             variant="outline"
             size="sm"
             onClick={handleCheckNow}
-            disabled={updateStore.checking}
+            disabled={updateStore.checking || !updateStore.repo}
             className="shrink-0 gap-1.5"
           >
             <RefreshCw
@@ -149,6 +175,52 @@ export function AboutSection() {
             mainland China) and a colored warning would misleadingly
             look like a bug in the app. */}
 
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">
+            {t("settings.sections.about.repoLabel", { defaultValue: "GitHub repository" })}
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={repoDraft}
+              onChange={(e) => setRepoDraft(e.target.value)}
+              onBlur={handleSaveRepo}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  handleSaveRepo()
+                }
+              }}
+              placeholder="owner/repo"
+              spellCheck={false}
+              className={`flex-1 rounded-md border bg-background px-2.5 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring ${
+                repoInvalid ? "border-destructive" : "border-input"
+              }`}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSaveRepo}
+              disabled={
+                repoInvalid || (normalizedRepo ?? "") === updateStore.repo
+              }
+            >
+              {t("settings.sections.about.repoSave", { defaultValue: "Save" })}
+            </Button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {repoInvalid
+              ? t("settings.sections.about.repoInvalid", {
+                  defaultValue:
+                    "Enter a GitHub repo as owner/repo or paste a github.com URL.",
+                })
+              : t("settings.sections.about.repoHint", {
+                  defaultValue:
+                    "Update checks query the latest release of this repo.",
+                })}
+          </p>
+        </div>
+
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input
             type="checkbox"
@@ -164,15 +236,19 @@ export function AboutSection() {
         <div className="font-medium">LLM Wiki</div>
         <p className="mt-1 text-xs text-muted-foreground">
           {t("settings.sections.about.appDescription")}
-          {" "}
-          <a
-            className="underline underline-offset-2 hover:text-primary"
-            href="https://github.com/nashsu/llm_wiki"
-            target="_blank"
-            rel="noreferrer"
-          >
-            github.com/nashsu/llm_wiki
-          </a>
+          {updateStore.repo && (
+            <>
+              {" "}
+              <a
+                className="underline underline-offset-2 hover:text-primary"
+                href={`https://github.com/${updateStore.repo}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {`github.com/${updateStore.repo}`}
+              </a>
+            </>
+          )}
         </p>
       </div>
     </div>

@@ -172,7 +172,15 @@ pub async fn claude_cli_spawn(
         })
         .collect();
 
-    let mut cmd = Command::new("claude");
+    // Resolve the full path via `which` rather than passing a bare name.
+    // On Windows, `Command::new("claude")` only finds `claude.exe`; the
+    // npm-installed CLI ships as `claude.cmd`, which is invisible to a
+    // bare-name spawn and shows up to the user as "CLI not found" even
+    // though detection (which uses which::which) succeeded.
+    let claude_path = which::which("claude")
+        .map_err(|_| "`claude` not found on PATH".to_string())?;
+
+    let mut cmd = Command::new(&claude_path);
     cmd.arg("-p")
         .arg("--output-format")
         .arg("stream-json")

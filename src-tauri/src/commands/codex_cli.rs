@@ -154,7 +154,15 @@ pub async fn codex_cli_spawn(
     // any source tree. The trailing `-` tells codex to read the prompt
     // from stdin rather than expecting a positional argument — this lets
     // us stream large multi-turn histories without ARG_MAX issues.
-    let mut cmd = Command::new("codex");
+    //
+    // Resolve the full path via `which` rather than passing a bare name.
+    // On Windows, `Command::new("codex")` only finds `codex.exe`; the
+    // npm-installed CLI ships as `codex.cmd`, which is invisible to a
+    // bare-name spawn. Same fix as `claude_cli_spawn`.
+    let codex_path = which::which("codex")
+        .map_err(|_| "`codex` not found on PATH".to_string())?;
+
+    let mut cmd = Command::new(&codex_path);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("--model")

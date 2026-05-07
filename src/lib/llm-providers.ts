@@ -22,6 +22,18 @@ export interface RequestOverrides {
   stop?: string | string[]
 }
 
+/**
+ * Local-CLI providers that talk to a coding-agent subprocess (claude,
+ * codex, gemini) instead of an HTTP chat completions endpoint. These
+ * have no flag equivalents for sampling knobs (temperature, top_p,
+ * max_tokens, stop), so callers shouldn't bother passing them — they'd
+ * be silently ignored. `streamChat` uses this to strip overrides at the
+ * dispatch boundary, and UI can use it to grey out sampling controls.
+ */
+export function isCliProvider(provider: LlmConfig["provider"]): boolean {
+  return provider === "claude-code" || provider === "codex-cli" || provider === "gemini-cli"
+}
+
 interface ProviderConfig {
   url: string
   headers: Record<string, string>

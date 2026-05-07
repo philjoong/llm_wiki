@@ -146,7 +146,15 @@ pub async fn gemini_cli_spawn(
     // gemini-cli auto-enters non-interactive mode when stdin is piped.
     // `--model` selects the underlying model; `--yolo` skips approval
     // prompts so a long-running ingest doesn't stall waiting for a TTY.
-    let mut cmd = Command::new("gemini");
+    //
+    // Resolve the full path via `which` rather than passing a bare name.
+    // On Windows, `Command::new("gemini")` only finds `gemini.exe`; the
+    // npm-installed CLI ships as `gemini.cmd`, which is invisible to a
+    // bare-name spawn. Same fix as `claude_cli_spawn`.
+    let gemini_path = which::which("gemini")
+        .map_err(|_| "`gemini` not found on PATH".to_string())?;
+
+    let mut cmd = Command::new(&gemini_path);
     cmd.arg("--model").arg(&model).arg("--yolo");
 
     cmd.stdin(Stdio::piped())

@@ -84,6 +84,14 @@ export async function openProject(path: string): Promise<WikiProject> {
     // Settings later. Surface it in the console for diagnostics.
     console.warn("[migrate] migrate_wiki_to_db failed:", err)
   }
+  // second-fix-develop.md §2 migration: convert binary originals under
+  // raw/sources/ to markdown and drop the legacy processed_1/ tree. Same
+  // best-effort policy + idempotent stamp pattern as migrate_wiki_to_db.
+  try {
+    await invoke("migrate_raw_sources", { projectPath: raw.path })
+  } catch (err) {
+    console.warn("[migrate] migrate_raw_sources failed:", err)
+  }
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
   return { id, name: raw.name, path: raw.path }

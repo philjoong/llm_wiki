@@ -5,7 +5,7 @@ import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, Chev
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
-import { copyFile, listDirectory, readFile, writeFile, deleteFile, findRelatedWikiPages, preprocessFile } from "@/commands/fs"
+import { listDirectory, readFile, writeFile, deleteFile, findRelatedWikiPages, preprocessFile } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { startIngest } from "@/lib/ingest"
 import { enqueueIngest, enqueueBatch } from "@/lib/ingest-queue"
@@ -20,6 +20,7 @@ import {
 } from "@/lib/wiki-cleanup"
 import { parseSources, writeSources } from "@/lib/sources-merge"
 import { decidePageFate } from "@/lib/source-delete-decision"
+import { copyOriginal, ensureOriginalsGitignore, injectOriginalRef } from "@/lib/originals"
 
 export function SourcesView() {
   const { t } = useTranslation()
@@ -97,22 +98,53 @@ export function SourcesView() {
     const pp = normalizePath(project.path)
     const paths = Array.isArray(selected) ? selected : [selected]
 
+    // Import == 1차 가공. We extract markdown from the original
+    // (PDF/docx → text, plain text passthrough, etc.) and write
+    // `raw/sources/<basename>.md`. We ALSO copy the binary into
+    // `raw/originals/` (gitignored) so a human can round-trip back to
+    // it for things 1차 가공 dropped — embedded charts, diagrams,
+    // SmartArt, OLE objects. The frontmatter `original:` link makes
+    // that round-trip discoverable from the preprocessed markdown.
+    // Failures surface as alerts; we never silent-catch here because
+    // that's how files used to vanish.
+    await ensureOriginalsGitignore(pp)
     const importedPaths: string[] = []
+    const failures: string[] = []
     for (const sourcePath of paths) {
       const originalName = getFileName(sourcePath) || "unknown"
-      const destPath = await getUniqueDestPath(`${pp}/raw/sources`, originalName)
+      const mdName = toMarkdownName(originalName)
+      const destPath = await getUniqueDestPath(`${pp}/raw/sources`, mdName)
       try {
-        await copyFile(sourcePath, destPath)
+        const markdown = await preprocessFile(sourcePath)
+        // Copy binary first so a successful preprocess always has a
+        // matching original on disk. If the copy fails (permission /
+        // disk full / etc.), proceed without the link rather than
+        // dropping the import entirely — the markdown is the primary
+        // artifact.
+        let originalRel: string | null = null
+        try {
+          originalRel = await copyOriginal(pp, sourcePath, originalName)
+        } catch (err) {
+          console.warn(`[import] failed to copy original for ${originalName}:`, err)
+        }
+        const finalMarkdown = originalRel ? injectOriginalRef(markdown, originalRel) : markdown
+        await writeFile(destPath, finalMarkdown)
         importedPaths.push(destPath)
-        // Pre-process file (extract text from PDF, etc.) for instant preview later
-        preprocessFile(destPath).catch(() => {})
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
         console.error(`Failed to import ${originalName}:`, err)
+        failures.push(`${originalName}: ${msg}`)
       }
     }
 
     setImporting(false)
     await loadSources()
+
+    if (failures.length > 0) {
+      window.alert(
+        `Failed to import ${failures.length} file(s):\n\n${failures.join("\n")}`,
+      )
+    }
 
     // Enqueue for serial ingest (runs in background via ingest queue).
     // The queue itself fails the task with a visible error if no LLM is
@@ -140,49 +172,93 @@ export function SourcesView() {
     const destDir = `${pp}/raw/sources/${folderName}`
 
     try {
-      // Recursively copy the folder
-      const copiedFiles: string[] = await invoke("copy_directory", {
-        source: selected,
-        destination: destDir,
+      // Walk the source folder and discover every file. Each
+      // ingestable file is preprocessed to markdown under
+      // `raw/sources/<folderName>/<rel>.md`, AND the original binary
+      // is copied to `raw/originals/<folderName>/<rel>` so a human
+      // can round-trip back to it for things 1차 가공 dropped (charts,
+      // diagrams, embedded images). The originals tree is gitignored
+      // — see ensureOriginalsGitignore.
+      await ensureOriginalsGitignore(pp)
+      const sourceTree: FileNode[] = await invoke("list_directory", {
+        path: selected,
       })
+      const sourceRoot = normalizePath(selected)
+      const flat = flattenAllFiles(sourceTree).map((n) => ({
+        sourcePath: n.path,
+        relPath: stripRoot(normalizePath(n.path), sourceRoot),
+      }))
 
-      console.log(`[Folder Import] Copied ${copiedFiles.length} files from ${folderName}`)
+      const preprocessable = new Set([
+        "md", "mdx", "txt", "pdf", "docx", "pptx", "xlsx", "xls", "ods",
+        "odt", "odp", "csv", "json", "jsonl", "html", "htm", "rtf",
+        "xml", "yaml", "yml", "tsv", "ndjson",
+      ])
+      // Code-ish text files are also valid markdown content (preprocess_file
+      // returns their content verbatim). Keep them in scope so a folder of
+      // source code lands in the wiki the same way text files do.
+      const codeExts = new Set([
+        "py", "js", "ts", "jsx", "tsx", "rs", "go", "java",
+        "c", "cpp", "h", "rb", "php", "swift", "sql", "sh",
+      ])
 
-      // Preprocess all files
-      for (const filePath of copiedFiles) {
-        preprocessFile(filePath).catch(() => {})
+      const importedTargets: { destPath: string; folderContext: string }[] = []
+      const failures: string[] = []
+
+      for (const { sourcePath, relPath } of flat) {
+        const ext = relPath.split(".").pop()?.toLowerCase() ?? ""
+        if (!preprocessable.has(ext) && !codeExts.has(ext)) {
+          // Image / media / legacy doc — preprocess_file returns a stub,
+          // which isn't useful for ingest and would clutter the wiki.
+          // Skip silently for folder imports.
+          continue
+        }
+        const dirParts = relPath.split("/")
+        const fileName = dirParts.pop() ?? relPath
+        const subdir = dirParts.length > 0 ? `${destDir}/${dirParts.join("/")}` : destDir
+        const mdName = toMarkdownName(fileName)
+        const destPath = await getUniqueDestPath(subdir, mdName)
+        try {
+          const markdown = await preprocessFile(sourcePath)
+          // Copy original alongside preprocess output. Failure here is
+          // logged but non-fatal — the markdown is the primary artifact.
+          // Mirror the source folder structure so multi-file imports
+          // keep their layout under raw/originals/<folderName>/...
+          let originalRel: string | null = null
+          try {
+            originalRel = await copyOriginal(pp, sourcePath, `${folderName}/${relPath}`)
+          } catch (err) {
+            console.warn(`[folder-import] failed to copy original for ${relPath}:`, err)
+          }
+          const finalMarkdown = originalRel ? injectOriginalRef(markdown, originalRel) : markdown
+          await writeFile(destPath, finalMarkdown)
+          const context = dirParts.length > 0
+            ? `${folderName} > ${dirParts.join(" > ")}`
+            : folderName
+          importedTargets.push({ destPath, folderContext: context })
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.error(`Failed to import ${relPath}:`, err)
+          failures.push(`${relPath}: ${msg}`)
+        }
       }
+
+      console.log(`[Folder Import] Imported ${importedTargets.length} files from ${folderName}`)
 
       setImporting(false)
       await loadSources()
 
-      // Build ingest tasks with folder context. The queue itself fails the
-      // task with a visible error if no LLM is configured — do not pre-gate
-      // here, or imports vanish without signal.
-      const tasks = copiedFiles
-        .filter((fp) => {
-          const ext = fp.split(".").pop()?.toLowerCase() ?? ""
-          // Only ingest text-based files, skip images/media
-          return ["md", "mdx", "txt", "pdf", "docx", "pptx", "xlsx", "xls",
-                  "csv", "json", "html", "htm", "rtf", "xml", "yaml", "yml"].includes(ext)
-        })
-        .map((filePath) => {
-          // Build folder context from relative path. On Windows the
-          // Rust-returned filePath uses backslashes while destDir was
-          // composed with forward slashes — normalize both sides before
-          // the replace so this works on every platform.
-          const normFilePath = normalizePath(filePath)
-          const normDestDir = normalizePath(destDir)
-          const relPath = normFilePath.replace(normDestDir + "/", "")
-          const parts = relPath.split("/")
-          parts.pop() // remove filename
-          const context = parts.length > 0
-            ? `${folderName} > ${parts.join(" > ")}`
-            : folderName
-          return { sourcePath: filePath, folderContext: context }
-        })
+      if (failures.length > 0) {
+        window.alert(
+          `Failed to import ${failures.length} file(s):\n\n${failures.join("\n")}`,
+        )
+      }
 
-      if (tasks.length > 0) {
+      if (importedTargets.length > 0) {
+        const tasks = importedTargets.map((t) => ({
+          sourcePath: t.destPath,
+          folderContext: t.folderContext,
+        }))
         await enqueueBatch(project.id, tasks)
         console.log(`[Folder Import] Enqueued ${tasks.length} files for ingest`)
       }
@@ -218,9 +294,11 @@ export function SourcesView() {
       // Step 2: Delete the source file
       await deleteFile(node.path)
 
-      // Step 3: Delete preprocessed cache
+      // Step 3: Delete preprocessed cache (legacy — the new import flow
+      // doesn't use a sidecar cache, but a leftover from a pre-migration
+      // project may still be on disk).
       try {
-        await deleteFile(`${pp}/raw/sources/.cache/${fileName}.txt`)
+        await deleteFile(`${pp}/raw/sources/.cache/${fileName}.md`)
       } catch {
         // cache file may not exist
       }
@@ -420,10 +498,45 @@ export function SourcesView() {
 }
 
 /**
+ * Replace any extension on `fileName` with `.md`. Used by the import flow
+ * after preprocessFile turns the original into markdown — see
+ * second-fix-develop.md §2 D2.
+ *   "spec.pdf" → "spec.md"
+ *   "notes"    → "notes.md"
+ *   "x.foo.tar.gz" → "x.foo.tar.md"  (only the last segment is replaced)
+ */
+function toMarkdownName(fileName: string): string {
+  const lastDot = fileName.lastIndexOf(".")
+  if (lastDot <= 0) return `${fileName}.md`
+  return `${fileName.slice(0, lastDot)}.md`
+}
+
+/** Recursively flatten a FileNode tree, dropping directories and dotfiles. */
+function flattenAllFiles(nodes: FileNode[]): FileNode[] {
+  const out: FileNode[] = []
+  for (const n of nodes) {
+    if (n.name.startsWith(".")) continue
+    if (n.is_dir && n.children) {
+      out.push(...flattenAllFiles(n.children))
+    } else if (!n.is_dir) {
+      out.push(n)
+    }
+  }
+  return out
+}
+
+/** Strip a leading `<root>/` prefix from a path. Both sides must already be normalized. */
+function stripRoot(p: string, root: string): string {
+  if (p === root) return ""
+  if (p.startsWith(`${root}/`)) return p.slice(root.length + 1)
+  return p
+}
+
+/**
  * Generate a unique destination path. If file already exists, adds date/counter suffix.
- * "file.pdf" → "file.pdf" (first time)
- * "file.pdf" → "file-20260406.pdf" (conflict)
- * "file.pdf" → "file-20260406-2.pdf" (second conflict same day)
+ * "file.md" → "file.md" (first time)
+ * "file.md" → "file-20260406.md" (conflict)
+ * "file.md" → "file-20260406-2.md" (second conflict same day)
  */
 async function getUniqueDestPath(dir: string, fileName: string): Promise<string> {
   const basePath = `${dir}/${fileName}`

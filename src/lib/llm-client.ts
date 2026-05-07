@@ -1,8 +1,9 @@
 import type { LlmConfig } from "@/stores/wiki-store"
-import { getProviderConfig, type RequestOverrides } from "./llm-providers"
+import { getProviderConfig, isCliProvider, type RequestOverrides } from "./llm-providers"
 import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
 
 export type { ChatMessage, RequestOverrides } from "./llm-providers"
+export { isCliProvider } from "./llm-providers"
 export { isFetchNetworkError } from "./tauri-fetch"
 
 export interface StreamCallbacks {
@@ -13,15 +14,17 @@ export interface StreamCallbacks {
 
 // Lazy import keeps the Tauri event/invoke bindings out of bundles that
 // never touch the subprocess provider (e.g. vitest with a fetch mock).
+// CLI transports take no sampling overrides — they have no flag
+// equivalents — so the dispatcher in streamChat strips them before we
+// get here, and these wrappers don't accept them.
 async function streamViaClaudeCodeCli(
   config: LlmConfig,
   messages: import("./llm-providers").ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  requestOverrides?: RequestOverrides,
 ) {
   const mod = await import("./claude-cli-transport")
-  return mod.streamClaudeCodeCli(config, messages, callbacks, signal, requestOverrides)
+  return mod.streamClaudeCodeCli(config, messages, callbacks, signal)
 }
 
 async function streamViaCodexCli(
@@ -29,10 +32,9 @@ async function streamViaCodexCli(
   messages: import("./llm-providers").ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  requestOverrides?: RequestOverrides,
 ) {
   const mod = await import("./codex-cli-transport")
-  return mod.streamCodexCli(config, messages, callbacks, signal, requestOverrides)
+  return mod.streamCodexCli(config, messages, callbacks, signal)
 }
 
 async function streamViaGeminiCli(
@@ -40,10 +42,9 @@ async function streamViaGeminiCli(
   messages: import("./llm-providers").ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  requestOverrides?: RequestOverrides,
 ) {
   const mod = await import("./gemini-cli-transport")
-  return mod.streamGeminiCli(config, messages, callbacks, signal, requestOverrides)
+  return mod.streamGeminiCli(config, messages, callbacks, signal)
 }
 
 const DECODER = new TextDecoder()
@@ -75,14 +76,23 @@ export async function streamChat(
   // Local-CLI providers use subprocess transports (stdin/stdout), not
   // HTTP. Dispatch before getProviderConfig — that function throws for
   // these providers because they have no URL/headers.
-  if (config.provider === "claude-code") {
-    return streamViaClaudeCodeCli(config, messages, callbacks, signal, requestOverrides)
-  }
-  if (config.provider === "codex-cli") {
-    return streamViaCodexCli(config, messages, callbacks, signal, requestOverrides)
-  }
-  if (config.provider === "gemini-cli") {
-    return streamViaGeminiCli(config, messages, callbacks, signal, requestOverrides)
+  //
+  // Sampling knobs are stripped at this boundary: the CLIs have no flag
+  // equivalents for temperature/top_p/max_tokens/stop, so passing them
+  // through would just be dead weight (the transports used to log a
+  // warning and drop them). Callers don't have to branch on provider —
+  // they can pass overrides unconditionally and trust this layer to
+  // route the right shape to the right transport.
+  if (isCliProvider(config.provider)) {
+    if (config.provider === "claude-code") {
+      return streamViaClaudeCodeCli(config, messages, callbacks, signal)
+    }
+    if (config.provider === "codex-cli") {
+      return streamViaCodexCli(config, messages, callbacks, signal)
+    }
+    if (config.provider === "gemini-cli") {
+      return streamViaGeminiCli(config, messages, callbacks, signal)
+    }
   }
 
   const providerConfig = getProviderConfig(config)

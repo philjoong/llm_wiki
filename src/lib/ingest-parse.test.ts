@@ -332,14 +332,15 @@ describe("isSafeIngestPath — what the validator accepts and rejects", () => {
   })
 
   it("rejects paths outside the safe prefixes", () => {
-    // Phase B drops `wiki/` from the allowed list — only db/, processed_1/,
-    // pending/, counterexamples/, question_types/, and exclusions/ are safe
-    // ingest destinations. Anything else (raw/, src-tauri/, even legacy
-    // wiki/) is rejected.
+    // Only db/, pending/, counterexamples/, question_types/, and
+    // exclusions/ are safe ingest destinations. Anything else (raw/,
+    // src-tauri/, legacy wiki/, the now-removed processed_1/) is
+    // rejected.
     expect(isSafeIngestPath("notes/foo.md")).toBe(false)
     expect(isSafeIngestPath("foo.md")).toBe(false)
     expect(isSafeIngestPath("raw/sources/leaked.md")).toBe(false)
     expect(isSafeIngestPath("wiki/concepts/foo.md")).toBe(false)
+    expect(isSafeIngestPath("processed_1/foo.md")).toBe(false)
   })
 
   it("rejects absolute POSIX paths", () => {

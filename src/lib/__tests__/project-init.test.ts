@@ -4,13 +4,15 @@ vi.mock("@/commands/fs", () => ({
   copyFile: vi.fn(),
   createDirectory: vi.fn(),
   writeFile: vi.fn(),
+  fileExists: vi.fn(),
+  readFile: vi.fn(),
 }))
 
 vi.mock("@/commands/git", () => ({
   gitInit: vi.fn(),
 }))
 
-import { copyFile, createDirectory, writeFile } from "@/commands/fs"
+import { copyFile, createDirectory, fileExists, readFile, writeFile } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
 import {
   initProject,
@@ -22,12 +24,17 @@ import {
 const mockCopyFile = vi.mocked(copyFile)
 const mockCreateDirectory = vi.mocked(createDirectory)
 const mockWriteFile = vi.mocked(writeFile)
+const mockFileExists = vi.mocked(fileExists)
+const mockReadFile = vi.mocked(readFile)
 const mockGitInit = vi.mocked(gitInit)
 
 beforeEach(() => {
   mockCopyFile.mockReset().mockResolvedValue(undefined)
   mockCreateDirectory.mockReset().mockResolvedValue(undefined)
   mockWriteFile.mockReset().mockResolvedValue(undefined)
+  // Default: no .gitignore yet — ensureOriginalsGitignore writes a fresh one.
+  mockFileExists.mockReset().mockResolvedValue(false)
+  mockReadFile.mockReset().mockResolvedValue("")
   mockGitInit.mockReset().mockResolvedValue(undefined)
 })
 
@@ -43,13 +50,13 @@ describe("initProject", () => {
       expect(mockCreateDirectory).toHaveBeenCalledWith(`/tmp/proj/${dir}`)
       expect(mockWriteFile).toHaveBeenCalledWith(`/tmp/proj/${dir}/.gitkeep`, "")
     }
-    // Stage 1's four ingest prefixes + Stage 8's search-side additions
+    // Stage 1's ingest prefixes + Stage 8's search-side additions
     // (question_types + the three exclusions/<level>/ subtrees). The
     // exclusions/ parent itself is created implicitly by create_dir_all
     // and gets two seed markdown files instead of a .gitkeep.
+    // `processed_1/` was removed in second-fix-develop.md §2 D3.
     expect(SYSTEM_PREFIX_DIRS).toEqual([
       "db",
-      "processed_1",
       "pending",
       "counterexamples",
       "question_types",
@@ -82,6 +89,45 @@ describe("initProject", () => {
     // auto-promotion by lowering a number.
     expect(PROMOTION_RULES_SEED).toMatch(/자동 승격 금지/)
     expect(PROMOTION_RULES_SEED).toMatch(/사람의 명시적 승인/)
+  })
+
+  it("seeds .gitignore so binary originals + preprocess caches stay untracked", async () => {
+    await initProject({
+      projectPath: "/tmp/proj",
+      schemaSourcePath: "/sources/schema.md",
+      purposeMarkdown: "x",
+    })
+
+    const gitignoreCall = mockWriteFile.mock.calls.find(
+      ([path]) => path === "/tmp/proj/.gitignore",
+    )
+    expect(gitignoreCall).toBeDefined()
+    const body = String(gitignoreCall![1])
+    // The originals tree is the load-bearing rule — without it, `git
+    // add -A` after an import pulls hundreds of MB of binaries into
+    // the next commit.
+    expect(body).toContain("raw/originals/")
+    // Preprocess caches are derivable from the original; no point
+    // versioning them.
+    expect(body).toContain("raw/sources/.cache/")
+  })
+
+  it("writes .gitignore before gitInit so the first commit doesn't capture binaries", async () => {
+    // If a re-init landed on a directory that already had raw/originals/
+    // populated, gitInit would otherwise sweep them into the initial
+    // commit before we'd had a chance to ignore them.
+    await initProject({
+      projectPath: "/tmp/proj",
+      schemaSourcePath: "/sources/schema.md",
+      purposeMarkdown: "x",
+    })
+
+    const gitignoreCall = mockWriteFile.mock.calls
+      .map((call, i) => ({ path: call[0], order: mockWriteFile.mock.invocationCallOrder[i] }))
+      .find((c) => c.path === "/tmp/proj/.gitignore")
+    expect(gitignoreCall).toBeDefined()
+    const gitInitOrder = mockGitInit.mock.invocationCallOrder[0]
+    expect(gitInitOrder).toBeGreaterThan(gitignoreCall!.order)
   })
 
   it("seeds exclusion_schema.md with the coordinate / application / conflict rules", () => {

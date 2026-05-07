@@ -13,7 +13,7 @@
 import { invoke } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import type { LlmConfig } from "@/stores/wiki-store"
-import type { ChatMessage, RequestOverrides } from "./llm-providers"
+import type { ChatMessage } from "./llm-providers"
 import type { StreamCallbacks } from "./llm-client"
 
 /**
@@ -119,23 +119,13 @@ export async function streamClaudeCodeCli(
   messages: ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  overrides?: RequestOverrides,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
 
-  // Sampling knobs aren't wired through the Claude Code CLI (no flag
-  // equivalents for temperature/top_p/max_tokens/stop). Warn loudly in
-  // dev so a caller wiring these up doesn't silently wonder why they
-  // don't take effect; keep quiet in prod so regular users aren't
-  // alarmed by a reasonable default.
-  if (import.meta.env?.DEV && overrides) {
-    for (const key of ["temperature", "top_p", "top_k", "max_tokens", "stop"] as const) {
-      if (overrides[key] !== undefined) {
-        // eslint-disable-next-line no-console
-        console.warn(`[claude-code] ignoring unsupported override "${key}": CLI has no equivalent flag`)
-      }
-    }
-  }
+  // Sampling knobs (temperature/top_p/max_tokens/stop) have no flag
+  // equivalents in the Claude Code CLI. The dispatcher in `streamChat`
+  // strips them before calling this transport — see `isCliProvider` in
+  // llm-providers.ts — so callers can pass overrides unconditionally.
 
   const streamId = crypto.randomUUID()
   const parse = createClaudeCodeStreamParser()

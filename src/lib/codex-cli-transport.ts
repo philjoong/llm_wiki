@@ -10,7 +10,7 @@
 import { invoke } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import type { LlmConfig } from "@/stores/wiki-store"
-import type { ChatMessage, RequestOverrides } from "./llm-providers"
+import type { ChatMessage } from "./llm-providers"
 import type { StreamCallbacks } from "./llm-client"
 
 type SpawnPayload = Record<string, unknown> & {
@@ -24,18 +24,11 @@ export async function streamCodexCli(
   messages: ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  overrides?: RequestOverrides,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
 
-  if (import.meta.env?.DEV && overrides) {
-    for (const key of ["temperature", "top_p", "top_k", "max_tokens", "stop"] as const) {
-      if (overrides[key] !== undefined) {
-        // eslint-disable-next-line no-console
-        console.warn(`[codex-cli] ignoring unsupported override "${key}": CLI has no equivalent flag`)
-      }
-    }
-  }
+  // Sampling knobs are stripped by the dispatcher (see isCliProvider in
+  // llm-providers.ts) — codex exec has no flag equivalents.
 
   const streamId = crypto.randomUUID()
 

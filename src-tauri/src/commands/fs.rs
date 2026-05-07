@@ -79,7 +79,19 @@ pub fn read_file(path: String) -> Result<String, String> {
     })
 }
 
-/// Pre-process a file and cache the extracted text.
+/// Pre-process a file into markdown text.
+///
+/// Returns markdown for any input format the importer might encounter:
+///   - PDF / DOCX / PPTX / XLSX / ODF: structural extraction (markdown body).
+///   - Plain text / markdown / source code: returned verbatim — already valid markdown.
+///   - Image / media / legacy doc formats: a one-line stub (`[Image: …]`,
+///     `[Media: …]`, `[Document: …]`). The original isn't preserved by
+///     this command (the new import flow doesn't keep originals — see
+///     second-fix-develop.md §2 D1), so the stub is what the wiki has
+///     to work with for non-extractable formats.
+///
+/// Extraction results are cached next to the original under `.cache/`
+/// so a re-import of the exact same path doesn't re-parse the binary.
 #[tauri::command]
 pub fn preprocess_file(path: String) -> Result<String, String> {
     run_guarded("preprocess_file", || {
@@ -90,13 +102,53 @@ pub fn preprocess_file(path: String) -> Result<String, String> {
             .unwrap_or("")
             .to_lowercase();
 
-        let text = match ext.as_str() {
-            "pdf" => extract_pdf_text(&path)?,
-            e if OFFICE_EXTS.contains(&e) => extract_office_text(&path, e)?,
-            _ => return Ok("no preprocessing needed".to_string()),
+        let (text, should_cache) = match ext.as_str() {
+            "pdf" => (extract_pdf_text(&path)?, true),
+            e if OFFICE_EXTS.contains(&e) => (extract_office_text(&path, e)?, true),
+            e if IMAGE_EXTS.contains(&e) => {
+                let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                let stub = format!(
+                    "[Image: {} ({:.1} KB)]\n",
+                    p.file_name().unwrap_or_default().to_string_lossy(),
+                    size as f64 / 1024.0,
+                );
+                (stub, false)
+            }
+            e if MEDIA_EXTS.contains(&e) => {
+                let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                let stub = format!(
+                    "[Media: {} ({:.1} MB)]\n",
+                    p.file_name().unwrap_or_default().to_string_lossy(),
+                    size as f64 / 1048576.0,
+                );
+                (stub, false)
+            }
+            e if LEGACY_DOC_EXTS.contains(&e) => {
+                let stub = format!(
+                    "[Document: {} — text extraction not supported for .{} format]\n",
+                    p.file_name().unwrap_or_default().to_string_lossy(),
+                    ext,
+                );
+                (stub, false)
+            }
+            _ => {
+                // Plain text / markdown / source code / etc. — already
+                // valid markdown by definition (D2 in second-fix-develop.md).
+                // Return the file's body verbatim. No cache: the caller
+                // can read the source directly and re-reading is cheap.
+                let content = fs::read_to_string(&path).map_err(|e| {
+                    format!(
+                        "Failed to read file '{}' as text: {} (likely binary, locked, or non-UTF-8)",
+                        path, e,
+                    )
+                })?;
+                (content, false)
+            }
         };
 
-        write_cache(p, &text)?;
+        if should_cache {
+            write_cache(p, &text)?;
+        }
         Ok(text)
     })
 }
@@ -108,7 +160,10 @@ fn cache_path_for(original: &Path) -> std::path::PathBuf {
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
-    cache_dir.join(format!("{}.txt", file_name))
+    // Cache files are markdown (structured-extractor output is markdown,
+    // and plain text is valid markdown too). Keep the original filename
+    // including its extension so different inputs don't collide.
+    cache_dir.join(format!("{}.md", file_name))
 }
 
 fn read_cache(original: &Path) -> Option<String> {
@@ -273,6 +328,14 @@ fn pdfium() -> Result<&'static pdfium_render::prelude::Pdfium, String> {
         })
         .as_ref()
         .map_err(|e| e.clone())
+}
+
+pub(crate) fn extract_pdf_text_pub(path: &str) -> Result<String, String> {
+    extract_pdf_text(path)
+}
+
+pub(crate) fn extract_office_text_pub(path: &str, ext: &str) -> Result<String, String> {
+    extract_office_text(path, ext)
 }
 
 fn extract_pdf_text(path: &str) -> Result<String, String> {

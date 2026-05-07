@@ -10,7 +10,6 @@ import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
 import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
-import { runProcessed1 } from "@/lib/processed1"
 import { formatIngestMessage } from "@/lib/auto-commit"
 import { gitCommit } from "@/commands/git"
 import { parseSourceRefs } from "@/lib/sources-merge"
@@ -77,7 +76,6 @@ const CLOSER_LINE = /^---\s*END\s+FILE\s*---\s*$/i
  */
 const SAFE_INGEST_PREFIXES = [
   "db/",
-  "processed_1/",
   "pending/",
   "counterexamples/",
   "question_types/",
@@ -212,7 +210,7 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
     if (!isSafeIngestPath(path)) {
       // Path-traversal guard. Drops blocks whose path tries to escape
       // the allowed prefixes — see isSafeIngestPath for the threat model.
-      const msg = `FILE block with unsafe path "${path}" rejected (must be under db/, processed_1/, pending/, counterexamples/, question_types/, or exclusions/; no .., no absolute paths).`
+      const msg = `FILE block with unsafe path "${path}" rejected (must be under db/, pending/, counterexamples/, question_types/, or exclusions/; no .., no absolute paths).`
       console.warn(`[ingest] ${msg}`)
       warnings.push(msg)
       continue
@@ -233,6 +231,85 @@ export function languageRule(sourceContent: string = ""): string {
 }
 
 /**
+ * Maximum source-content size sent to the LLM in a single ingest round.
+ * Larger sources are split into chunks so each round produces a tractable
+ * number of FILE blocks within `max_tokens`. Without chunking, big sources
+ * truncated mid-block ("FILE … not closed before end of stream") and the
+ * parser dropped the entire trailing block — leading to autoIngest
+ * returning zero files and the queue runner throwing "Ingest produced no
+ * output files". 30000 chars ≈ 7–12k tokens depending on script, leaving
+ * room for the system prompts (schema + dbIndex + dismissals) and the
+ * FILE-block output.
+ */
+const MAX_CHUNK_CHARS = 30000
+
+/**
+ * Recursively split content into chunks ≤ maxChars, preferring to break
+ * on markdown structural boundaries (level-2/3 headers, then paragraphs,
+ * then lines, then spaces). Falls back to a hard char split as a last
+ * resort. Each separator is kept on the leading edge of the next chunk
+ * so headers stay attached to their bodies.
+ *
+ * Returns a single-element array when content already fits.
+ *
+ * Exported for tests.
+ */
+export function chunkSourceContent(content: string, maxChars: number = MAX_CHUNK_CHARS): string[] {
+  if (content.length <= maxChars) return [content]
+  const separators = ["\n## ", "\n### ", "\n\n", "\n", " "]
+  return splitRecursive(content, maxChars, separators, 0)
+}
+
+function splitRecursive(text: string, maxChars: number, separators: string[], sepIdx: number): string[] {
+  if (text.length <= maxChars) return [text]
+  if (sepIdx >= separators.length) {
+    // Last resort: hard char split. Loses semantic boundaries but beats
+    // throwing on a single unbroken 100k-char run with no whitespace.
+    const out: string[] = []
+    for (let i = 0; i < text.length; i += maxChars) {
+      out.push(text.slice(i, i + maxChars))
+    }
+    return out
+  }
+  const parts = splitKeepLeading(text, separators[sepIdx])
+  const out: string[] = []
+  let cur = ""
+  for (const part of parts) {
+    if (part.length > maxChars) {
+      // This single part is bigger than the budget — flush whatever we
+      // were accumulating, then sub-split it with the next finer separator.
+      if (cur.length > 0) {
+        out.push(cur)
+        cur = ""
+      }
+      out.push(...splitRecursive(part, maxChars, separators, sepIdx + 1))
+    } else if ((cur + part).length > maxChars) {
+      // Adding this part would overflow — start a new chunk.
+      if (cur.length > 0) out.push(cur)
+      cur = part
+    } else {
+      cur += part
+    }
+  }
+  if (cur.length > 0) out.push(cur)
+  return out
+}
+
+function splitKeepLeading(text: string, sep: string): string[] {
+  const parts = text.split(sep)
+  if (parts.length === 1) return parts
+  // First piece has no leading separator (it's whatever preceded the
+  // first occurrence). Subsequent pieces re-attach the separator so
+  // headers like "## Foo" survive the split and remain valid markdown.
+  const result: string[] = []
+  if (parts[0].length > 0) result.push(parts[0])
+  for (let i = 1; i < parts.length; i++) {
+    if (parts[i].length > 0) result.push(sep + parts[i])
+  }
+  return result
+}
+
+/**
  * Auto-ingest: reads source → LLM analyzes → LLM writes wiki pages, all in one go.
  * Used when importing new files.
  *
@@ -243,6 +320,12 @@ export function languageRule(sourceContent: string = ""): string {
  * overwrites it; without serialization, each call would emit an
  * "updated" index based on the same pre-state and overwrite each
  * other's additions.
+ *
+ * Large sources: split into chunks of `MAX_CHUNK_CHARS` and processed
+ * one chunk at a time so each LLM round emits a tractable number of
+ * FILE blocks within max_tokens. dbIndex is refreshed between chunks
+ * so later chunks see what earlier ones wrote (path-collision avoidance
+ * + Stage-4 modification flow on real conflicts).
  */
 export async function autoIngest(
   projectPath: string,
@@ -292,13 +375,9 @@ async function autoIngestImpl(
     return cachedFiles
   }
 
-  // ── Step 0: Stage 3 1차 가공 (passthrough) ──────────────────
-  // Copy raw content into processed_1/<name>.md before anything else so
-  // it lands in the same commit as the db/ pages downstream. Currently
-  // a simple passthrough; a structured 1차 가공 segmenter will replace
-  // this body in Part 1.5.
-  activity.updateItem(activityId, { detail: "Step 0/2: Caching 1차 산출물..." })
-  const processed1 = await runProcessed1(pp, sp, sourceContent)
+  // 1차 가공 is now performed at import time (sources-view → preprocessFile),
+  // so `sourceContent` here is already the markdown form that lives at
+  // `raw/sources/<name>.md`. No separate processed_1 step.
 
   // Build a compact db/ index string to inject into both prompts. We
   // skip empty / .gitkeep entries; the LLM only needs to see what real
@@ -320,105 +399,132 @@ async function autoIngestImpl(
     relevantRejections,
   )
 
-  const truncatedContent = sourceContent.length > 50000
-    ? sourceContent.slice(0, 50000) + "\n\n[...truncated...]"
-    : sourceContent
+  // Split oversized sources into chunks. Small files run as a single
+  // chunk (length 1) — semantically identical to the pre-chunking flow.
+  const chunks = chunkSourceContent(sourceContent)
 
-  // ── Step 1: Analysis (decomposition planner) ─────────────────
-  activity.updateItem(activityId, { detail: "Step 1/2: Planning decomposition..." })
+  const allWrittenPaths: string[] = []
+  const allHardFailures: string[] = []
+  const allWarnings: string[] = []
+  const allProposals: ModificationProposal[] = []
+  const allReviewItems: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = []
+  // dbIndex is refreshed between chunks so later chunks see what earlier
+  // chunks wrote — this lets the LLM align paths with what already exists
+  // and routes real overwrite conflicts through Stage 4's proposal flow
+  // instead of clobbering pages chunk-1 just generated.
+  let currentDbIndex = dbIndex
 
-  let analysis = ""
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    const chunk = chunks[chunkIdx]
+    const chunkLabel = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length} · ` : ""
 
-  await streamChat(
-    llmConfig,
-    [
-      { role: "system", content: buildAnalysisPrompt(schema, purpose, dbIndex, truncatedContent, dismissalContext) },
-      { role: "user", content: `Analyze this source document and propose db/ paths:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}\n\n---\n\n${truncatedContent}` },
-    ],
-    {
-      onToken: (token) => { analysis += token },
-      onDone: () => {},
-      onError: (err) => {
-        activity.updateItem(activityId, { status: "error", detail: `Analysis failed: ${err.message}` })
-      },
-    },
-    signal,
-    { temperature: 0.1 },
-  )
+    // ── Step 1: Analysis (decomposition planner) ─────────────────
+    activity.updateItem(activityId, { detail: `${chunkLabel}Step 1/2: Planning decomposition...` })
 
-  // A silent `return []` here would look like success to the queue
-  // runner and cause the task to be filter()'d out. Throw instead so
-  // processNext's catch-block path (retry / mark failed) engages.
-  const analysisActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
-  if (analysisActivity?.status === "error") {
-    throw new Error(analysisActivity.detail || "Analysis stream failed")
-  }
+    let analysis = ""
 
-  // ── Step 2: Generation (FILE blocks under db/) ────────────────
-  activity.updateItem(activityId, { detail: "Step 2/2: Generating db/ pages..." })
-
-  let generation = ""
-
-  await streamChat(
-    llmConfig,
-    [
-      { role: "system", content: buildGenerationPrompt(schema, purpose, dbIndex, fileName, truncatedContent) },
+    await streamChat(
+      llmConfig,
+      [
+        { role: "system", content: buildAnalysisPrompt(schema, purpose, currentDbIndex, chunk, dismissalContext) },
+        { role: "user", content: `Analyze this source document and propose db/ paths:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length} (this is one slice of a larger document; only analyze what's below)` : ""}\n\n---\n\n${chunk}` },
+      ],
       {
-        role: "user",
-        content: [
-          `Source document to process: **${fileName}**`,
-          "",
-          "The Stage 1 decomposition plan below is CONTEXT. Do NOT echo it as",
-          "prose. Your output must be FILE/REVIEW blocks as specified in the",
-          "system prompt — nothing else.",
-          "",
-          "## Stage 1 Decomposition Plan (context only — do not repeat)",
-          "",
-          analysis,
-          "",
-          "## Original Source Content",
-          "",
-          truncatedContent,
-          "",
-          "---",
-          "",
-          `Now emit the FILE blocks for the db/ pages derived from **${fileName}**.`,
-          "Your response MUST begin with `---FILE: db/` as the very first characters.",
-          "No preamble. No analysis prose. Start immediately.",
-        ].join("\n"),
+        onToken: (token) => { analysis += token },
+        onDone: () => {},
+        onError: (err) => {
+          activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Analysis failed: ${err.message}` })
+        },
       },
-    ],
-    {
-      onToken: (token) => { generation += token },
-      onDone: () => {},
-      onError: (err) => {
-        activity.updateItem(activityId, { status: "error", detail: `Generation failed: ${err.message}` })
-      },
-    },
-    signal,
-    { temperature: 0.1 },
-  )
+      signal,
+      { temperature: 0.1 },
+    )
 
-  const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
-  if (generationActivity?.status === "error") {
-    throw new Error(generationActivity.detail || "Generation stream failed")
+    // A silent `return []` here would look like success to the queue
+    // runner and cause the task to be filter()'d out. Throw instead so
+    // processNext's catch-block path (retry / mark failed) engages.
+    const analysisActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+    if (analysisActivity?.status === "error") {
+      throw new Error(analysisActivity.detail || `${chunkLabel}Analysis stream failed`)
+    }
+
+    // ── Step 2: Generation (FILE blocks under db/) ────────────────
+    activity.updateItem(activityId, { detail: `${chunkLabel}Step 2/2: Generating db/ pages...` })
+
+    let generation = ""
+
+    await streamChat(
+      llmConfig,
+      [
+        { role: "system", content: buildGenerationPrompt(schema, purpose, currentDbIndex, fileName, chunk) },
+        {
+          role: "user",
+          content: [
+            `Source document to process: **${fileName}**${chunks.length > 1 ? ` (section ${chunkIdx + 1}/${chunks.length})` : ""}`,
+            "",
+            "The Stage 1 decomposition plan below is CONTEXT. Do NOT echo it as",
+            "prose. Your output must be FILE/REVIEW blocks as specified in the",
+            "system prompt — nothing else.",
+            "",
+            "## Stage 1 Decomposition Plan (context only — do not repeat)",
+            "",
+            analysis,
+            "",
+            chunks.length > 1 ? `## Original Source Content (section ${chunkIdx + 1}/${chunks.length})` : "## Original Source Content",
+            "",
+            chunk,
+            "",
+            "---",
+            "",
+            `Now emit the FILE blocks for the db/ pages derived from **${fileName}**${chunks.length > 1 ? ` (this section only — other sections are processed in separate rounds)` : ""}.`,
+            "Your response MUST begin with `---FILE: db/` as the very first characters.",
+            "No preamble. No analysis prose. Start immediately.",
+          ].join("\n"),
+        },
+      ],
+      {
+        onToken: (token) => { generation += token },
+        onDone: () => {},
+        onError: (err) => {
+          activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Generation failed: ${err.message}` })
+        },
+      },
+      signal,
+      { temperature: 0.1 },
+    )
+
+    const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+    if (generationActivity?.status === "error") {
+      throw new Error(generationActivity.detail || `${chunkLabel}Generation stream failed`)
+    }
+
+    // ── Step 3: Write files ───────────────────────────────────────
+    activity.updateItem(activityId, { detail: `${chunkLabel}Writing files...` })
+    const { writtenPaths, warnings: writeWarnings, hardFailures, proposals } = await writeFileBlocks(pp, generation, fileName)
+
+    allWrittenPaths.push(...writtenPaths)
+    allHardFailures.push(...hardFailures)
+    allWarnings.push(...writeWarnings)
+    allProposals.push(...proposals)
+    allReviewItems.push(...parseReviewBlocks(generation, sp))
+
+    // Refresh dbIndex for the next chunk so it sees what this chunk
+    // just wrote. Skip on the final chunk — no consumer.
+    if (chunks.length > 1 && chunkIdx < chunks.length - 1 && writtenPaths.length > 0) {
+      try {
+        currentDbIndex = await buildDbIndex(pp)
+      } catch {
+        // Non-fatal: the next chunk just sees a stale index, same as before chunking.
+      }
+    }
   }
-
-  // ── Step 3: Write files ───────────────────────────────────────
-  activity.updateItem(activityId, { detail: "Writing files..." })
-  const { writtenPaths, warnings: writeWarnings, hardFailures, proposals } = await writeFileBlocks(pp, generation, fileName)
-
-  // Always include the processed_1 passthrough output in the commit's
-  // file list — it's part of this ingest run even though it didn't go
-  // through the FILE block parser.
-  const allWrittenPaths = [processed1.writtenPath, ...writtenPaths]
 
   // Surface parser / writer warnings to the activity panel so users
   // don't have to open devtools to find out a block was dropped.
-  if (writeWarnings.length > 0) {
-    const summary = writeWarnings.length === 1
-      ? writeWarnings[0]
-      : `${writeWarnings.length} ingest warnings: ${writeWarnings.slice(0, 2).join(" · ")}${writeWarnings.length > 2 ? ` … (+${writeWarnings.length - 2} more in console)` : ""}`
+  if (allWarnings.length > 0) {
+    const summary = allWarnings.length === 1
+      ? allWarnings[0]
+      : `${allWarnings.length} ingest warnings: ${allWarnings.slice(0, 2).join(" · ")}${allWarnings.length > 2 ? ` … (+${allWarnings.length - 2} more in console)` : ""}`
     activity.updateItem(activityId, { detail: summary })
   }
 
@@ -432,14 +538,13 @@ async function autoIngestImpl(
     }
   }
 
-  // ── Step 4: Parse review items ────────────────────────────────
-  const reviewItems = parseReviewBlocks(generation, sp)
+  // ── Step 4: Append modification cards ────────────────────────
   // Stage 4 — append a modification card for every proposal the writer
   // parked. These items always run in their own card (the store skips
   // dedupe for `modification`) so two parallel conflicts can't collapse
   // into one and lose a parked draft.
-  for (const proposal of proposals) {
-    reviewItems.push({
+  for (const proposal of allProposals) {
+    allReviewItems.push({
       type: "modification",
       stage: "primary",
       title: `Modification proposal: ${proposal.targetPath}`,
@@ -453,8 +558,8 @@ async function autoIngestImpl(
       proposal,
     })
   }
-  if (reviewItems.length > 0) {
-    useReviewStore.getState().addItems(reviewItems)
+  if (allReviewItems.length > 0) {
+    useReviewStore.getState().addItems(allReviewItems)
   }
 
   // ── Step 5: Save to cache ───────────────────────────────────
@@ -466,20 +571,20 @@ async function autoIngestImpl(
   // mismatch, path-traversal rejection, empty-path) are NOT failures
   // — they represent deterministic decisions and caching them is
   // safe.
-  if (allWrittenPaths.length > 0 && hardFailures.length === 0) {
+  if (allWrittenPaths.length > 0 && allHardFailures.length === 0) {
     await saveIngestCache(pp, fileName, sourceContent, allWrittenPaths)
-  } else if (hardFailures.length > 0) {
+  } else if (allHardFailures.length > 0) {
     console.warn(
-      `[ingest] Skipping cache save for "${fileName}" — ${hardFailures.length} block(s) failed to write: ${hardFailures.join(", ")}`,
+      `[ingest] Skipping cache save for "${fileName}" — ${allHardFailures.length} block(s) failed to write: ${allHardFailures.join(", ")}`,
     )
   }
 
   // ── Step 6: Auto-commit ───────────────────────────────────
-  // One ingest run = one git commit. Includes the processed_1
-  // passthrough plus every db/ page the generator emitted. We call
-  // gitCommit directly (NOT commitIngest from auto-commit.ts) because
-  // the autoIngest entry point already holds the per-project lock —
-  // re-entering withProjectLock here would deadlock.
+  // One ingest run = one git commit covering every db/ page the
+  // generator emitted. We call gitCommit directly (NOT commitIngest
+  // from auto-commit.ts) because the autoIngest entry point already
+  // holds the per-project lock — re-entering withProjectLock here
+  // would deadlock.
   // Failures are non-fatal: the files are already on disk and the
   // user can `git add -A && git commit` manually if needed.
   if (allWrittenPaths.length > 0) {
@@ -495,13 +600,12 @@ async function autoIngestImpl(
 
   // ── Step 7: Generate embeddings (if enabled) ───────────────
   const embCfg = useWikiStore.getState().embeddingConfig
-  if (embCfg.enabled && embCfg.model && writtenPaths.length > 0) {
+  if (embCfg.enabled && embCfg.model && allWrittenPaths.length > 0) {
     try {
       const { embedPage, pageIdFromRelPath } = await import("@/lib/embedding")
-      for (const wpath of writtenPaths) {
-        // Only db/ pages are indexed. Pending proposal drafts, processed_1
-        // passthroughs, and any leftover non-db paths are skipped — they
-        // aren't retrieval targets.
+      for (const wpath of allWrittenPaths) {
+        // Only db/ pages are indexed. Pending proposal drafts and any
+        // other non-db paths are skipped — they aren't retrieval targets.
         if (!wpath.startsWith("db/")) continue
         const stem = wpath.split("/").pop()?.replace(/\.md$/, "") ?? ""
         const isStructural =
@@ -525,7 +629,7 @@ async function autoIngestImpl(
   }
 
   const detail = allWrittenPaths.length > 0
-    ? `${allWrittenPaths.length} files written${reviewItems.length > 0 ? `, ${reviewItems.length} review item(s)` : ""}`
+    ? `${allWrittenPaths.length} files written${allReviewItems.length > 0 ? `, ${allReviewItems.length} review item(s)` : ""}`
     : "No files generated"
 
   activity.updateItem(activityId, {

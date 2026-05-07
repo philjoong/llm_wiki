@@ -1,5 +1,6 @@
 import { copyFile, createDirectory, writeFile } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
+import { ensureOriginalsGitignore } from "@/lib/originals"
 
 /**
  * System prefix directories the ingest pipeline writes into. These must
@@ -12,10 +13,12 @@ import { gitInit } from "@/commands/git"
  * `exclusions/<level>/` subtrees. The `exclusions/` parent is created
  * implicitly by `create_dir_all`; its two seed markdown files
  * (`exclusion_schema.md`, `promotion_rules.md`) are written below.
+ *
+ * `processed_1/` was removed in second-fix-develop.md §2 D3 — the
+ * passthrough stage now writes directly into `raw/sources/<name>.md`.
  */
 export const SYSTEM_PREFIX_DIRS = [
   "db",
-  "processed_1",
   "pending",
   "counterexamples",
   "question_types",
@@ -133,6 +136,12 @@ export async function initProject({
 
   await copyFile(schemaSourcePath, `${pp}/schema.md`)
   await writeFile(`${pp}/purpose.md`, purposeMarkdown)
+
+  // Seed .gitignore before `git init` so the initial commit doesn't
+  // accidentally pick up an originals/ tree from a re-init scenario.
+  // (Existing projects pick up the same rules on first import via
+  // ensureOriginalsGitignore in sources-view.)
+  await ensureOriginalsGitignore(pp)
 
   await gitInit(pp)
 }

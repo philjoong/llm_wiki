@@ -57,6 +57,7 @@ pub fn run() {
             commands::project::create_project,
             commands::project::open_project,
             commands::migrate::migrate_wiki_to_db,
+            commands::migrate::migrate_raw_sources,
             clip_server_status,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,

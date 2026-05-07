@@ -220,17 +220,18 @@ export const ingestScenarios: IngestScenario[] = [
   // 4. game-dev/instance-server — Stage 3 decomposition into db/ paths.
   //
   // The source document mixes 4 distinct semantic units that schema.md
-  // routes to 4 different db/ subtrees. The Stage 3 ingest pipeline must:
-  //   - copy raw → processed_1/instance_server_design.md (passthrough)
+  // routes to 4 different db/ subtrees. The ingest pipeline must:
   //   - emit one db/ FILE block per semantic unit
   //   - frontmatter `sources` carries `file:` + `range:` pointing back
   //     to the heading of the contributing section
+  // (1차 가공 happens at import time now and produces raw/sources/<name>.md
+  //  before ingest runs, so there is no separate processed_1 step.)
   {
     name: "game-dev/instance-server",
     description:
-      "A raw game-dev design doc decomposes into 4 db/ pages plus the " +
-      "passthrough copy under processed_1/. Asserts both the file layout " +
-      "and the SourceRef shape in each page's frontmatter.",
+      "A raw game-dev design doc decomposes into 4 db/ pages. Asserts " +
+      "both the file layout and the SourceRef shape in each page's " +
+      "frontmatter.",
     initialWiki: {
       "purpose.md": "# Purpose\n\nGame-dev design wiki for an MMORPG.\n",
       "schema.md":
@@ -335,7 +336,6 @@ export const ingestScenarios: IngestScenario[] = [
     ].join("\n"),
     expected: {
       writtenPaths: [
-        "processed_1/instance_server_design.md",
         "db/systems/instance_server/server_structure.md",
         "db/content/dungeons/dungeon_a/entry_rules.md",
         "db/content/dungeons/dungeon_a/rewards.md",
@@ -350,10 +350,6 @@ export const ingestScenarios: IngestScenario[] = [
         "db/systems/instance_server/server_structure.md": [
           "file: instance_server_design.md",
           "gRPC",
-        ],
-        "processed_1/instance_server_design.md": [
-          "# 인스턴스 서버 설계",
-          "## 4. 던전 B — 스폰 규칙",
         ],
       },
       reviewsCreated: [],

@@ -56,6 +56,40 @@ export function formatIngestMessage(sourceFile: string, writtenPaths: string[]):
   return `${subject}\n\n${lines}\n\nSource: ${sourceFile}`
 }
 
+/**
+ * Commit a Stage 12 search-instance log file. `instancePath` is the
+ * project-relative path that `recordSearchInstance` just wrote.
+ *
+ * `questionTypeId` is null when the classifier couldn't pick a type
+ * (or `question_types/` is empty) — we still log the search, but the
+ * commit subject reads `search: untyped → …`.
+ */
+export async function commitSearchInstance(
+  projectPath: string,
+  instancePath: string,
+  questionTypeId: string | null,
+  hitsCount: number,
+  excludedCount: number,
+): Promise<CommitResult> {
+  const message = formatSearchInstanceMessage(
+    questionTypeId,
+    hitsCount,
+    excludedCount,
+  )
+  return withProjectLock(projectPath, () =>
+    gitCommit(projectPath, message, [instancePath]),
+  )
+}
+
+export function formatSearchInstanceMessage(
+  questionTypeId: string | null,
+  hitsCount: number,
+  excludedCount: number,
+): string {
+  const type = questionTypeId ?? "untyped"
+  return `search: ${type} → ${hitsCount} hits (${excludedCount} excluded)`
+}
+
 export function formatModificationMessage(
   action: string,
   targetPath: string,

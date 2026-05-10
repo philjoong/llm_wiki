@@ -107,6 +107,25 @@ type SpawnPayload = Record<string, unknown> & {
   streamId: string
   model: string
   messages: ChatMessage[]
+  // Ingest-only knobs. The Rust side treats each as Option<...> with
+  // a None-default that preserves the chat path's behavior verbatim.
+  disableTools?: boolean
+  systemPrompt?: string
+  cwd?: string
+}
+
+/**
+ * Ingest-only spawn options. Chat callers omit these and get the
+ * existing behavior; the agent-ingest path (src/lib/agent-ingest.ts)
+ * sets all three:
+ *   - disableTools: true     — `--tools ""` so the model can't use Read/Write/Edit
+ *   - systemPrompt: <prompt> — replaces default system prompt; also blocks cwd CLAUDE.md leakage
+ *   - cwd: <project root>    — pin the child's working dir to the wiki project
+ */
+export interface ClaudeCliSpawnOptions {
+  disableTools?: boolean
+  systemPrompt?: string
+  cwd?: string
 }
 
 /**
@@ -119,6 +138,7 @@ export async function streamClaudeCodeCli(
   messages: ChatMessage[],
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
+  options?: ClaudeCliSpawnOptions,
 ): Promise<void> {
   const { onToken, onDone, onError } = callbacks
 
@@ -185,6 +205,9 @@ export async function streamClaudeCodeCli(
       streamId,
       model: config.model,
       messages,
+      disableTools: options?.disableTools,
+      systemPrompt: options?.systemPrompt,
+      cwd: options?.cwd,
     }
     await invoke("claude_cli_spawn", payload)
   } catch (err) {

@@ -28,6 +28,8 @@ vi.mock("./llm-client", () => ({
     cb.onToken("")
     cb.onDone()
   }),
+  // autoIngest dispatches on this; HTTP-provider fixtures here all return false.
+  isCliProvider: () => false,
 }))
 
 import { readFile, listDirectory, fileExists, writeFile } from "@/commands/fs"

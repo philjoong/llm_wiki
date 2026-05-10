@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, FolderOpen, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History,
+  FileText, FolderOpen, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History, Network,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -15,6 +15,7 @@ type NavView = WikiState["activeView"]
 const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = [
   { view: "wiki", icon: FileText, labelKey: "nav.wiki" },
   { view: "sources", icon: FolderOpen, labelKey: "nav.sources" },
+  { view: "graph", icon: Network, labelKey: "nav.graph" },
   { view: "lint", icon: ClipboardCheck, labelKey: "nav.lint" },
   { view: "review", icon: ClipboardList, labelKey: "nav.review" },
   { view: "history", icon: History, labelKey: "nav.history" },

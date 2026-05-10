@@ -123,12 +123,50 @@ pub async fn claude_cli_detect() -> Result<DetectResult, String> {
     }
 }
 
+/// Build the CLI argument list for `claude -p`. Extracted so unit
+/// tests can verify ingest-specific flags (`--tools ""`,
+/// `--system-prompt`) compose correctly without spawning a process.
+fn build_cli_args(
+    model: &str,
+    disable_tools: bool,
+    system_prompt: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        "--output-format".into(), "stream-json".into(),
+        "--input-format".into(), "stream-json".into(),
+        "--verbose".into(),
+        "--model".into(), model.into(),
+    ];
+    // Stage A finding: `--tools ""` (NOT `--allowed-tools ""`) is the
+    // flag that empties the tool definition list. With no tools in
+    // sight, the model has no choice but to answer in text — required
+    // for the ingest JSON path.
+    if disable_tools {
+        args.push("--tools".into());
+        args.push(String::new());
+    }
+    // `--system-prompt` replaces the default system prompt wholesale,
+    // which also blocks the cwd `.claude/CLAUDE.md` from leaking into
+    // the system context (observed in Stage A).
+    if let Some(sp) = system_prompt {
+        args.push("--system-prompt".into());
+        args.push(sp.into());
+    }
+    args
+}
+
 /// Spawn `claude -p --output-format stream-json --input-format stream-json
 /// --verbose --model <model>` and pipe stdout back to the frontend as
 /// `claude-cli:{stream_id}` events (one line per event). Closes stdin
 /// after writing the serialized history so claude starts processing.
 /// Emits a final `claude-cli:{stream_id}:done` event with `{ code }`
 /// when the child exits.
+///
+/// Optional ingest-only knobs (chat callers leave these unset):
+///   - `disable_tools`: append `--tools ""` to remove tool definitions.
+///   - `system_prompt`: replace the default system prompt entirely.
+///   - `cwd`: run the child in this directory (overrides app cwd).
 #[tauri::command]
 pub async fn claude_cli_spawn(
     app: AppHandle,
@@ -136,6 +174,9 @@ pub async fn claude_cli_spawn(
     stream_id: String,
     model: String,
     messages: Vec<ClaudeMessage>,
+    disable_tools: Option<bool>,
+    system_prompt: Option<String>,
+    cwd: Option<String>,
 ) -> Result<(), String> {
     // Build the turn list: fold any system messages into a preamble on
     // the first user turn rather than using a CLI flag, because
@@ -180,15 +221,19 @@ pub async fn claude_cli_spawn(
     let claude_path = which::which("claude")
         .map_err(|_| "`claude` not found on PATH".to_string())?;
 
+    let cli_args = build_cli_args(
+        &model,
+        disable_tools.unwrap_or(false),
+        system_prompt.as_deref(),
+    );
+
     let mut cmd = Command::new(&claude_path);
-    cmd.arg("-p")
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--input-format")
-        .arg("stream-json")
-        .arg("--verbose")
-        .arg("--model")
-        .arg(&model);
+    for arg in &cli_args {
+        cmd.arg(arg);
+    }
+    if let Some(dir) = cwd.as_deref() {
+        cmd.current_dir(dir);
+    }
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -334,5 +379,67 @@ pub async fn claude_cli_kill(
         // enough; kill_on_drop ensures the SIGKILL is sent.
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn baseline(model: &str) -> Vec<String> {
+        vec![
+            "-p", "--output-format", "stream-json",
+            "--input-format", "stream-json", "--verbose",
+            "--model", model,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
+    #[test]
+    fn baseline_args_unchanged_when_no_options() {
+        // Chat callers pass disable_tools=false and no system_prompt.
+        // Behavior must be identical to the pre-Stage-B implementation.
+        let args = build_cli_args("claude-sonnet-4-5", false, None);
+        assert_eq!(args, baseline("claude-sonnet-4-5"));
+    }
+
+    #[test]
+    fn disable_tools_appends_empty_tools_flag() {
+        let args = build_cli_args("m", true, None);
+        let pos = args
+            .iter()
+            .position(|a| a == "--tools")
+            .expect("--tools flag must be present");
+        // The empty string immediately after is what tells the CLI
+        // "no tools available" — non-empty values would whitelist tools.
+        assert_eq!(args[pos + 1], "");
+    }
+
+    #[test]
+    fn system_prompt_passes_through_verbatim() {
+        let args = build_cli_args("m", false, Some("you are an ingest helper"));
+        let pos = args
+            .iter()
+            .position(|a| a == "--system-prompt")
+            .expect("--system-prompt flag must be present");
+        assert_eq!(args[pos + 1], "you are an ingest helper");
+    }
+
+    #[test]
+    fn ingest_combo_has_both_flags() {
+        let args = build_cli_args("m", true, Some("sp"));
+        assert!(args.iter().any(|a| a == "--tools"));
+        assert!(args.iter().any(|a| a == "--system-prompt"));
+    }
+
+    #[test]
+    fn no_system_prompt_means_flag_absent() {
+        // Important regression check: an unset Option must NOT emit
+        // `--system-prompt` with an empty argument — that would
+        // accidentally clobber the default system prompt for chat.
+        let args = build_cli_args("m", false, None);
+        assert!(!args.iter().any(|a| a == "--system-prompt"));
+    }
 }
 

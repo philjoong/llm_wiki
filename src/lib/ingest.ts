@@ -1,5 +1,6 @@
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
-import { streamChat } from "@/lib/llm-client"
+import { streamChat, isCliProvider } from "@/lib/llm-client"
+import { autoIngestViaAgent } from "@/lib/agent-ingest"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
@@ -334,8 +335,15 @@ export async function autoIngest(
   signal?: AbortSignal,
   folderContext?: string,
 ): Promise<string[]> {
+  // Local-CLI providers (Claude Code today; Codex/Gemini eventually)
+  // bypass the FILE-block pipeline because their coding-agent training
+  // makes them invoke Read/Write/Edit instead of producing parseable
+  // text. See [agent-ingest.ts](./agent-ingest.ts) for the reasoning
+  // and Stage A verification record in claude-cli-ingest-plan.md.
   return withProjectLock(normalizePath(projectPath), () =>
-    autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext),
+    isCliProvider(llmConfig.provider)
+      ? autoIngestViaAgent(projectPath, sourcePath, llmConfig, signal, folderContext)
+      : autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext),
   )
 }
 

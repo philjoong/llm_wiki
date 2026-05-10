@@ -229,11 +229,11 @@ function QueueRow({ task, onRetry, onCancel }: { task: IngestTask; onRetry: (id:
               <RotateCcw className="h-3 w-3" />
             </button>
           )}
-          {(task.status === "pending" || task.status === "processing") && (
+          {(task.status === "pending" || task.status === "processing" || task.status === "failed") && (
             <button
               onClick={() => onCancel(task.id)}
               className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
-              title="Cancel"
+              title={task.status === "failed" ? "Dismiss" : "Cancel"}
             >
               <X className="h-3 w-3" />
             </button>

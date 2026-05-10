@@ -40,6 +40,16 @@ vi.mock("../search", () => ({
   searchPaths: vi.fn(),
 }))
 
+// instance-log writes to disk + git. The pipeline tests focus on the
+// trace/result shape, not on logging, so stub it out here. (Stage 12's
+// own tests in instance-log.test.ts exercise the write/commit path.)
+vi.mock("../instance-log", () => ({
+  recordSearchInstance: vi.fn().mockResolvedValue({
+    path: "exclusions/instances/x.md",
+    commitHash: "stub",
+  }),
+}))
+
 import { listDirectory } from "@/commands/fs"
 import { classifyQuestion } from "../classify-question"
 import { loadQuestionTypes } from "../question-types"

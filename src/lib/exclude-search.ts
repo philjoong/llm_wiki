@@ -29,6 +29,7 @@ import {
   type ExclusionEntry,
 } from "./exclusions"
 import { searchPaths, type SearchResult } from "./search"
+import { recordSearchInstance } from "./instance-log"
 
 export interface AppliedEntry {
   pattern: string
@@ -136,7 +137,23 @@ export async function runExcludeSearch(
       : {}),
   }
 
-  return { hits, trace, keptPaths: absoluteKept }
+  const out: ExcludeSearchResult = { hits, trace, keptPaths: absoluteKept }
+
+  // Stage 12 — Level 1 instance log. Skipped for empty/whitespace-only
+  // questions as a safety net (real noise like greetings is already
+  // filtered upstream by chat-panel's greeting-detector). Logging
+  // failures must not break the user-visible search, so they are
+  // swallowed with a warning — promotion (Stage 13) just sees one
+  // fewer instance row.
+  if (question.trim().length > 0) {
+    try {
+      await recordSearchInstance(pp, question, out)
+    } catch (err) {
+      console.warn("[exclude-search] recordSearchInstance failed:", err)
+    }
+  }
+
+  return out
 }
 
 /**

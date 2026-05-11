@@ -17,6 +17,7 @@
 //! capabilities JSON.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +27,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 /// Shared state holding running `claude` child processes keyed by the
 /// frontend-generated stream id. Registered via .manage() in lib.rs.
@@ -129,14 +131,17 @@ pub async fn claude_cli_detect() -> Result<DetectResult, String> {
 fn build_cli_args(
     model: &str,
     disable_tools: bool,
-    system_prompt: Option<&str>,
+    system_prompt_file: Option<&Path>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
-        "--output-format".into(), "stream-json".into(),
-        "--input-format".into(), "stream-json".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--input-format".into(),
+        "stream-json".into(),
         "--verbose".into(),
-        "--model".into(), model.into(),
+        "--model".into(),
+        model.into(),
     ];
     // Stage A finding: `--tools ""` (NOT `--allowed-tools ""`) is the
     // flag that empties the tool definition list. With no tools in
@@ -146,14 +151,83 @@ fn build_cli_args(
         args.push("--tools".into());
         args.push(String::new());
     }
-    // `--system-prompt` replaces the default system prompt wholesale,
-    // which also blocks the cwd `.claude/CLAUDE.md` from leaking into
-    // the system context (observed in Stage A).
-    if let Some(sp) = system_prompt {
-        args.push("--system-prompt".into());
-        args.push(sp.into());
+    // `--system-prompt-file` replaces the default system prompt
+    // wholesale, matching `--system-prompt` semantics while avoiding a
+    // long/quote-heavy command-line argument. This is also friendlier to
+    // Windows npm `.cmd` shims.
+    if let Some(path) = system_prompt_file {
+        args.push("--system-prompt-file".into());
+        args.push(path.to_string_lossy().into_owned());
     }
     args
+}
+
+fn write_system_prompt_file(system_prompt: &str) -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join(format!(
+        "llm-wiki-claude-system-prompt-{}.md",
+        Uuid::new_v4()
+    ));
+    std::fs::write(&path, system_prompt)
+        .map_err(|e| format!("Failed to write claude system prompt file: {e}"))?;
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn is_windows_batch_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn quote_cmd_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "\"\"".to_string();
+    }
+
+    let mut quoted = String::from("\"");
+    for ch in arg.chars() {
+        match ch {
+            '"' => quoted.push_str("\\\""),
+            // Escape cmd metacharacters so arguments are not interpreted
+            // by the shell wrapper needed for npm-installed .cmd shims.
+            '^' | '&' | '|' | '<' | '>' | '(' | ')' | '%' | '!' => {
+                quoted.push('^');
+                quoted.push(ch);
+            }
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(windows)]
+fn batch_command_line(program: &Path, args: &[String]) -> String {
+    let mut parts = Vec::with_capacity(args.len() + 1);
+    parts.push(quote_cmd_arg(program.to_string_lossy().as_ref()));
+    parts.extend(args.iter().map(|arg| quote_cmd_arg(arg)));
+    parts.join(" ")
+}
+
+fn claude_command(program: &Path, args: &[String]) -> Command {
+    #[cfg(windows)]
+    {
+        if is_windows_batch_file(program) {
+            let mut cmd = Command::new("cmd.exe");
+            cmd.arg("/d")
+                .arg("/c")
+                .arg(batch_command_line(program, args));
+            return cmd;
+        }
+    }
+
+    let mut cmd = Command::new(program);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd
 }
 
 /// Spawn `claude -p --output-format stream-json --input-format stream-json
@@ -218,19 +292,21 @@ pub async fn claude_cli_spawn(
     // npm-installed CLI ships as `claude.cmd`, which is invisible to a
     // bare-name spawn and shows up to the user as "CLI not found" even
     // though detection (which uses which::which) succeeded.
-    let claude_path = which::which("claude")
-        .map_err(|_| "`claude` not found on PATH".to_string())?;
+    let claude_path =
+        which::which("claude").map_err(|_| "`claude` not found on PATH".to_string())?;
+
+    let system_prompt_file = match system_prompt.as_deref() {
+        Some(prompt) => Some(write_system_prompt_file(prompt)?),
+        None => None,
+    };
 
     let cli_args = build_cli_args(
         &model,
         disable_tools.unwrap_or(false),
-        system_prompt.as_deref(),
+        system_prompt_file.as_deref(),
     );
 
-    let mut cmd = Command::new(&claude_path);
-    for arg in &cli_args {
-        cmd.arg(arg);
-    }
+    let mut cmd = claude_command(&claude_path, &cli_args);
     if let Some(dir) = cwd.as_deref() {
         cmd.current_dir(dir);
     }
@@ -240,9 +316,12 @@ pub async fn claude_cli_spawn(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn claude: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        if let Some(path) = system_prompt_file.as_deref() {
+            let _ = std::fs::remove_file(path);
+        }
+        format!("Failed to spawn claude: {e}")
+    })?;
 
     let mut stdin = child
         .stdin
@@ -288,17 +367,14 @@ pub async fn claude_cli_spawn(
     drop(stdin);
 
     // Register the child so `claude_cli_kill` can reach it.
-    state
-        .children
-        .lock()
-        .await
-        .insert(stream_id.clone(), child);
+    state.children.lock().await.insert(stream_id.clone(), child);
 
     let children = Arc::clone(&state.children);
     let app_for_task = app.clone();
     let stream_id_task = stream_id.clone();
     let topic = format!("claude-cli:{stream_id}");
     let done_topic = format!("claude-cli:{stream_id}:done");
+    let system_prompt_file_task = system_prompt_file.clone();
 
     // Drain stdout line-by-line in a background task, emitting each
     // line as an event. Completes when stdout closes (child exited).
@@ -351,6 +427,9 @@ pub async fn claude_cli_spawn(
         };
 
         let stderr_text = stderr_task.await.unwrap_or_default();
+        if let Some(path) = system_prompt_file_task {
+            let _ = std::fs::remove_file(path);
+        }
 
         let _ = app.emit(
             &done_topic,
@@ -387,9 +466,14 @@ mod tests {
 
     fn baseline(model: &str) -> Vec<String> {
         vec![
-            "-p", "--output-format", "stream-json",
-            "--input-format", "stream-json", "--verbose",
-            "--model", model,
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--input-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            model,
         ]
         .into_iter()
         .map(String::from)
@@ -417,20 +501,21 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_passes_through_verbatim() {
-        let args = build_cli_args("m", false, Some("you are an ingest helper"));
+    fn system_prompt_file_passes_path() {
+        let path = Path::new("C:\\Temp\\prompt file.md");
+        let args = build_cli_args("m", false, Some(path));
         let pos = args
             .iter()
-            .position(|a| a == "--system-prompt")
-            .expect("--system-prompt flag must be present");
-        assert_eq!(args[pos + 1], "you are an ingest helper");
+            .position(|a| a == "--system-prompt-file")
+            .expect("--system-prompt-file flag must be present");
+        assert_eq!(args[pos + 1], path.to_string_lossy());
     }
 
     #[test]
     fn ingest_combo_has_both_flags() {
-        let args = build_cli_args("m", true, Some("sp"));
+        let args = build_cli_args("m", true, Some(Path::new("prompt.md")));
         assert!(args.iter().any(|a| a == "--tools"));
-        assert!(args.iter().any(|a| a == "--system-prompt"));
+        assert!(args.iter().any(|a| a == "--system-prompt-file"));
     }
 
     #[test]
@@ -439,7 +524,21 @@ mod tests {
         // `--system-prompt` with an empty argument — that would
         // accidentally clobber the default system prompt for chat.
         let args = build_cli_args("m", false, None);
-        assert!(!args.iter().any(|a| a == "--system-prompt"));
+        assert!(!args.iter().any(|a| a == "--system-prompt-file"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_batch_wrapper_preserves_empty_tools_arg() {
+        let line = batch_command_line(
+            Path::new("C:\\Program Files\\nodejs\\claude.cmd"),
+            &[
+                "--tools".to_string(),
+                String::new(),
+                "--model".to_string(),
+                "m".to_string(),
+            ],
+        );
+        assert!(line.contains("\"--tools\" \"\" \"--model\""));
     }
 }
-

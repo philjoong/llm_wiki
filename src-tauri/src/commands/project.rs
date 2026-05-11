@@ -247,20 +247,17 @@ pub fn open_project(path: String) -> Result<WikiProject, String> {
             return Err(format!("Path is not a directory: '{}'", path));
         }
 
-        // Validate that this looks like an llm_wiki project. We accept either
-        // a `db/` directory (post-Phase-B layout) or a legacy `wiki/`
-        // directory; the latter is migrated to `db/` on first open by
-        // `migrate_wiki_to_db`. Validation here only requires schema.md plus
-        // at least one of the two roots.
+        // Validate that this looks like an llm_wiki project: schema.md
+        // at the root plus a `db/` directory.
         if !root.join("schema.md").exists() {
             return Err(format!(
                 "Not a valid project (missing schema.md): '{}'",
                 path
             ));
         }
-        if !root.join("db").is_dir() && !root.join("wiki").is_dir() {
+        if !root.join("db").is_dir() {
             return Err(format!(
-                "Not a valid project (missing db/ or wiki/ directory): '{}'",
+                "Not a valid project (missing db/ directory): '{}'",
                 path
             ));
         }

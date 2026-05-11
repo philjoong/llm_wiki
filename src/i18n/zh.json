@@ -9,6 +9,7 @@
     "graph": "关系图",
     "lint": "检查",
     "review": "修改请求",
+    "promotion": "升级",
     "history": "历史",
     "settings": "设置",
     "switchProject": "切换项目",
@@ -76,7 +77,12 @@
     },
     "zeroResidue": {
       "label": "零剩余"
-    }
+    },
+    "markAsCorrect": "标记为正确",
+    "markAsCorrectHint": "将此结果标记为正确答案。其它类型下排除该路径的 entry 会被标记 needs_review。",
+    "markedAsCorrect": "已标记",
+    "markNoMatch": "无匹配",
+    "markFailed": "失败"
   },
   "lint": {
     "title": "检查",
@@ -89,6 +95,7 @@
     "noOutlinks": "无出链",
     "contradiction": "内容矛盾",
     "stale": "内容过时",
+    "staleAxiom": "过时 Axiom",
     "missingPage": "缺失页面",
     "suggestion": "建议"
   },
@@ -96,6 +103,39 @@
     "title": "修改请求",
     "clearResolved": "清除已解决",
     "allClear": "一切正常，无需审阅"
+  },
+  "promotion": {
+    "title": "升级 / 排除地图",
+    "reload": "刷新",
+    "empty": "暂无升级候选",
+    "emptyHint": "继续累积 chat 检索；超过 exclusions/promotion_rules.md 阈值的 (typeId, path) 对会在此显示。",
+    "countLabel": "累积 {{count}} 次",
+    "instancesLabel": "{{count}} 条引用",
+    "citationsToggle": "显示引用 instance",
+    "promotePattern": "升级为 Pattern",
+    "promoteAxiom": "升级为 Axiom",
+    "dismiss": "忽略",
+    "axiomNamePrompt": "axiom 文件名（将保存到 exclusions/axioms/<name>.md）:",
+    "dismissReasonPrompt": "忽略原因（可选）:",
+    "section": {
+      "candidates": "升级候选"
+    }
+  },
+  "exclusion": {
+    "entriesTitle": "现有排除 entry",
+    "entriesEmpty": "暂无排除 entry",
+    "entriesEmptyHint": "在 exclusions/by_question_type/ 或 exclusions/axioms/ 添加 entry 后会在此显示。",
+    "needsReviewFilter": "仅看待复核",
+    "needsReview": "待复核",
+    "stale": "过时",
+    "archivedBadge": "已归档",
+    "markValidated": "标记已验证",
+    "archive": "归档",
+    "restore": "恢复",
+    "checkFreshness": "检查新鲜度",
+    "checkFreshnessHint": "扫描引用来源的 git mtime；若来源在 last_validated_at 之后被修改，则标记为 needs_review。",
+    "validatedAt": "验证于",
+    "sourcesLabel": "{{count}} 个来源"
   },
   "history": {
     "title": "历史",

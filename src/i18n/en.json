@@ -9,6 +9,7 @@
     "graph": "Graph",
     "lint": "Lint",
     "review": "Modifications",
+    "promotion": "Promotion",
     "history": "History",
     "settings": "Settings",
     "switchProject": "Switch Project",
@@ -76,7 +77,12 @@
     },
     "zeroResidue": {
       "label": "Zero residue"
-    }
+    },
+    "markAsCorrect": "Mark as correct",
+    "markAsCorrectHint": "Flag this result as a correct answer. Any entry that excludes this path under a different type will be marked needs_review.",
+    "markedAsCorrect": "Marked",
+    "markNoMatch": "No match",
+    "markFailed": "Failed"
   },
   "lint": {
     "title": "Lint",
@@ -89,6 +95,7 @@
     "noOutlinks": "No Outbound Links",
     "contradiction": "Contradiction",
     "stale": "Stale Content",
+    "staleAxiom": "Stale Axiom",
     "missingPage": "Missing Page",
     "suggestion": "Suggestion"
   },
@@ -96,6 +103,39 @@
     "title": "Modifications",
     "clearResolved": "Clear resolved",
     "allClear": "All clear — nothing to review"
+  },
+  "promotion": {
+    "title": "Promotion / Exclusion Map",
+    "reload": "Reload",
+    "empty": "No promotion candidates",
+    "emptyHint": "Run more chat searches; pairs whose count crosses the threshold in exclusions/promotion_rules.md will appear here.",
+    "countLabel": "{{count}} instances",
+    "instancesLabel": "{{count}} citations",
+    "citationsToggle": "Show citations",
+    "promotePattern": "Promote to Pattern",
+    "promoteAxiom": "Promote to Axiom",
+    "dismiss": "Dismiss",
+    "axiomNamePrompt": "Axiom file name (will be saved under exclusions/axioms/<name>.md):",
+    "dismissReasonPrompt": "Reason for dismissing this candidate (optional):",
+    "section": {
+      "candidates": "Promotion candidates"
+    }
+  },
+  "exclusion": {
+    "entriesTitle": "Existing exclusion entries",
+    "entriesEmpty": "No exclusion entries yet",
+    "entriesEmptyHint": "Add entries under exclusions/by_question_type/ or exclusions/axioms/ to see them listed here.",
+    "needsReviewFilter": "Show only needs-review",
+    "needsReview": "Needs review",
+    "stale": "Stale",
+    "archivedBadge": "Archived",
+    "markValidated": "Mark validated",
+    "archive": "Archive",
+    "restore": "Restore",
+    "checkFreshness": "Check freshness",
+    "checkFreshnessHint": "Walks git mtimes for cited sources and flags entries whose sources changed since last_validated_at as needs_review.",
+    "validatedAt": "Validated",
+    "sourcesLabel": "{{count}} source(s)"
   },
   "history": {
     "title": "History",

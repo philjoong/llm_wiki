@@ -5,9 +5,12 @@ import type { FileNode } from "@/types/wiki"
 import { useActivityStore } from "@/stores/activity-store"
 import { getFileName, getRelativePath, normalizePath } from "@/lib/path-utils"
 import { buildLanguageDirective } from "@/lib/output-language"
+import { loadExclusions } from "@/lib/exclusions"
+import { findStaleAxioms } from "@/lib/exclusion-validity"
+import { loadThresholds } from "@/lib/promotion"
 
 export interface LintResult {
-  type: "orphan" | "broken-link" | "no-outlinks" | "semantic"
+  type: "orphan" | "broken-link" | "no-outlinks" | "semantic" | "stale-axiom"
   severity: "warning" | "info"
   page: string
   detail: string
@@ -151,6 +154,30 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
         })
       }
     }
+  }
+
+  // Stage 14 — stale axiom check. Each axiom entry whose
+  // `last_validated_at` is older than `freshness_days` becomes one info
+  // result so the user can revisit it from the lint view. We piggyback
+  // on the same lint surface to avoid a separate "freshness report" UI.
+  try {
+    const projectPath = normalizePath(dbRoot.replace(/\/db$/, ""))
+    const [docs, thresholds] = await Promise.all([
+      loadExclusions(projectPath),
+      loadThresholds(projectPath),
+    ])
+    const { rows } = findStaleAxioms(docs, thresholds.freshnessDays)
+    for (const row of rows) {
+      results.push({
+        type: "stale-axiom",
+        severity: "info",
+        page: row.ref.filePath,
+        detail: `Axiom \`${row.ref.pattern}\` last validated ${row.ageDays} day(s) ago (${row.lastValidatedAt}). Older than freshness window of ${thresholds.freshnessDays} days — revisit and re-validate.`,
+        affectedPages: [row.ref.filePath],
+      })
+    }
+  } catch (err) {
+    console.warn("[lint] stale-axiom check failed:", err)
   }
 
   return results

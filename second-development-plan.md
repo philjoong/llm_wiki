@@ -455,28 +455,38 @@ npm run test:mocks
 
 ### 작업 항목
 
-- [ ] [src/lib/promotion.ts](src/lib/promotion.ts) **신규**:
+- [x] [src/lib/promotion.ts](src/lib/promotion.ts) **신규**:
   - `analyzePromotionCandidates(projectPath, opts?): Promise<PromotionCandidate[]>` —
-    `exclusions/instances/**/*.md`를 스캔해 (typeId, path) 쌍별 빈도 집계.
-    `promotion_rules.md`에 정의된 임계값(파싱 단순화 위해 `default 5` 등 fallback
-    포함)을 넘은 후보만 반환.
+    `exclusions/instances/**/*.md`를 스캔해 (typeId, hit path) 쌍별 빈도 집계.
+    `promotion_rules.md`의 `pattern_min_count`를 기본 5로 fallback. 인스턴스
+    출처는 `## Top Hits` 블록에서 추출(절대 경로 → project-relative `db/...`로
+    정규화). 후보 정렬은 count 내림차순.
   - `promoteToPattern(candidate)` / `promoteToAxiom(candidate, axiomName)` —
-    대상 파일 entry 추가, instance 출처를 `sources:`에 인용, git commit
-    (`promote: pattern <type>` / `promote: axiom <name>`).
+    `exclusions/by_question_type/<type>.md` 또는 `exclusions/axioms/<name>.md`에
+    entry append (`## 배제` 섹션 자동 생성/확장). 출처 라인에 contributing
+    instance 파일 N개 인용. 기존 axiom 재진입 시 `applies_to`에 typeId 합쳐
+    덮어쓴다. withProjectLock 경유 git commit (`promote: pattern <type> — <path>`
+    / `promote: axiom <name> — <path>`).
   - `dismissCandidate(candidate, reason)` — `.llm-wiki/promotion-dismissals.jsonl`에
-    기록 (Stage 4 rejection-log와 동일 패턴) → 향후 같은 후보가 다시 떠도 dedup.
-- [ ] [src/components/exclusions/promotion-panel.tsx](src/components/exclusions/promotion-panel.tsx)
-  **신규** — [icon-sidebar.tsx](src/components/layout/icon-sidebar.tsx)의 기존
-  view 목록(file-tree·knowledge-tree·sources·review·lint 등) 옆에 promotion view
-  하나를 추가하고, 그 안에 렌더된다. 카드: typeId + path + 빈도 + 인용된 instance
-  N개. 액션 [Promote to Pattern] / [Promote to Axiom] / [Dismiss].
-- [ ] [src/components/layout/icon-sidebar.tsx](src/components/layout/icon-sidebar.tsx)
-  — promotion view 아이콘 추가 (`TrendingUp` 등). 정확한 배치는 기존 view
-  엔트리 순서를 따른다 (review 다음 등). `nav.promotion` i18n 키 ko/en/zh.
-- [ ] [src/lib/__tests__/promotion.test.ts](src/lib/__tests__/promotion.test.ts)
-  **신규** — 6 케이스: 빈도 집계 정확 / 임계값 미달 후보 제외 / promote가 entry
-  추가하고 instance 인용 / dismiss가 dedup 작동 / promotion_rules.md 파싱 fallback /
-  archived entry는 후보 재진입 X.
+    JSONL 1줄 append (Stage 4 rejection-log와 동일 패턴). `analyzePromotionCandidates`가
+    이 키를 dedup해 향후 재노출 차단.
+  - 이미 패턴/axiom entry에 등록된 (typeId, path) 쌍은 후보에서 제외 — archived
+    entry도 "사람이 결정한 항목"으로 간주해 동일하게 차단(IDEA §2.6).
+- [x] [src/components/exclusions/promotion-panel.tsx](src/components/exclusions/promotion-panel.tsx)
+  **신규** — content-area에서 활성화되는 view. 카드: typeId + path + 빈도 +
+  인용된 instance 파일 N개(접힘). 액션 [Promote to Pattern] / [Promote to Axiom]
+  (axiom 이름 prompt) / [Dismiss] (사유 prompt). 새로고침 버튼은 reload + dataVersion
+  bump 트리거.
+- [x] [src/components/layout/icon-sidebar.tsx](src/components/layout/icon-sidebar.tsx)
+  — `TrendingUp` 아이콘으로 promotion view 추가(review 다음 자리). wiki-store
+  `activeView` 유니언에 `"promotion"` 추가, content-area switch에 `PromotionPanel`
+  배치. `nav.promotion` i18n 키 ko/en/zh + panel 라벨 일습.
+- [x] [src/lib/__tests__/promotion.test.ts](src/lib/__tests__/promotion.test.ts)
+  **신규** — 9 케이스: 빈도 집계 정확 / 임계값 미달 후보 제외 / 패턴+axiom+dismiss
+  dedup 합산 (archived 포함) / promotion_rules.md 파싱 fallback / promoteToPattern
+  entry append (기존 파일 보존) / promoteToPattern 새 `## 배제` 섹션 생성 /
+  promoteToAxiom 새 파일 + frontmatter / promoteToAxiom 기존 파일에 applies_to
+  확장 / dismissCandidate JSONL append.
 
 ### 자동 검증
 

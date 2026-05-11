@@ -149,6 +149,31 @@ PLAN.md를 수동 검증 가능한 단계로 재구성해 PR 단위로 진행했
 
 ---
 
+## Round 4 — IDEA Part 2 검색 배제 맵 구현 완료
+
+`second-development-plan.md`의 Stage 8~15 구현 상태를 실제 코드 기준으로 재검토했다.
+세부 계획서는 제거하고, context 관리용으로 완료 상태만 남긴다.
+
+- 새 프로젝트 bootstrap은 `question_types/`와 `exclusions/{by_question_type,axioms,instances}/`,
+  `exclusions/exclusion_schema.md`, `exclusions/promotion_rules.md`를 생성한다.
+- 질문 유형 로더, exclusion 로더/glob matcher, LLM question classifier,
+  `runExcludeSearch` 검색 파이프라인, chat trace UI, residue 0 처리까지 연결됨.
+- 검색 instance 로그(Level 1), promotion 후보 분석과 pattern/axiom 승격(Level 2/3),
+  dismiss 기록, promotion sidebar UI가 구현됨.
+- 자기 보정(Stage 14)도 구현됨: source freshness `needs_review`, stale axiom,
+  counterexample marking, archive/restore, mark validated, 관련 i18n/UI/test 포함.
+- 통합 시나리오(Stage 15): `schema/question_types/` 예시, `USAGE.md` 가이드,
+  exclude-search scenario test가 추가됨.
+
+검증 결과: `npm.cmd run typecheck` 통과. Part 2 관련 테스트 72개 통과
+(`question-types`, `exclusions`, `classify-question`, `exclude-search`, `instance-log`,
+`promotion`, `exclusion-validity`, `exclude-search.scenarios`, `i18n-parity`).
+전체 `npm.cmd run test:mocks`는 895개 중 894개 통과, 실패 1개는
+`src/lib/ingest-queue.integration.test.ts`의 Unicode queue persistence 케이스로
+Part 2 변경 범위와 직접 관련 없는 별도 잔여 이슈로 보인다.
+
+---
+
 ## 다음 단계 — 멀티모달 1차 가공 보강 (계획)
 
 **문제의식.** 1차 가공(`preprocess_file`)은 텍스트 추출만 한다. PDF/DOCX/PPTX의

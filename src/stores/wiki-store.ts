@@ -98,6 +98,7 @@ interface WikiState {
   activePresetId: string | null
   embeddingConfig: EmbeddingConfig
   outputLanguage: OutputLanguage
+  selectedBranch: string | null
   dataVersion: number
 
   setProject: (project: WikiProject | null) => void
@@ -111,6 +112,7 @@ interface WikiState {
   setActivePresetId: (id: string | null) => void
   setEmbeddingConfig: (config: EmbeddingConfig) => void
   setOutputLanguage: (lang: OutputLanguage) => void
+  setSelectedBranch: (branch: string | null) => void
   bumpDataVersion: () => void
 }
 
@@ -131,6 +133,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
   providerConfigs: {},
   activePresetId: null,
+  selectedBranch: null,
 
   dataVersion: 0,
 
@@ -154,6 +157,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setActivePresetId: (activePresetId) => set({ activePresetId }),
   setEmbeddingConfig: (embeddingConfig) => set({ embeddingConfig }),
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),
+  setSelectedBranch: (selectedBranch) => set({ selectedBranch }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
 }))
 

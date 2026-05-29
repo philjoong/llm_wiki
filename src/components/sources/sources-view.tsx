@@ -5,12 +5,15 @@ import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, Chev
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
+import { useActivityStore } from "@/stores/activity-store"
 import { listDirectory, readFile, writeFile, deleteFile, findRelatedWikiPages, preprocessFile } from "@/commands/fs"
+import { gitCommit } from "@/commands/git"
 import type { FileNode } from "@/types/wiki"
 import { startIngest } from "@/lib/ingest"
 import { enqueueIngest, enqueueBatch } from "@/lib/ingest-queue"
 import { useTranslation } from "react-i18next"
 import { normalizePath, getFileName } from "@/lib/path-utils"
+import { convertHtmlToMarkdown } from "@/lib/html-convert"
 import {
   buildDeletedKeys,
   cleanIndexListing,
@@ -98,6 +101,14 @@ export function SourcesView() {
     const pp = normalizePath(project.path)
     const paths = Array.isArray(selected) ? selected : [selected]
 
+    const activityId = useActivityStore.getState().addItem({
+      type: "import",
+      title: paths.length === 1 ? getFileName(paths[0]) || "file" : `${paths.length} files`,
+      status: "running",
+      detail: "Preprocessing files...",
+      filesWritten: [],
+    })
+
     // Import == 1차 가공. We extract markdown from the original
     // (PDF/docx → text, plain text passthrough, etc.) and write
     // `raw/sources/<basename>.md`. We ALSO copy the binary into
@@ -115,7 +126,14 @@ export function SourcesView() {
       const mdName = toMarkdownName(originalName)
       const destPath = await getUniqueDestPath(`${pp}/raw/sources`, mdName)
       try {
-        const markdown = await preprocessFile(sourcePath)
+        let markdown = await preprocessFile(sourcePath)
+
+        // HTML conversion if needed
+        const ext = sourcePath.split(".").pop()?.toLowerCase() ?? ""
+        if (ext === "html" || ext === "htm") {
+          markdown = convertHtmlToMarkdown(markdown)
+        }
+
         // Copy binary first so a successful preprocess always has a
         // matching original on disk. If the copy fails (permission /
         // disk full / etc.), proceed without the link rather than
@@ -129,6 +147,18 @@ export function SourcesView() {
         }
         const finalMarkdown = originalRel ? injectOriginalRef(markdown, originalRel) : markdown
         await writeFile(destPath, finalMarkdown)
+
+        // Auto-commit newly added or converted file
+        try {
+          const fileName = getFileName(destPath)
+          const commitExt = originalName.split(".").pop() || "unknown"
+          // Pass relative path to gitCommit
+          const relDestPath = destPath.startsWith(pp) ? destPath.slice(pp.length + 1) : destPath
+          await gitCommit(pp, `ingest: add ${fileName} (${commitExt})`, [relDestPath])
+        } catch (gitErr) {
+          console.error("Failed to auto-commit:", gitErr)
+        }
+
         importedPaths.push(destPath)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -136,6 +166,15 @@ export function SourcesView() {
         failures.push(`${originalName}: ${msg}`)
       }
     }
+
+    useActivityStore.getState().updateItem(activityId, {
+      status: failures.length === 0 ? "done" : "error",
+      detail:
+        failures.length === 0
+          ? `Imported ${importedPaths.length} files`
+          : `Imported ${importedPaths.length} files, ${failures.length} failed`,
+      filesWritten: importedPaths,
+    })
 
     setImporting(false)
     await loadSources()
@@ -171,6 +210,14 @@ export function SourcesView() {
     const folderName = getFileName(selected) || "imported"
     const destDir = `${pp}/raw/sources/${folderName}`
 
+    const activityId = useActivityStore.getState().addItem({
+      type: "import",
+      title: folderName,
+      status: "running",
+      detail: "Scanning folder...",
+      filesWritten: [],
+    })
+
     try {
       // Walk the source folder and discover every file. Each
       // ingestable file is preprocessed to markdown under
@@ -188,6 +235,10 @@ export function SourcesView() {
         sourcePath: n.path,
         relPath: stripRoot(normalizePath(n.path), sourceRoot),
       }))
+
+      useActivityStore.getState().updateItem(activityId, {
+        detail: `Found ${flat.length} files. Preprocessing...`,
+      })
 
       const preprocessable = new Set([
         "md", "mdx", "txt", "pdf", "docx", "pptx", "xlsx", "xls", "ods",
@@ -219,7 +270,14 @@ export function SourcesView() {
         const mdName = toMarkdownName(fileName)
         const destPath = await getUniqueDestPath(subdir, mdName)
         try {
-          const markdown = await preprocessFile(sourcePath)
+          let markdown = await preprocessFile(sourcePath)
+
+          // HTML conversion if needed
+          const ext = sourcePath.split(".").pop()?.toLowerCase() ?? ""
+          if (ext === "html" || ext === "htm") {
+            markdown = convertHtmlToMarkdown(markdown)
+          }
+
           // Copy original alongside preprocess output. Failure here is
           // logged but non-fatal — the markdown is the primary artifact.
           // Mirror the source folder structure so multi-file imports
@@ -232,10 +290,24 @@ export function SourcesView() {
           }
           const finalMarkdown = originalRel ? injectOriginalRef(markdown, originalRel) : markdown
           await writeFile(destPath, finalMarkdown)
+
+          // Auto-commit newly added or converted file
+          try {
+            const fileName = getFileName(destPath)
+            const commitExt = sourcePath.split(".").pop() || "unknown"
+            await gitCommit(pp, `ingest: add ${fileName} (${commitExt})`, [destPath])
+          } catch (gitErr) {
+            console.error("Failed to auto-commit:", gitErr)
+          }
+
           const context = dirParts.length > 0
             ? `${folderName} > ${dirParts.join(" > ")}`
             : folderName
           importedTargets.push({ destPath, folderContext: context })
+          
+          useActivityStore.getState().updateItem(activityId, {
+            detail: `Imported ${importedTargets.length} / ${flat.length} files...`,
+          })
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           console.error(`Failed to import ${relPath}:`, err)
@@ -244,6 +316,15 @@ export function SourcesView() {
       }
 
       console.log(`[Folder Import] Imported ${importedTargets.length} files from ${folderName}`)
+
+      useActivityStore.getState().updateItem(activityId, {
+        status: failures.length === 0 ? "done" : "error",
+        detail:
+          failures.length === 0
+            ? `Imported ${importedTargets.length} files`
+            : `Imported ${importedTargets.length} files, ${failures.length} failed`,
+        filesWritten: importedTargets.map((t) => t.destPath),
+      })
 
       setImporting(false)
       await loadSources()

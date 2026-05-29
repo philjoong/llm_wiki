@@ -86,10 +86,23 @@ pub fn run() {
             commands::git_ops::git_diff,
             commands::git_ops::git_checkout_path,
             commands::git_ops::git_revert,
+            commands::git_ops::git_ls_remote,
+            commands::git_ops::git_create_branch,
+            commands::git_ops::git_remote_add,
+            commands::git_ops::git_push,
+            commands::git_ops::git_pull,
             commands::graph_db::graph_db_create,
             commands::graph_db::graph_db_delete,
             commands::graph_db::graph_db_list,
+            commands::graph_db::graph_db_query,
             commands::graph_db::graph_db_ping,
+            commands::graph_db::graph_db_export,
+            commands::vc_db::vc_db_init,
+            commands::vc_db::vc_db_save_snapshot,
+            commands::vc_db::vc_db_get_snapshot,
+            commands::vc_db::vc_db_record_commit,
+            commands::vc_db::vc_db_set_meta,
+            commands::vc_db::vc_db_get_meta,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -101,23 +114,8 @@ pub fn run() {
 
                 #[cfg(not(target_os = "macos"))]
                 {
-                    use tauri::Manager;
                     api.prevent_close();
-                    let win = window.clone();
-                    let app = window.app_handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        use tauri_plugin_dialog::DialogExt;
-                        let confirmed = app
-                            .dialog()
-                            .message("Are you sure you want to quit LLM Wiki?")
-                            .title("Confirm Exit")
-                            .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
-                            .blocking_show();
-
-                        if confirmed {
-                            let _ = win.destroy();
-                        }
-                    });
+                    let _ = window.emit("tauri://close-requested", ());
                 }
             }
         })

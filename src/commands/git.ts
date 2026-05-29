@@ -88,3 +88,23 @@ export async function gitCheckoutPath(
 export async function gitRevert(projectPath: string, hash: string): Promise<RevertResult> {
   return invoke<RevertResult>("git_revert", { projectPath, hash })
 }
+
+export async function gitLsRemote(url: string): Promise<string[]> {
+  return invoke<string[]>("git_ls_remote", { url })
+}
+
+export async function gitCreateBranch(projectPath: string, branchName: string): Promise<void> {
+  return invoke<void>("git_create_branch", { projectPath, branchName })
+}
+
+export async function gitRemoteAdd(projectPath: string, name: string, url: string): Promise<void> {
+  return invoke<void>("git_remote_add", { projectPath, name, url })
+}
+
+export async function gitPush(project_path: string, remote: string, branch: string): Promise<void> {
+  return invoke<void>("git_push", { projectPath: project_path, remote, branch })
+}
+
+export async function gitPull(project_path: string, remote: string, branch: string): Promise<void> {
+  return invoke<void>("git_pull", { projectPath: project_path, remote, branch })
+}

@@ -15,6 +15,7 @@ import { formatIngestMessage } from "@/lib/auto-commit"
 import { gitCommit } from "@/commands/git"
 import { parseSourceRefs } from "@/lib/sources-merge"
 import { buildGraphPolicyPrompt, loadGraphPolicy } from "@/lib/graph-policy"
+import { syncGraphToFalkorDb } from "@/lib/graph-sync"
 import {
   loadCounterexamples,
   loadRejectionLog,
@@ -634,6 +635,16 @@ async function autoIngestImpl(
       }
     } catch {
       // embedding module not available
+    }
+  }
+
+  // ── Step 8: Sync to FalkorDB Knowledge Graph ────────────────
+  if (allWrittenPaths.length > 0) {
+    const projectName = useWikiStore.getState().project?.name || "default"
+    try {
+      await syncGraphToFalkorDb(pp, projectName)
+    } catch (err) {
+      console.warn(`[ingest] graph sync failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

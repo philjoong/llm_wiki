@@ -30,6 +30,17 @@ export interface ModificationProposal {
   sourceRefs: SourceRef[]
 }
 
+/**
+ * Stage 5 schema proposals carry the data needed to render the
+ * "AI wants to create a new Type" UI and resolve the proposal
+ * into the graph policy.
+ */
+export interface SchemaProposal {
+  type: "node_type" | "relation_type" | "attribute"
+  name: string
+  targetNode?: string // for attribute
+}
+
 export interface ReviewItem {
   id: string
   type:
@@ -39,6 +50,7 @@ export interface ReviewItem {
     | "confirm"
     | "suggestion"
     | "modification"
+    | "schema"
   /**
    * Stage 4 two-step decision tree. Only meaningful for `type:
    * "modification"`. `"primary"` shows [Approve | Merge | Reject];
@@ -49,6 +61,8 @@ export interface ReviewItem {
   stage?: "primary" | "rejection-handling"
   /** Modification-only payload — the diff data and the parked draft. */
   proposal?: ModificationProposal
+  /** Schema-only payload — the new type being proposed. */
+  schemaProposal?: SchemaProposal
   title: string
   description: string
   sourcePath?: string

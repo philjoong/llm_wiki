@@ -604,6 +604,84 @@ pub async fn git_revert(
     Err(format!("git revert 실패: {}", err.trim()))
 }
 
+#[tauri::command]
+pub async fn git_create_branch(project_path: String, branch_name: String) -> Result<(), String> {
+    let out = run_git(&project_path, &["checkout", "-b", &branch_name]).await?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        return Err(format!("git checkout -b 실패: {}", err.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_remote_add(project_path: String, name: String, url: String) -> Result<(), String> {
+    let out = run_git(&project_path, &["remote", "add", &name, &url]).await?;
+    if !out.status.success() {
+        // If remote already exists, try to set-url
+        let out_set = run_git(&project_path, &["remote", "set-url", &name, &url]).await?;
+        if !out_set.status.success() {
+            let err = String::from_utf8_lossy(&out_set.stderr).to_string();
+            return Err(format!("git remote add/set-url 실패: {}", err.trim()));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_push(project_path: String, remote: String, branch: String) -> Result<(), String> {
+    let out = run_git(&project_path, &["push", "-u", &remote, &branch]).await?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        return Err(format!("git push 실패: {}", err.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_pull(project_path: String, remote: String, branch: String) -> Result<(), String> {
+    let out = run_git(&project_path, &["pull", &remote, &branch]).await?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        return Err(format!("git pull 실패: {}", err.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_ls_remote(url: String) -> Result<Vec<String>, String> {
+    let git = locate_git()?;
+    let mut cmd = Command::new(&git);
+    cmd.args(&["ls-remote", "--heads", &url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let out = cmd
+        .output()
+        .await
+        .map_err(|e| format!("git ls-remote 실패: {}", e))?;
+
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        return Err(format!("git ls-remote 실패: {}", err.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut branches = Vec::new();
+    for line in stdout.lines() {
+        // Output format: <hash>\trefs/heads/<branch_name>
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() == 2 {
+            let ref_name = parts[1];
+            if let Some(branch_name) = ref_name.strip_prefix("refs/heads/") {
+                branches.push(branch_name.to_string());
+            }
+        }
+    }
+    Ok(branches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

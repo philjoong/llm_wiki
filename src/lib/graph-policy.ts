@@ -4,11 +4,13 @@ import { normalizePath } from "@/lib/path-utils"
 export interface GraphPolicy {
   relationTypes: string[]
   managedGraphs: string[]
+  forbiddenTypes: string[]
 }
 
 const DEFAULT_POLICY: GraphPolicy = {
   relationTypes: [],
   managedGraphs: [],
+  forbiddenTypes: [],
 }
 
 function policyPath(projectPath: string): string {
@@ -39,6 +41,7 @@ export async function loadGraphPolicy(projectPath: string): Promise<GraphPolicy>
     return {
       relationTypes: sanitize(Array.isArray(parsed.relationTypes) ? parsed.relationTypes : [], 4),
       managedGraphs: sanitize(Array.isArray(parsed.managedGraphs) ? parsed.managedGraphs : [], 200),
+      forbiddenTypes: sanitize(Array.isArray(parsed.forbiddenTypes) ? parsed.forbiddenTypes : [], 50),
     }
   } catch {
     return DEFAULT_POLICY
@@ -51,6 +54,7 @@ export async function saveGraphPolicy(projectPath: string, policy: GraphPolicy):
   const normalized: GraphPolicy = {
     relationTypes: sanitize(policy.relationTypes, 4),
     managedGraphs: sanitize(policy.managedGraphs, 200),
+    forbiddenTypes: sanitize(policy.forbiddenTypes, 50),
   }
   await writeFile(policyPath(pp), JSON.stringify(normalized, null, 2))
   return normalized
@@ -65,6 +69,13 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
       "When proposing/generated knowledge links or relationships, use ONLY the relation types below.",
       "If a relationship does not fit one of them, do not invent a new relation type; rewrite or omit it.",
       `Allowed relation types (${policy.relationTypes.length}/4): ${policy.relationTypes.join(", ")}`,
+      "Format relations in wikilinks as [[TargetPage|RELATION_TYPE]].",
+    )
+  }
+
+  if (policy.forbiddenTypes.length > 0) {
+    parts.push(
+      `NEVER use the following forbidden relation types: ${policy.forbiddenTypes.join(", ")}`,
     )
   }
 

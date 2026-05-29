@@ -117,6 +117,18 @@ export async function loadOutputLanguage(): Promise<OutputLanguage | null> {
   return (await store.get<OutputLanguage>(OUTPUT_LANGUAGE_KEY)) ?? null
 }
 
+const SELECTED_BRANCH_KEY = "selectedBranch"
+
+export async function saveSelectedBranch(branch: string | null): Promise<void> {
+  const store = await getStore()
+  await store.set(SELECTED_BRANCH_KEY, branch)
+}
+
+export async function loadSelectedBranch(): Promise<string | null> {
+  const store = await getStore()
+  return (await store.get<string>(SELECTED_BRANCH_KEY)) ?? null
+}
+
 const FALKORDB_URL_KEY = "falkordbUrl"
 
 export async function saveFalkordbUrl(url: string): Promise<void> {

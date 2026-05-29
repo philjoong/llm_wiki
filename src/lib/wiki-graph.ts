@@ -18,6 +18,7 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string
   target: string
+  type?: string // relationship type (e.g. REQUIRES, NAVIGATES_TO)
   weight: number // relevance score between source and target
 }
 
@@ -113,7 +114,7 @@ function detectCommunities(
   return { assignments, communities }
 }
 
-const WIKILINK_REGEX = /\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]/g
+const WIKILINK_REGEX = /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g
 
 function flattenMdFiles(nodes: FileNode[]): FileNode[] {
   const files: FileNode[] = []
@@ -149,12 +150,14 @@ function extractGraph(content: string): string | null {
   return null
 }
 
-function extractWikilinks(content: string): string[] {
-  const links: string[] = []
+function extractWikilinks(content: string): { target: string; type: string | null }[] {
+  const links: { target: string; type: string | null }[] = []
   const regex = new RegExp(WIKILINK_REGEX.source, "g")
   let match: RegExpExecArray | null
   while ((match = regex.exec(content)) !== null) {
-    links.push(match[1].trim())
+    const target = match[1].trim()
+    const type = match[2] ? match[2].trim() : null
+    links.push({ target, type })
   }
   return links
 }
@@ -183,7 +186,14 @@ export async function buildWikiGraph(
   // Build a map of id -> node data
   const nodeMap = new Map<
     string,
-    { id: string; label: string; type: string; graph: string | null; path: string; links: string[] }
+    {
+      id: string
+      label: string
+      type: string
+      graph: string | null
+      path: string
+      links: { target: string; type: string | null }[]
+    }
   >()
 
   for (const file of mdFiles) {
@@ -225,13 +235,18 @@ export async function buildWikiGraph(
   const rawEdges: GraphEdge[] = []
 
   for (const [sourceId, nodeData] of nodeMap) {
-    for (const targetRaw of nodeData.links) {
+    for (const link of nodeData.links) {
       // Normalize target: try matching by id (case-insensitive, hyphen/space)
-      const targetId = resolveTarget(targetRaw, nodeMap)
+      const targetId = resolveTarget(link.target, nodeMap)
       if (targetId === null) continue
       if (targetId === sourceId) continue
 
-      rawEdges.push({ source: sourceId, target: targetId, weight: 1 })
+      rawEdges.push({
+        source: sourceId,
+        target: targetId,
+        type: link.type || undefined,
+        weight: 1,
+      })
 
       linkCounts.set(sourceId, (linkCounts.get(sourceId) ?? 0) + 1)
       linkCounts.set(targetId, (linkCounts.get(targetId) ?? 0) + 1)
@@ -240,10 +255,10 @@ export async function buildWikiGraph(
 
   // Deduplicate edges
   const seenEdges = new Set<string>()
-  const dedupedEdges: { source: string; target: string }[] = []
+  const dedupedEdges: { source: string; target: string; type?: string }[] = []
   for (const edge of rawEdges) {
-    const key = `${edge.source}:::${edge.target}`
-    const reverseKey = `${edge.target}:::${edge.source}`
+    const key = `${edge.source}:::${edge.target}:::${edge.type || ""}`
+    const reverseKey = `${edge.target}:::${edge.source}:::${edge.type || ""}`
     if (!seenEdges.has(key) && !seenEdges.has(reverseKey)) {
       seenEdges.add(key)
       dedupedEdges.push(edge)
@@ -269,7 +284,7 @@ export async function buildWikiGraph(
         weight = calculateRelevance(nodeA, nodeB, retrievalGraph)
       }
     }
-    return { source: e.source, target: e.target, weight }
+    return { source: e.source, target: e.target, type: e.type, weight }
   })
 
   // Build preliminary nodes for community detection

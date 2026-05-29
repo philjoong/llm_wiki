@@ -5,28 +5,46 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId } from "@/lib/project-store"
+import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadSelectedBranch } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
+import { ProjectBranchSelector } from "@/components/project/project-branch-selector"
+import { SyncOnExitDialog } from "@/components/project/sync-on-exit-dialog"
 import type { WikiProject } from "@/types/wiki"
+import { listen } from "@tauri-apps/api/event"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 
 function App() {
   const project = useWikiStore((s) => s.project)
+  const selectedBranch = useWikiStore((s) => s.selectedBranch)
   const setProject = useWikiStore((s) => s.setProject)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [showSyncExitDialog, setShowSyncExitDialog] = useState(false)
   const [loading, setLoading] = useState(true)
 
   // Set up auto-save and clip watcher once on mount
   useEffect(() => {
     setupAutoSave()
     startClipWatcher()
+
+    const unlisten = listen("tauri://close-requested", () => {
+      if (useWikiStore.getState().project) {
+        setShowSyncExitDialog(true)
+      } else {
+        getCurrentWindow().destroy()
+      }
+    })
+
+    return () => {
+      unlisten.then((u) => u())
+    }
   }, [])
 
   // Background update check — hydrate persisted user preferences, then
@@ -126,6 +144,10 @@ function App() {
         if (savedOutputLang) {
           useWikiStore.getState().setOutputLanguage(savedOutputLang)
         }
+        const savedBranch = await loadSelectedBranch()
+        if (savedBranch) {
+          useWikiStore.getState().setSelectedBranch(savedBranch)
+        }
         const savedLang = await loadLanguage()
         if (savedLang === "en" || savedLang === "ko") {
           await i18n.changeLanguage(savedLang)
@@ -193,6 +215,24 @@ function App() {
     } catch (err) {
       console.error("Failed to load file tree:", err)
     }
+
+    // Initialize local VC database and sync with remote
+    try {
+      const { vcDbInit } = await import("@/commands/vc-db")
+      const { gitPull } = await import("@/commands/git")
+      await vcDbInit(proj.path)
+      
+      const branch = useWikiStore.getState().selectedBranch || "main"
+      // Attempt to pull from origin. Fail silently if remote is not set up yet.
+      try {
+        await gitPull(proj.path, "origin", branch)
+      } catch {
+        // origin may not exist yet, skip
+      }
+    } catch (err) {
+      console.error("Failed to initialize VC or sync:", err)
+    }
+
     // Load persisted review items
     try {
       const savedReview = await loadReviewItems(proj.path)
@@ -253,12 +293,47 @@ function App() {
     setSelectedFile(null)
   }
 
+  async function handleSync() {
+    if (!project) return
+    const { exportGraphDb } = await import("@/commands/graph-db")
+    const { writeFile } = await import("@/commands/fs")
+    const { gitCommit, gitPush } = await import("@/commands/git")
+    const { vcDbSaveSnapshot } = await import("@/commands/vc-db")
+    
+    // 1. Export graph to JSON
+    const graphData = await exportGraphDb(project.name, "main")
+    const graphJson = JSON.stringify(graphData, null, 2)
+    
+    // 2. Write to graph.json
+    await writeFile(`${project.path}/graph.json`, graphJson)
+    
+    // 3. Commit graph.json
+    const commitRes = await gitCommit(project.path, "sync: update graph snapshot", ["graph.json"])
+    
+    // 4. Save to SQLite if committed
+    if (commitRes.committed && commitRes.commitHash) {
+      await vcDbSaveSnapshot(project.path, commitRes.commitHash, graphJson)
+    }
+    
+    // 5. Push to remote
+    const branch = useWikiStore.getState().selectedBranch || "main"
+    await gitPush(project.path, "origin", branch)
+  }
+
+  function handleExit() {
+    getCurrentWindow().destroy()
+  }
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
         Loading...
       </div>
     )
+  }
+
+  if (!selectedBranch) {
+    return <ProjectBranchSelector />
   }
 
   if (!project) {
@@ -285,6 +360,12 @@ function App() {
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
         onCreated={handleProjectOpened}
+      />
+      <SyncOnExitDialog
+        open={showSyncExitDialog}
+        onOpenChange={setShowSyncExitDialog}
+        onSync={handleSync}
+        onExit={handleExit}
       />
     </>
   )

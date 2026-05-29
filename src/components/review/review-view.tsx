@@ -10,6 +10,7 @@ import {
   X,
   Check,
   Trash2,
+  Database,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
@@ -22,6 +23,7 @@ import {
   pendingModification,
   counterexampleModification,
 } from "@/lib/modification-resolve"
+import { approveSchemaChange, rejectSchemaChange } from "@/lib/schema-resolve"
 import { PendingView } from "@/components/review/pending-view"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
@@ -31,6 +33,7 @@ const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label
   confirm: { icon: MessageSquare, label: "Needs Confirmation", color: "text-foreground" },
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
   modification: { icon: GitMerge, label: "Modification", color: "text-orange-500" },
+  schema: { icon: Database, label: "Schema Change", color: "text-indigo-500" },
 }
 
 export function ReviewView() {
@@ -45,11 +48,37 @@ export function ReviewView() {
 
   const handleResolve = useCallback(async (id: string, action: string) => {
     const pp = project ? normalizePath(project.path) : ""
+    const projectName = project?.name || "default"
 
     // Stage 4 — modification flow. Hand off to the dedicated resolver
     // module (file moves + git commits) and refresh the file tree so
     // the sidebar reflects the new state of pending/_proposals/...
     const item = items.find((i) => i.id === id)
+
+    // Stage 5 — schema flow.
+    if (item?.type === "schema" && project) {
+      const proposal = item.schemaProposal
+      if (!proposal) {
+        resolveItem(id, action)
+        return
+      }
+      try {
+        if (action === "schema:approve") {
+          await approveSchemaChange(pp, projectName, proposal)
+          resolveItem(id, "Approved")
+        } else if (action === "schema:reject") {
+          await rejectSchemaChange(pp, proposal)
+          resolveItem(id, "Rejected (Forbidden)")
+        } else {
+          resolveItem(id, action)
+        }
+      } catch (err) {
+        console.error("[review] schema action failed:", err)
+        resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return
+    }
+
     if (item?.type === "modification" && project) {
       const proposal = item.proposal
       if (!proposal) {
@@ -379,6 +408,10 @@ function ReviewCard({
         <ModificationDiff proposal={item.proposal} />
       )}
 
+      {item.type === "schema" && item.schemaProposal && (
+        <SchemaProposalView proposal={item.schemaProposal} />
+      )}
+
       {!item.resolved ? (
         <div className="flex flex-wrap gap-1.5">
           {item.type === "modification" ? (
@@ -462,6 +495,30 @@ function ModificationDiff({
       </div>
       <div className="col-span-2 text-[10px] text-muted-foreground">
         Draft: <code>{proposal.incomingDraftPath}</code>
+      </div>
+    </div>
+  )
+}
+
+function SchemaProposalView({
+  proposal,
+}: {
+  proposal: NonNullable<ReviewItem["schemaProposal"]>
+}) {
+  return (
+    <div className="mb-3 rounded border bg-indigo-50/50 p-2 dark:bg-indigo-950/20">
+      <div className="mb-1 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+        Proposed {proposal.type === "node_type" ? "Node Label" : proposal.type === "relation_type" ? "Relationship Type" : "Attribute"}
+      </div>
+      <div className="flex items-center gap-2">
+        <code className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-mono text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
+          {proposal.name}
+        </code>
+        {proposal.targetNode && (
+          <span className="text-[10px] text-muted-foreground">
+            on node <code className="rounded bg-muted px-1">{proposal.targetNode}</code>
+          </span>
+        )}
       </div>
     </div>
   )

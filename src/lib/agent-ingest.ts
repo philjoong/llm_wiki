@@ -31,6 +31,7 @@ import { streamClaudeCodeCli } from "./claude-cli-transport"
 import { isSafeIngestPath } from "./ingest"
 import { getFileName, normalizePath } from "./path-utils"
 import { buildGraphPolicyPrompt, loadGraphPolicy } from "./graph-policy"
+import { syncGraphToFalkorDb } from "./graph-sync"
 
 export interface ParsedAgentFile {
   path: string
@@ -249,6 +250,16 @@ export async function autoIngestViaAgent(
       useWikiStore.getState().bumpDataVersion()
     } catch {
       // Non-fatal: the files are on disk; the tree will refresh on next nav.
+    }
+  }
+
+  // ── Step: Sync to FalkorDB Knowledge Graph ────────────────
+  if (writtenPaths.length > 0) {
+    const projectName = useWikiStore.getState().project?.name || "default"
+    try {
+      await syncGraphToFalkorDb(pp, projectName)
+    } catch (err) {
+      console.warn(`[agent-ingest] graph sync failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

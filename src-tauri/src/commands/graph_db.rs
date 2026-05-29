@@ -76,10 +76,84 @@ pub async fn graph_db_list(url: Option<String>) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+fn redis_value_to_json(val: redis::Value) -> serde_json::Value {
+    match val {
+        redis::Value::Nil => serde_json::Value::Null,
+        redis::Value::Int(i) => serde_json::Value::Number(i.into()),
+        redis::Value::Data(d) => {
+            if let Ok(s) = String::from_utf8(d) {
+                serde_json::Value::String(s)
+            } else {
+                serde_json::Value::String("<binary>".to_string())
+            }
+        }
+        redis::Value::BulkString(d) => {
+            if let Ok(s) = String::from_utf8(d) {
+                serde_json::Value::String(s)
+            } else {
+                serde_json::Value::String("<binary>".to_string())
+            }
+        }
+        redis::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(redis_value_to_json).collect())
+        }
+        redis::Value::Status(s) => serde_json::Value::String(s),
+        redis::Value::Okay => serde_json::Value::String("OK".to_string()),
+        _ => serde_json::Value::String(format!("{:?}", val)),
+    }
+}
+
+#[tauri::command]
+pub async fn graph_db_query(
+    graph_name: String,
+    cypher: String,
+    url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_graph_name(&graph_name)?;
+    let resolved = resolve_url(url.as_deref());
+    let mut conn = connect(&resolved).await?;
+    let res: redis::Value = redis::cmd("GRAPH.QUERY")
+        .arg(graph_name.trim())
+        .arg(cypher)
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| format!("Query failed on graph '{}': {}", graph_name, e))?;
+
+    Ok(redis_value_to_json(res))
+}
+
 #[tauri::command]
 pub async fn graph_db_ping(url: Option<String>) -> Result<(), String> {
     let resolved = resolve_url(url.as_deref());
     connect(&resolved).await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn graph_db_export(graph_name: String, url: Option<String>) -> Result<serde_json::Value, String> {
+    validate_graph_name(&graph_name)?;
+    let resolved = resolve_url(url.as_deref());
+    let mut conn = connect(&resolved).await?;
+
+    // Export nodes
+    let nodes_res: redis::Value = redis::cmd("GRAPH.QUERY")
+        .arg(graph_name.trim())
+        .arg("MATCH (n) RETURN n")
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| format!("Failed to export nodes from '{}': {}", graph_name, e))?;
+
+    // Export edges
+    let edges_res: redis::Value = redis::cmd("GRAPH.QUERY")
+        .arg(graph_name.trim())
+        .arg("MATCH ()-[r]->() RETURN r")
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| format!("Failed to export edges from '{}': {}", graph_name, e))?;
+
+    Ok(serde_json::json!({
+        "nodes": redis_value_to_json(nodes_res),
+        "edges": redis_value_to_json(edges_res)
+    }))
 }
 

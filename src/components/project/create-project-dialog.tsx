@@ -9,8 +9,27 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FolderOpen } from "lucide-react"
 import { createProject } from "@/commands/fs"
+import { gitRemoteAdd, gitCreateBranch, gitPush } from "@/commands/git"
+import { createGraphDb } from "@/commands/graph-db"
 import { initProject } from "@/lib/project-init"
 import type { WikiProject } from "@/types/wiki"
+
+const GIT_USER = import.meta.env.VITE_GIT_USER
+const GIT_PASSWORD = import.meta.env.VITE_GIT_PASSWORD
+const REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
+
+const getRepoUrl = () => {
+  const encodedUser = GIT_USER ? encodeURIComponent(GIT_USER) : ""
+  const encodedPass = GIT_PASSWORD ? encodeURIComponent(GIT_PASSWORD) : ""
+
+  if (encodedUser && encodedPass) {
+    return `https://${encodedUser}:${encodedPass}@${REPO_BASE_URL}`
+  }
+  if (encodedUser) {
+    return `https://${encodedUser}@${REPO_BASE_URL}`
+  }
+  return `https://${REPO_BASE_URL}`
+}
 
 interface CreateProjectDialogProps {
   open: boolean
@@ -37,15 +56,31 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   }
 
   async function handleCreate() {
-    if (!name.trim() || !path.trim()) {
+    const projectName = name.trim()
+    const parentPath = path.trim()
+    if (!projectName || !parentPath) {
       setError(t("project.error.nameAndPath"))
       return
     }
     setCreating(true)
     setError("")
     try {
-      const project = await createProject(name.trim(), path.trim())
+      // 1. Create project directory and metadata
+      const project = await createProject(projectName, parentPath)
+      
+      // 2. Initialize local Git repo and seed files
       await initProject({ projectPath: project.path })
+
+      // 3. Authenticated Git Setup
+      const authenticatedUrl = getRepoUrl()
+      await gitRemoteAdd(project.path, "origin", authenticatedUrl)
+      
+      // 4. Create and push project-specific branch
+      await gitCreateBranch(project.path, projectName)
+      await gitPush(project.path, "origin", projectName)
+
+      // 5. FalkorDB Initialization (isolated via prefix)
+      await createGraphDb(projectName, "main")
 
       onCreated(project)
       onOpenChange(false)

@@ -10,7 +10,6 @@ import { Label } from "@/components/ui/label"
 import { FolderOpen } from "lucide-react"
 import { createProject } from "@/commands/fs"
 import { initProject } from "@/lib/project-init"
-import { SchemaPicker } from "@/components/project/schema-picker"
 import type { WikiProject } from "@/types/wiki"
 
 interface CreateProjectDialogProps {
@@ -23,8 +22,6 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   const { t } = useTranslation()
   const [name, setName] = useState("")
   const [path, setPath] = useState("")
-  const [schemaSourcePath, setSchemaSourcePath] = useState("")
-  const [purposeMarkdown, setPurposeMarkdown] = useState("")
   const [error, setError] = useState("")
   const [creating, setCreating] = useState(false)
 
@@ -44,26 +41,16 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
       setError(t("project.error.nameAndPath"))
       return
     }
-    if (!schemaSourcePath) {
-      setError(t("project.error.schemaRequired"))
-      return
-    }
     setCreating(true)
     setError("")
     try {
       const project = await createProject(name.trim(), path.trim())
-      await initProject({
-        projectPath: project.path,
-        schemaSourcePath,
-        purposeMarkdown,
-      })
+      await initProject({ projectPath: project.path })
 
       onCreated(project)
       onOpenChange(false)
       setName("")
       setPath("")
-      setSchemaSourcePath("")
-      setPurposeMarkdown("")
     } catch (err) {
       setError(String(err))
     } finally {
@@ -71,7 +58,7 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
     }
   }
 
-  const canCreate = !!name.trim() && !!path.trim() && !!schemaSourcePath && !creating
+  const canCreate = !!name.trim() && !!path.trim() && !creating
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -83,21 +70,6 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
           <div className="flex flex-col gap-2">
             <Label htmlFor="name">{t("project.name")}</Label>
             <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("project.namePlaceholder")} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label>{t("project.schema.label")}</Label>
-            <SchemaPicker selectedPath={schemaSourcePath} onSelect={setSchemaSourcePath} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="purpose">{t("project.purpose.label")}</Label>
-            <textarea
-              id="purpose"
-              value={purposeMarkdown}
-              onChange={(e) => setPurposeMarkdown(e.target.value)}
-              placeholder={t("project.purpose.placeholder")}
-              rows={6}
-              className="w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm leading-relaxed transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
-            />
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="path">{t("project.parentDir")}</Label>

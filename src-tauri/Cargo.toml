@@ -43,6 +43,7 @@ futures = "0.3"
 tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt"] }
 which = "7"
 uuid = { version = "1", features = ["v4"] }
+redis = { version = "0.27", features = ["tokio-comp"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

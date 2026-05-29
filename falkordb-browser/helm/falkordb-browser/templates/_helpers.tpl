@@ -1,0 +1,90 @@
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "falkordb-browser.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
+If release name contains chart name it will be used as a full name.
+*/}}
+{{- define "falkordb-browser.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "falkordb-browser.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "falkordb-browser.labels" -}}
+helm.sh/chart: {{ include "falkordb-browser.chart" . }}
+{{ include "falkordb-browser.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "falkordb-browser.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "falkordb-browser.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "falkordb-browser.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "falkordb-browser.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Normalize the optional browser base path used when hosting the app under a subpath.
+*/}}
+{{- define "falkordb-browser.basePath" -}}
+{{- $basePath := default "" .Values.browser.basePath -}}
+{{- if and $basePath (ne $basePath "/") -}}
+{{- if not (hasPrefix "/" $basePath) -}}
+{{- fail "browser.basePath must start with /" -}}
+{{- end -}}
+{{- $basePath | trimSuffix "/" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Validate that env.nextauthUrl path matches browser.basePath if set.
+*/}}
+{{- define "falkordb-browser.validateNextAuthUrl" -}}
+{{- $basePath := include "falkordb-browser.basePath" . -}}
+{{- $nextauthUrl := .Values.env.nextauthUrl | default "" -}}
+{{- if and $basePath $nextauthUrl (ne $basePath "") (ne $basePath "/") -}}
+  {{- $urlParts := splitList "/" $nextauthUrl -}}
+  {{- $urlPath := printf "/%s" (join "/" (slice $urlParts 3)) | trimSuffix "/" -}}
+  {{- if ne $urlPath $basePath -}}
+    {{- fail (printf "env.nextauthUrl path (%s) must match browser.basePath (%s) when basePath is set" $urlPath $basePath) -}}
+  {{- end -}}
+{{- end -}}
+{{- end }}

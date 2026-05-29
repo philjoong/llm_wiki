@@ -179,6 +179,7 @@
       "embedding": "向量嵌入",
       "output": "输出偏好",
       "interface": "界面",
+      "falkordb": "FalkorDB",
       "about": "关于"
     },
     "sections": {

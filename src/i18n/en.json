@@ -179,6 +179,7 @@
       "embedding": "Embeddings",
       "output": "Output",
       "interface": "Interface",
+      "falkordb": "FalkorDB",
       "about": "About"
     },
     "sections": {

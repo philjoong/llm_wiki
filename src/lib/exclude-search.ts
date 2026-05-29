@@ -21,13 +21,6 @@ import type { LlmConfig } from "@/stores/wiki-store"
 import { listDirectory } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
-import { classifyQuestion } from "./classify-question"
-import { loadQuestionTypes, type QuestionType } from "./question-types"
-import {
-  applyExclusions,
-  loadExclusions,
-  type ExclusionEntry,
-} from "./exclusions"
 import { searchPaths, type SearchResult } from "./search"
 import { recordSearchInstance } from "./instance-log"
 
@@ -68,34 +61,12 @@ export interface ExcludeSearchResult {
 export async function runExcludeSearch(
   question: string,
   projectPath: string,
-  llmConfig: LlmConfig,
+  _llmConfig: LlmConfig,
 ): Promise<ExcludeSearchResult> {
   const pp = normalizePath(projectPath)
 
-  const types = await loadQuestionTypes(pp)
-  const classification =
-    types.length > 0 && question.trim()
-      ? await classifyQuestion(question, types, llmConfig)
-      : null
-
-  const docs = await loadExclusions(pp)
-  const applicableDocs = classification
-    ? docs.filter((d) => d.questionTypeIds.includes(classification.typeId))
-    : []
-
-  // Flatten while remembering each entry's source doc for trace drill-down.
-  const entries: { entry: ExclusionEntry; filePath: string }[] = []
-  for (const doc of applicableDocs) {
-    for (const entry of doc.entries) {
-      entries.push({ entry, filePath: doc.filePath })
-    }
-  }
-
   const candidatesRel = await listDbCandidates(pp)
-  const { kept, excludedByEntry } = applyExclusions(
-    candidatesRel,
-    entries.map((e) => e.entry),
-  )
+  const kept = candidatesRel
 
   const absoluteKept = kept.map((rel) => `${pp}/${rel}`)
   const hits =
@@ -103,38 +74,11 @@ export async function runExcludeSearch(
       ? await searchPaths(pp, question, absoluteKept)
       : []
 
-  const matchedType: QuestionType | undefined = classification
-    ? types.find((t) => t.id === classification.typeId)
-    : undefined
-
-  const appliedEntries: AppliedEntry[] = []
-  for (const { entry, filePath } of entries) {
-    const matched = excludedByEntry.get(entry.pattern)
-    if (!matched || matched.length === 0) continue
-    appliedEntries.push({
-      pattern: entry.pattern,
-      rationale: entry.rationale,
-      matched,
-      filePath,
-    })
-  }
-
   const trace: SearchTrace = {
-    judgedType:
-      classification && matchedType
-        ? {
-            id: classification.typeId,
-            name: matchedType.name,
-            confidence: classification.confidence,
-            reasoning: classification.reasoning,
-          }
-        : null,
-    appliedEntries,
+    judgedType: null,
+    appliedEntries: [],
     initialCandidateCount: candidatesRel.length,
     residueCount: kept.length,
-    ...(matchedType?.zeroResidueMeaning
-      ? { zeroResidueMeaning: matchedType.zeroResidueMeaning }
-      : {}),
   }
 
   const out: ExcludeSearchResult = { hits, trace, keptPaths: absoluteKept }

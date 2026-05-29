@@ -14,6 +14,7 @@ import { detectLanguage } from "@/lib/detect-language"
 import { formatIngestMessage } from "@/lib/auto-commit"
 import { gitCommit } from "@/commands/git"
 import { parseSourceRefs } from "@/lib/sources-merge"
+import { buildGraphPolicyPrompt, loadGraphPolicy } from "@/lib/graph-policy"
 import {
   loadCounterexamples,
   loadRejectionLog,
@@ -239,7 +240,7 @@ export function languageRule(sourceContent: string = ""): string {
  * parser dropped the entire trailing block — leading to autoIngest
  * returning zero files and the queue runner throwing "Ingest produced no
  * output files". 30000 chars ≈ 7–12k tokens depending on script, leaving
- * room for the system prompts (schema + dbIndex + dismissals) and the
+ * room for the system prompts (dbIndex + dismissals) and the
  * FILE-block output.
  */
 const MAX_CHUNK_CHARS = 30000
@@ -366,11 +367,11 @@ async function autoIngestImpl(
     filesWritten: [],
   })
 
-  const [sourceContent, schema, purpose] = await Promise.all([
+  const [sourceContent, graphPolicy] = await Promise.all([
     tryReadFile(sp),
-    tryReadFile(`${pp}/schema.md`),
-    tryReadFile(`${pp}/purpose.md`),
+    loadGraphPolicy(pp),
   ])
+  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
 
   // ── Cache check: skip re-ingest if source content hasn't changed ──
   const cachedFiles = await checkIngestCache(pp, fileName, sourceContent)
@@ -434,7 +435,7 @@ async function autoIngestImpl(
     await streamChat(
       llmConfig,
       [
-        { role: "system", content: buildAnalysisPrompt(schema, purpose, currentDbIndex, chunk, dismissalContext) },
+        { role: "system", content: buildAnalysisPrompt(currentDbIndex, chunk, dismissalContext, graphPolicyPrompt) },
         { role: "user", content: `Analyze this source document and propose db/ paths:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length} (this is one slice of a larger document; only analyze what's below)` : ""}\n\n---\n\n${chunk}` },
       ],
       {
@@ -464,7 +465,7 @@ async function autoIngestImpl(
     await streamChat(
       llmConfig,
       [
-        { role: "system", content: buildGenerationPrompt(schema, purpose, currentDbIndex, fileName, chunk) },
+        { role: "system", content: buildGenerationPrompt(currentDbIndex, fileName, chunk, graphPolicyPrompt) },
         {
           role: "user",
           content: [
@@ -931,31 +932,19 @@ function parseReviewBlocks(
 /**
  * Step 1 prompt (Stage 3 rewrite). Decomposition planner.
  *
- * The analyst now reads the raw source against the project's `schema.md`
- * (the user-supplied taxonomy that defines where each kind of content
- * belongs) and proposes a per-section decomposition: which schema-defined
+ * Reads the raw source and proposes a per-section decomposition: which
  * paths under `db/...` does this raw file fan out to, what's the meaning
  * of each piece, and what range in the raw file does it correspond to.
- *
- * Notable changes vs. the pre-Stage-3 prompt:
- *   - No more "List entities / concepts / queries" — those were artifacts
- *     of the wiki/ flow and the new pipeline doesn't write them.
- *   - schema.md is injected verbatim (not truncated). The schema is the
- *     authoritative path map; truncating it would silently confine the
- *     decomposition to the early sections.
- *   - The output is structured around proposed db/ paths, NOT around
- *     wiki sections — Stage 2 will turn each proposal into a FILE block.
  */
 export function buildAnalysisPrompt(
-  schema: string,
-  purpose: string,
   dbIndex: string,
   sourceContent: string = "",
   dismissalContext: string = "",
+  graphPolicyPrompt: string = "",
 ): string {
   return [
     "You are a knowledge-base decomposer. Read the raw source document and",
-    "decide how to split it into schema-defined pages under `db/`.",
+    "decide how to split it into logical pages under `db/`.",
     "",
     languageRule(sourceContent),
     "",
@@ -964,9 +953,8 @@ export function buildAnalysisPrompt(
     "A list of proposed pages. For each proposed page:",
     "",
     "- **path** — the project-relative path under `db/` that this page should",
-    "  live at. The path MUST follow the `schema.md` directory tree below.",
-    "  Use the schema's placeholder slots (e.g. `{dungeon_id}`, `{patch_id}`)",
-    "  with concrete identifiers drawn from the source's content.",
+    "  live at. Use clear, descriptive kebab-case paths that reflect the",
+    "  source's structure and topic (e.g. `db/systems/combat/damage-formula.md`).",
     "- **summary** — one or two sentences describing what this page is about.",
     "- **range** — a pointer back into the raw file: a heading path",
     "  (`## 3. 던전 A — 보상`), a sheet+range (`DungeonA!B12:E18`), a",
@@ -978,20 +966,17 @@ export function buildAnalysisPrompt(
     "  modification flow (Stage 4) will handle conflicts later.",
     "",
     "Multiple sections of the same raw file may collapse to the same page",
-    "(e.g. two passages about the same dungeon's rewards). Do not invent",
-    "content that isn't in the source. If a section doesn't fit anywhere in",
-    "the schema, skip it and note it briefly under '## Unmapped sections'",
-    "at the end.",
+    "(e.g. two passages about the same topic). Do not invent content that",
+    "isn't in the source. If a section is too thin or irrelevant, skip it",
+    "and note it briefly under '## Skipped sections' at the end.",
     "",
     "Be concrete: 'the source has a section on dungeon A entry rules → it",
     "decomposes to db/world/dungeons/dungeon_a/entry_rules.md' beats vague",
     "categorical hand-waving.",
     "",
-    purpose ? `## Wiki Purpose (project intent)\n${purpose}` : "",
-    "",
-    schema ? `## Schema (authoritative directory tree — every proposed path MUST live under this)\n\n${schema}` : "",
-    "",
     dbIndex ? `## Current db/ index (pages that already exist)\n\n${dbIndex}` : "## Current db/ index\n\n(empty — this is the first ingest into this project)",
+    "",
+    graphPolicyPrompt,
     "",
     dismissalContext,
   ].filter(Boolean).join("\n")
@@ -1000,25 +985,12 @@ export function buildAnalysisPrompt(
 /**
  * Step 2 prompt (Stage 3 rewrite). Generation: emit one FILE block per
  * proposed page, with object-form `sources` carrying file + range.
- *
- * Notable changes vs. the pre-Stage-3 prompt:
- *   - All output paths must live under `db/`. The schema is the
- *     authoritative tree; the prompt no longer asks for `wiki/sources/`,
- *     `wiki/entities/`, `wiki/concepts/`, `wiki/index.md`, or `wiki/overview.md`.
- *   - Frontmatter `sources` is the multi-line object form documented in
- *     `schema/game-dev-example.md` §4 — `file:` + `range:` per entry.
- *     This is what `parseSourceRefs` reads and what the modification
- *     flow (Stage 4) needs to detect "same raw range, different content".
- *   - REVIEW blocks are kept (sweep/lint flows still consume them) but
- *     the stage-3 prompt expects them to be rare — most decisions belong
- *     in Stage 4's modification queue, not in stage-2 review items.
  */
 export function buildGenerationPrompt(
-  schema: string,
-  purpose: string,
   dbIndex: string,
   sourceFileName: string,
   sourceContent: string = "",
+  graphPolicyPrompt: string = "",
 ): string {
   return [
     "You are a wiki maintainer. The Stage 1 analysis has proposed a set of",
@@ -1035,9 +1007,8 @@ export function buildGenerationPrompt(
     "",
     "## Path rules",
     "",
-    "- Every FILE path MUST start with `db/` and follow the schema's tree.",
-    "- Resolve any placeholder slots in the schema (e.g. `{dungeon_id}`)",
-    "  with concrete identifiers from the source content.",
+    "- Every FILE path MUST start with `db/`.",
+    "- Use clear, descriptive kebab-case paths that match the Stage 1 analysis.",
     "- Use the same path the Stage 1 analysis proposed unless you have a",
     "  concrete reason to change it (and if you do, change it consistently).",
     "",
@@ -1077,10 +1048,6 @@ export function buildGenerationPrompt(
     "",
     "Allowed REVIEW types: `missing-page`, `suggestion`.",
     "Allowed OPTIONS values: `Create Page | Skip` (do not invent others).",
-    "",
-    purpose ? `## Wiki Purpose\n${purpose}` : "",
-    "",
-    schema ? `## Schema (authoritative path map)\n\n${schema}` : "",
     "",
     dbIndex ? `## Current db/ index (preserve existing — emit FILE blocks for them only when this source legitimately contributes)\n\n${dbIndex}` : "",
     "",
@@ -1122,6 +1089,8 @@ export function buildGenerationPrompt(
     // drift back to their training-data language for individual pages.
     "---",
     "",
+    graphPolicyPrompt,
+    "",
     languageRule(sourceContent),
   ].filter(Boolean).join("\n")
 }
@@ -1152,12 +1121,12 @@ export async function startIngest(
   store.clearMessages()
   store.setStreaming(false)
 
-  const [sourceContent, schema, purpose, index] = await Promise.all([
+  const [sourceContent, index, graphPolicy] = await Promise.all([
     tryReadFile(sp),
-    tryReadFile(`${pp}/schema.md`),
-    tryReadFile(`${pp}/purpose.md`),
     tryReadFile(`${pp}/db/index.md`),
+    loadGraphPolicy(pp),
   ])
+  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
 
   const fileName = getFileName(sp)
 
@@ -1166,9 +1135,8 @@ export async function startIngest(
     "",
     languageRule(sourceContent),
     "",
-    purpose ? `## Wiki Purpose\n${purpose}` : "",
-    schema ? `## Wiki Schema\n${schema}` : "",
     index ? `## Current Wiki Index\n${index}` : "",
+    graphPolicyPrompt,
   ]
     .filter(Boolean)
     .join("\n\n")
@@ -1176,7 +1144,7 @@ export async function startIngest(
   const userMessage = [
     `I'm ingesting the following source file into my wiki: **${fileName}**`,
     "",
-    "Please read it carefully and present the key takeaways, important concepts, and information that would be valuable to capture in the wiki. Highlight anything that relates to the wiki's purpose and schema.",
+    "Please read it carefully and present the key takeaways, important concepts, and information that would be valuable to capture in the wiki.",
     "",
     "---",
     `**File: ${fileName}**`,
@@ -1221,10 +1189,11 @@ export async function executeIngestWrites(
   const pp = normalizePath(projectPath)
   const store = getStore()
 
-  const [schema, index] = await Promise.all([
-    tryReadFile(`${pp}/schema.md`),
+  const [index, graphPolicy] = await Promise.all([
     tryReadFile(`${pp}/db/index.md`),
+    loadGraphPolicy(pp),
   ])
+  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
 
   const conversationHistory = store.messages
     .filter((m) => m.role !== "system")
@@ -1235,7 +1204,6 @@ export async function executeIngestWrites(
     "",
     userGuidance ? `Additional guidance: ${userGuidance}` : "",
     "",
-    schema ? `## Wiki Schema\n${schema}` : "",
     index ? `## Current Wiki Index\n${index}` : "",
     "",
     "Output ONLY the file contents in this exact format for each file:",
@@ -1271,7 +1239,7 @@ export async function executeIngestWrites(
     "You are a wiki generation assistant. Your task is to produce structured wiki file contents.",
     "",
     languageRule(historyText),
-    schema ? `## Wiki Schema\n${schema}` : "",
+    graphPolicyPrompt,
   ]
     .filter(Boolean)
     .join("\n\n")

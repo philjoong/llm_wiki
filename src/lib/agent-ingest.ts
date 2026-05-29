@@ -30,6 +30,7 @@ import type { FileNode } from "@/types/wiki"
 import { streamClaudeCodeCli } from "./claude-cli-transport"
 import { isSafeIngestPath } from "./ingest"
 import { getFileName, normalizePath } from "./path-utils"
+import { buildGraphPolicyPrompt, loadGraphPolicy } from "./graph-policy"
 
 export interface ParsedAgentFile {
   path: string
@@ -38,21 +39,16 @@ export interface ParsedAgentFile {
 
 /**
  * The system prompt installed via `--system-prompt`. Leading instruction
- * is the JSON shape; everything else (purpose / schema / db index) is
- * appended as additional context the model can rely on but doesn't have
- * to echo. Schema and dbIndex are injected verbatim, NOT truncated —
- * truncation here would silently confine output paths to the early
- * portions of the schema tree.
+ * is the JSON shape; db index and graph policy are appended as context.
  */
 export function buildAgentIngestPrompt(
-  schema: string,
-  purpose: string,
   dbIndex: string,
   dismissalContext: string,
+  graphPolicyPrompt: string = "",
 ): string {
   return [
     "You are a wiki maintainer. Decompose the user's source document into",
-    "schema-defined pages under db/.",
+    "logical pages under db/.",
     "",
     "## Output format (STRICT)",
     "",
@@ -80,9 +76,8 @@ export function buildAgentIngestPrompt(
     "Do not invent content the source does not contain. If a section is",
     "too thin for its own page, omit it.",
     "",
-    purpose ? `## Wiki Purpose\n${purpose}` : "",
-    schema ? `## Schema (authoritative directory tree — every path MUST live under this)\n\n${schema}` : "",
     dbIndex ? `## Current db/ index\n\n${dbIndex}` : "",
+    graphPolicyPrompt,
     dismissalContext,
   ]
     .filter(Boolean)
@@ -191,14 +186,14 @@ export async function autoIngestViaAgent(
     filesWritten: [],
   })
 
-  const [sourceContent, schema, purpose, dbIndex] = await Promise.all([
+  const [sourceContent, dbIndex, graphPolicy] = await Promise.all([
     tryReadFile(sp),
-    tryReadFile(`${pp}/schema.md`),
-    tryReadFile(`${pp}/purpose.md`),
     buildDbIndex(pp),
+    loadGraphPolicy(pp),
   ])
+  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
 
-  const systemPrompt = buildAgentIngestPrompt(schema, purpose, dbIndex, "")
+  const systemPrompt = buildAgentIngestPrompt(dbIndex, "", graphPolicyPrompt)
   const userMessage = [
     `Source file: ${fileName}${folderContext ? ` (folder: ${folderContext})` : ""}`,
     "",

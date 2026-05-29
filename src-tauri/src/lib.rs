@@ -86,6 +86,10 @@ pub fn run() {
             commands::git_ops::git_diff,
             commands::git_ops::git_checkout_path,
             commands::git_ops::git_revert,
+            commands::graph_db::graph_db_create,
+            commands::graph_db::graph_db_delete,
+            commands::graph_db::graph_db_list,
+            commands::graph_db::graph_db_ping,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

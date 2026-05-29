@@ -414,14 +414,40 @@ function ReviewCard({
  * page on the left and the parked draft on the right. Truncated to keep
  * the card sane; the full content lives in `pending/_proposals/...`.
  */
+function extractFrontmatterField(content: string, field: string): string | null {
+  const match = content.match(new RegExp(`^---\\n[\\s\\S]*?^${field}:\\s*["']?(.+?)["']?\\s*$`, "m"))
+  return match ? match[1].trim() : null
+}
+
 function ModificationDiff({
   proposal,
 }: {
   proposal: NonNullable<ReviewItem["proposal"]>
 }) {
   const truncate = (s: string, n = 600) => (s.length > n ? s.slice(0, n) + "\n…" : s)
+
+  const existingGraph = extractFrontmatterField(proposal.existingExcerpt, "graph")
+  const incomingGraph = extractFrontmatterField(proposal.incomingExcerpt, "graph")
+  const graphChanged = existingGraph !== incomingGraph
+
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
+      {(existingGraph || incomingGraph) && (
+        <div className="col-span-2 flex items-center gap-2 rounded border bg-muted/20 px-2 py-1 text-[10px]">
+          <span className="text-muted-foreground">Target graph:</span>
+          {existingGraph && (
+            <code className="rounded bg-muted px-1">{existingGraph}</code>
+          )}
+          {graphChanged && incomingGraph && incomingGraph !== existingGraph && (
+            <>
+              <span className="text-muted-foreground">→</span>
+              <code className="rounded bg-orange-100 px-1 text-orange-700 dark:bg-orange-950/50 dark:text-orange-400">
+                {incomingGraph}
+              </code>
+            </>
+          )}
+        </div>
+      )}
       <div className="rounded border bg-muted/30 p-2">
         <div className="mb-1 font-semibold text-muted-foreground">기존 (existing)</div>
         <pre className="whitespace-pre-wrap break-words font-mono text-[10px] leading-snug">

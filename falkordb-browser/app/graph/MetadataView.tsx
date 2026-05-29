@@ -1,0 +1,196 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { createNestedObject, getTheme, prepareArg, securedFetch, Query } from "@/lib/utils";
+import { JSONTree } from "react-json-tree";
+import { useContext, useMemo, useState } from "react";
+import { Info } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import { useTheme } from "next-themes";
+import Button from "../components/ui/Button";
+import { IndicatorContext, ConnectionContext } from "../components/provider";
+
+const renderValue = (v: any) => (
+    <span className="SofiaSans text-xs">{v}</span>
+);
+
+const renderLabel = (l: any) => (
+    <span className="SofiaSans text-xs">{l[0]}:</span>
+);
+
+export function Profile({ query, setQuery, fetchCount, background, hideTitle }: {
+    query: Query,
+    setQuery: (q: Query) => void,
+    fetchCount: () => Promise<void>
+    background: string
+    hideTitle?: boolean
+}) {
+
+    const { indicator, setIndicator } = useContext(IndicatorContext);
+    const { isReadOnly } = useContext(ConnectionContext);
+
+    const { toast } = useToast();
+    const { theme } = useTheme();
+    const { foreground } = useMemo(() => getTheme(theme), [theme]);
+
+    const [profile, setProfile] = useState<string[]>(query.profile || []);
+    const [isLoading, setIsLoading] = useState(false);
+
+
+    const handleProfile = async () => {
+        setIsLoading(true);
+        try {
+            const readOnlyParam = isReadOnly ? '&readOnly=true' : '';
+            const result = await securedFetch(`/api/graph/${query.graphName}/profile?query=${prepareArg(query.text)}${readOnlyParam}`, {
+                method: "GET",
+            }, toast, setIndicator);
+
+            if (!result.ok) return;
+
+            const json = await result.json();
+            setProfile(json.result);
+            setQuery({
+                ...query,
+                profile: json.result
+            });
+            fetchCount();
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <>
+            {!hideTitle && <h1 className="text-2xl font-bold">Profile</h1>}
+            <div className="flex gap-4">
+                <Button
+                    indicator={indicator}
+                    variant="Primary"
+                    className="px-2 py-1 text-xs"
+                    label="Profile"
+                    onClick={handleProfile}
+                    isLoading={isLoading}
+                />
+                <Button
+                    className="cursor-default"
+                    title="be aware that running the profile command will change your data"
+                >
+                    <Info size={25} />
+                </Button>
+            </div>
+            {
+                profile.length > 0 &&
+                <div className="h-1 grow w-full overflow-auto">
+                    <JSONTree
+                        data={createNestedObject(profile)}
+                        shouldExpandNodeInitially={() => true}
+                        hideRoot
+                        labelRenderer={renderLabel}
+                        valueRenderer={renderValue}
+                        theme={{
+                            base00: background, // background
+                            base01: '#000000',
+                            base02: '#CE9178',
+                            base03: foreground, // open values
+                            base04: '#CE9178',
+                            base05: '#CE9178',
+                            base06: '#CE9178',
+                            base07: '#CE9178',
+                            base08: '#CE9178',
+                            base09: '#b5cea8', // numbers
+                            base0A: '#CE9178',
+                            base0B: foreground,
+                            base0C: '#CE9178',
+                            base0D: foreground, // * keys
+                            base0E: '#ae81ff',
+                            base0F: '#cc6633'
+                        }}
+                    />
+                </div>
+            }
+        </>
+    );
+}
+
+export function Metadata({ query, hideTitle }: {
+    query: Query,
+    hideTitle?: boolean
+}) {
+    return (
+        <>
+            {!hideTitle && <h1 className="text-2xl font-bold">Metadata</h1>}
+            <ul className="flex flex-col gap-2 p-2 h-1 grow overflow-auto SofiaSans text-xs">
+                {query.metadata.map((m, i) => (
+                    // eslint-disable-next-line react/no-array-index-key
+                    <li key={i}>{m}</li>
+                ))}
+            </ul>
+        </>
+    );
+}
+
+export function Explain({ query, background, hideTitle }: {
+    query: Query,
+    background: string,
+    hideTitle?: boolean
+}) {
+
+    const { theme } = useTheme();
+    const { foreground } = useMemo(() => getTheme(theme), [theme]);
+
+    return (
+        <>
+            {!hideTitle && <h1 className="text-2xl font-bold">Explain</h1>}
+            <div className="h-1 grow w-full overflow-auto">
+                <JSONTree
+                    data={createNestedObject(query.explain)}
+                    shouldExpandNodeInitially={() => true}
+                    hideRoot
+                    labelRenderer={renderLabel}
+                    valueRenderer={renderValue}
+                    theme={{
+                        base00: background,
+                        base01: '#000000',
+                        base02: '#CE9178',
+                        base03: foreground, // open values
+                        base04: '#CE9178',
+                        base05: '#CE9178',
+                        base06: '#CE9178',
+                        base07: '#CE9178',
+                        base08: '#CE9178',
+                        base09: '#b5cea8', // numbers
+                        base0A: '#CE9178',
+                        base0B: foreground,
+                        base0C: '#CE9178',
+                        base0D: foreground, // * keys
+                        base0E: '#ae81ff',
+                        base0F: '#cc6633'
+                    }}
+                />
+            </div>
+        </>
+    );
+}
+
+
+export default function MetadataView({ query, setQuery, fetchCount }: {
+    query: Query,
+    setQuery: (q: Query) => void,
+    fetchCount: () => Promise<void>
+}) {
+
+    const { theme } = useTheme();
+    const { background } = getTheme(theme);
+
+    return (
+        <div className="h-full grid grid-cols-2 grid-rows-3 overflow-hidden">
+            <div className="flex flex-col gap-2 p-2 overflow-auto border-border row-span-3 border-r">
+                <Profile background={background} query={query} setQuery={setQuery} fetchCount={fetchCount} />
+            </div>
+            <div className="flex flex-col gap-2 p-2 overflow-auto border-border row-span-1 border-b">
+                <Metadata query={query} />
+            </div>
+            <div className="flex flex-col gap-2 p-2 overflow-auto border-border row-span-2">
+                <Explain background={background} query={query} />
+            </div>
+        </div>
+    );
+}

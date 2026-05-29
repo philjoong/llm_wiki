@@ -11,6 +11,8 @@ import { readFile } from "@/commands/fs"
 import { buildWikiGraph, type GraphNode, type GraphEdge, type CommunityInfo } from "@/lib/wiki-graph"
 import { findSurprisingConnections, detectKnowledgeGaps, type SurprisingConnection, type KnowledgeGap } from "@/lib/graph-insights"
 import { normalizePath } from "@/lib/path-utils"
+import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
+import { createGraphDb, deleteGraphDb, listGraphDb } from "@/commands/graph-db"
 
 const NODE_TYPE_COLORS: Record<string, string> = {
   entity: "#60a5fa",    // blue-400
@@ -312,6 +314,12 @@ export function GraphView() {
   const [dismissedInsights, setDismissedInsights] = useState<Set<string>>(new Set())
   const [sigmaKey, setSigmaKey] = useState(0)
   const [isResizing, setIsResizing] = useState(false)
+  const [relationTypes, setRelationTypes] = useState<string[]>([])
+  const [managedGraphs, setManagedGraphs] = useState<string[]>([])
+  const [newRelationType, setNewRelationType] = useState("")
+  const [newGraphName, setNewGraphName] = useState("")
+  const [graphOpMessage, setGraphOpMessage] = useState<string | null>(null)
+  const [graphFilter, setGraphFilter] = useState<string>("__all__")
   const graphContainerRef = useRef<HTMLDivElement>(null)
   const lastLoadedVersion = useRef(-1)
 
@@ -326,6 +334,7 @@ export function GraphView() {
       setCommunities(result.communities)
       setSurprisingConns(findSurprisingConnections(result.nodes, result.edges, result.communities))
       setKnowledgeGaps(detectKnowledgeGaps(result.nodes, result.edges, result.communities))
+      setGraphFilter("__all__")
       lastLoadedVersion.current = useWikiStore.getState().dataVersion
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to build graph"
@@ -396,8 +405,106 @@ export function GraphView() {
     return () => observer.disconnect()
   }, [isResizing])
 
+  useEffect(() => {
+    if (!project) return
+    void (async () => {
+      const policy = await loadGraphPolicy(normalizePath(project.path))
+      setRelationTypes(policy.relationTypes)
+      setManagedGraphs(policy.managedGraphs)
+    })()
+  }, [project])
+
+  useEffect(() => {
+    return () => {
+      if (graphOpMessageTimer.current) clearTimeout(graphOpMessageTimer.current)
+    }
+  }, [])
+
+  const persistPolicy = useCallback(async (nextRelations: string[], nextGraphs: string[]) => {
+    if (!project) return
+    const saved = await saveGraphPolicy(normalizePath(project.path), {
+      relationTypes: nextRelations,
+      managedGraphs: nextGraphs,
+    })
+    setRelationTypes(saved.relationTypes)
+    setManagedGraphs(saved.managedGraphs)
+  }, [project])
+
+  const addRelationType = useCallback(async () => {
+    const value = newRelationType.trim()
+    if (!value) return
+    if (relationTypes.length >= 4) return
+    if (relationTypes.some((t) => t.toLowerCase() === value.toLowerCase())) return
+    const next = [...relationTypes, value]
+    await persistPolicy(next, managedGraphs)
+    setNewRelationType("")
+  }, [newRelationType, relationTypes, persistPolicy, managedGraphs])
+
+  const removeRelationType = useCallback(async (value: string) => {
+    const next = relationTypes.filter((t) => t !== value)
+    await persistPolicy(next, managedGraphs)
+  }, [relationTypes, persistPolicy, managedGraphs])
+
+  const graphOpMessageTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showGraphOpMessage = useCallback((msg: string) => {
+    setGraphOpMessage(msg)
+    if (graphOpMessageTimer.current) clearTimeout(graphOpMessageTimer.current)
+    graphOpMessageTimer.current = setTimeout(() => setGraphOpMessage(null), 4000)
+  }, [])
+
+  const addManagedGraph = useCallback(async () => {
+    const value = newGraphName.trim()
+    if (!value) return
+    if (managedGraphs.some((g) => g.toLowerCase() === value.toLowerCase())) return
+    try {
+      await createGraphDb(value)
+    } catch (err) {
+      showGraphOpMessage(err instanceof Error ? err.message : String(err))
+      return
+    }
+    const next = [...managedGraphs, value]
+    await persistPolicy(relationTypes, next)
+    setNewGraphName("")
+    showGraphOpMessage(`Graph created: ${value}`)
+  }, [newGraphName, managedGraphs, persistPolicy, relationTypes, showGraphOpMessage])
+
+  const removeManagedGraph = useCallback(async (value: string) => {
+    try {
+      await deleteGraphDb(value)
+    } catch (err) {
+      showGraphOpMessage(err instanceof Error ? err.message : String(err))
+      return
+    }
+    const next = managedGraphs.filter((g) => g !== value)
+    await persistPolicy(relationTypes, next)
+    showGraphOpMessage(`Graph deleted: ${value}`)
+  }, [managedGraphs, persistPolicy, relationTypes, showGraphOpMessage])
+
+  const syncManagedGraphsFromDb = useCallback(async () => {
+    try {
+      const names = await listGraphDb()
+      const next = [...new Set(names.filter(Boolean))]
+      await persistPolicy(relationTypes, next)
+      showGraphOpMessage(`Synced ${next.length} graph(s) from FalkorDB`)
+    } catch (err) {
+      showGraphOpMessage(err instanceof Error ? err.message : String(err))
+    }
+  }, [persistPolicy, relationTypes, showGraphOpMessage])
+
+  // Apply graph filter
+  const filteredNodes = graphFilter === "__all__"
+    ? nodes
+    : graphFilter === "__unassigned__"
+      ? nodes.filter((n) => !n.graph)
+      : nodes.filter((n) => n.graph === graphFilter)
+
+  const filteredNodeIds = new Set(filteredNodes.map((n) => n.id))
+  const filteredEdges = graphFilter === "__all__"
+    ? edges
+    : edges.filter((e) => filteredNodeIds.has(e.source) && filteredNodeIds.has(e.target))
+
   // Count nodes by type for legend
-  const typeCounts = nodes.reduce<Record<string, number>>((acc, n) => {
+  const typeCounts = filteredNodes.reduce<Record<string, number>>((acc, n) => {
     acc[n.type] = (acc[n.type] ?? 0) + 1
     return acc
   }, {})
@@ -450,9 +557,22 @@ export function GraphView() {
             <span className="text-sm font-medium">Knowledge Graph</span>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="rounded bg-muted px-1.5 py-0.5">{nodes.length} pages</span>
-            <span className="rounded bg-muted px-1.5 py-0.5">{edges.length} links</span>
+            <span className="rounded bg-muted px-1.5 py-0.5">{filteredNodes.length} pages</span>
+            <span className="rounded bg-muted px-1.5 py-0.5">{filteredEdges.length} links</span>
           </div>
+          {managedGraphs.length > 0 && (
+            <select
+              value={graphFilter}
+              onChange={(e) => setGraphFilter(e.target.value)}
+              className="h-6 rounded border bg-background px-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="__all__">All graphs</option>
+              {managedGraphs.map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+              <option value="__unassigned__">Unassigned</option>
+            </select>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -495,6 +615,76 @@ export function GraphView() {
           <Button variant="ghost" size="sm" onClick={loadGraph} className="text-xs gap-1 h-7">
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
+        </div>
+      </div>
+
+      <div className="border-b px-4 py-2 shrink-0 bg-muted/20">
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded border bg-background p-2">
+            <div className="mb-2 text-xs font-medium">LLM Relation Types (max 4)</div>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {relationTypes.map((rel) => (
+                <button
+                  key={rel}
+                  type="button"
+                  onClick={() => { void removeRelationType(rel) }}
+                  className="rounded border px-2 py-0.5 text-[11px] hover:bg-accent"
+                  title="Remove"
+                >
+                  {rel} ×
+                </button>
+              ))}
+              {relationTypes.length === 0 && <span className="text-[11px] text-muted-foreground">No relation type set</span>}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={newRelationType}
+                onChange={(e) => setNewRelationType(e.target.value)}
+                placeholder="e.g. REQUIRES"
+                className="h-7 flex-1 rounded border bg-transparent px-2 text-xs"
+                onKeyDown={(e) => { if (e.key === "Enter") void addRelationType() }}
+              />
+              <Button size="sm" className="h-7 text-xs" onClick={() => { void addRelationType() }} disabled={relationTypes.length >= 4}>
+                Add
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded border bg-background p-2">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-medium">Managed Graphs (user-created)</div>
+              <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={() => { void syncManagedGraphsFromDb() }}>
+                Sync
+              </Button>
+            </div>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {managedGraphs.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => { void removeManagedGraph(name) }}
+                  className="rounded border px-2 py-0.5 text-[11px] hover:bg-accent"
+                  title="Remove"
+                >
+                  {name} ×
+                </button>
+              ))}
+              {managedGraphs.length === 0 && <span className="text-[11px] text-muted-foreground">No graph registered</span>}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={newGraphName}
+                onChange={(e) => setNewGraphName(e.target.value)}
+                placeholder="e.g. ui_graph"
+                className="h-7 flex-1 rounded border bg-transparent px-2 text-xs"
+                onKeyDown={(e) => { if (e.key === "Enter") void addManagedGraph() }}
+              />
+              <Button size="sm" className="h-7 text-xs" onClick={() => { void addManagedGraph() }}>
+                Add
+              </Button>
+            </div>
+            {graphOpMessage && <div className="mt-2 text-[11px] text-muted-foreground">{graphOpMessage}</div>}
+          </div>
         </div>
       </div>
 
@@ -557,7 +747,7 @@ export function GraphView() {
               },
             }}
           >
-            <GraphLoader nodes={nodes} edges={edges} colorMode={colorMode} />
+            <GraphLoader nodes={filteredNodes} edges={filteredEdges} colorMode={colorMode} />
             <EventHandler onNodeClick={handleNodeClick} />
             <HighlightManager highlightedNodes={highlightedNodes} />
             <ZoomControls />

@@ -127,7 +127,7 @@ function App() {
           useWikiStore.getState().setOutputLanguage(savedOutputLang)
         }
         const savedLang = await loadLanguage()
-        if (savedLang) {
+        if (savedLang === "en" || savedLang === "ko") {
           await i18n.changeLanguage(savedLang)
         }
         const lastProject = await getLastProject()

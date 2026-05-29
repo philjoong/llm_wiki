@@ -104,9 +104,9 @@ pub struct RevertResult {
 }
 
 /// Initialize a git repo at `project_path` if `.git` doesn't exist, then
-/// stage everything bootstrapped by `initProject` (schema.md, purpose.md,
-/// the four system-prefix `.gitkeep`s, and any other files already on
-/// disk) and create the initial commit.
+/// stage everything bootstrapped by `initProject` (the system-prefix
+/// `.gitkeep`s, exclusion seeds, graph policy, and any other files
+/// already on disk) and create the initial commit.
 ///
 /// Idempotent: if `.git` already exists, returns Ok(()) without touching
 /// anything.
@@ -156,8 +156,8 @@ pub async fn git_init(project_path: String) -> Result<(), String> {
 
     // Stage everything currently on disk under the project root. -A picks
     // up new files, modifications, AND deletions. At init time the dir
-    // contains only schema.md, purpose.md, and the four prefix .gitkeeps,
-    // all of which are new.
+    // contains only the bootstrap `.gitkeep`s, exclusion seeds, and
+    // graph policy — all of which are new.
     let add_out = run_git(&project_path, &["add", "-A"]).await?;
     if !add_out.status.success() {
         let err = String::from_utf8_lossy(&add_out.stderr).to_string();
@@ -635,10 +635,10 @@ mod tests {
         let p = dir.to_string_lossy().to_string();
 
         // Bootstrap files the way initProject would.
-        fs::write(dir.join("schema.md"), "# schema").unwrap();
-        fs::write(dir.join("purpose.md"), "purpose").unwrap();
         fs::create_dir_all(dir.join("db")).unwrap();
         fs::write(dir.join("db/.gitkeep"), "").unwrap();
+        fs::create_dir_all(dir.join("pending")).unwrap();
+        fs::write(dir.join("pending/.gitkeep"), "").unwrap();
 
         git_init(p.clone()).await.expect("git_init");
 
@@ -720,7 +720,7 @@ mod tests {
         }
         let dir = make_tmpdir("idem");
         let p = dir.to_string_lossy().to_string();
-        fs::write(dir.join("schema.md"), "# x").unwrap();
+        fs::write(dir.join("db/.gitkeep"), "# bootstrap").unwrap();
 
         git_init(p.clone()).await.expect("first init");
         let log1 = git_log(p.clone(), 10).await.unwrap();

@@ -11,6 +11,8 @@ import {
   Wrench,
   Trash2,
   Clock,
+  Network,
+  CircleDashed,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -25,6 +27,8 @@ const typeConfig: Record<string, { icon: typeof AlertTriangle; label: string }> 
   "no-outlinks": { icon: ArrowUpRight, label: "No Outbound Links" },
   semantic: { icon: BrainCircuit, label: "Semantic Issue" },
   "stale-axiom": { icon: Clock, label: "Stale Axiom" },
+  "graph-unregistered": { icon: Network, label: "Unregistered Graph" },
+  "graph-unassigned": { icon: CircleDashed, label: "Graph Unassigned" },
 }
 
 export function LintView() {

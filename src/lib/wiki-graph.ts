@@ -10,6 +10,7 @@ export interface GraphNode {
   label: string
   type: string
   path: string
+  graph: string | null // managed graph name from frontmatter `graph:` field
   linkCount: number // inbound + outbound
   community: number // community id from Louvain detection
 }
@@ -142,6 +143,12 @@ function extractType(content: string): string {
   return "other"
 }
 
+function extractGraph(content: string): string | null {
+  const match = content.match(/^---\n[\s\S]*?^graph:\s*["']?(.+?)["']?\s*$/m)
+  if (match) return match[1].trim() || null
+  return null
+}
+
 function extractWikilinks(content: string): string[] {
   const links: string[] = []
   const regex = new RegExp(WIKILINK_REGEX.source, "g")
@@ -176,7 +183,7 @@ export async function buildWikiGraph(
   // Build a map of id -> node data
   const nodeMap = new Map<
     string,
-    { id: string; label: string; type: string; path: string; links: string[] }
+    { id: string; label: string; type: string; graph: string | null; path: string; links: string[] }
   >()
 
   for (const file of mdFiles) {
@@ -193,6 +200,7 @@ export async function buildWikiGraph(
       id,
       label: extractTitle(content, file.name),
       type: extractType(content),
+      graph: extractGraph(content),
       path: file.path,
       links: extractWikilinks(content),
     })
@@ -277,6 +285,7 @@ export async function buildWikiGraph(
     id: n.id,
     label: n.label,
     type: n.type,
+    graph: n.graph,
     path: n.path,
     linkCount: linkCounts.get(n.id) ?? 0,
     community: assignments.get(n.id) ?? 0,

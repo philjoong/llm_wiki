@@ -117,6 +117,18 @@ export async function loadOutputLanguage(): Promise<OutputLanguage | null> {
   return (await store.get<OutputLanguage>(OUTPUT_LANGUAGE_KEY)) ?? null
 }
 
+const FALKORDB_URL_KEY = "falkordbUrl"
+
+export async function saveFalkordbUrl(url: string): Promise<void> {
+  const store = await getStore()
+  await store.set(FALKORDB_URL_KEY, url)
+}
+
+export async function loadFalkordbUrl(): Promise<string | null> {
+  const store = await getStore()
+  return (await store.get<string>(FALKORDB_URL_KEY)) ?? null
+}
+
 // ── Update-check persistence ──────────────────────────────────────────────
 // Small slice of state the UI-layer update store hydrates from on boot.
 // Only fields that should persist across launches: the user's "enable

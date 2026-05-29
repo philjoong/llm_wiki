@@ -5,6 +5,7 @@ import {
   Languages,
   Palette,
   Info,
+  Database,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import i18n from "@/i18n"
@@ -18,12 +19,14 @@ import { EmbeddingSection } from "./sections/embedding-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { AboutSection } from "./sections/about-section"
+import { FalkordbSection } from "./sections/falkordb-section"
 
 type CategoryId =
   | "llm"
   | "embedding"
   | "output"
   | "interface"
+  | "falkordb"
   | "about"
 
 interface Category {
@@ -40,6 +43,7 @@ const CATEGORIES: Category[] = [
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
+  { id: "falkordb", labelKey: "settings.categories.falkordb", icon: Database },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
@@ -177,6 +181,8 @@ export function SettingsView() {
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":
         return <InterfaceSection draft={draft} setDraft={setDraft} />
+      case "falkordb":
+        return <FalkordbSection />
       case "about":
         return <AboutSection />
     }
@@ -227,7 +233,7 @@ export function SettingsView() {
         {/* Global Save bar hidden for sections that persist inline:
             - "llm" saves per-row on every edit (independent per-preset state)
             - "about" has no editable fields */}
-        {active !== "about" && active !== "llm" && (
+        {active !== "about" && active !== "llm" && active !== "falkordb" && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">

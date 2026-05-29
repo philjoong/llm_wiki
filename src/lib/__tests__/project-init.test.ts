@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
 vi.mock("@/commands/fs", () => ({
-  copyFile: vi.fn(),
   createDirectory: vi.fn(),
   writeFile: vi.fn(),
   fileExists: vi.fn(),
@@ -12,7 +11,7 @@ vi.mock("@/commands/git", () => ({
   gitInit: vi.fn(),
 }))
 
-import { copyFile, createDirectory, fileExists, readFile, writeFile } from "@/commands/fs"
+import { createDirectory, fileExists, readFile, writeFile } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
 import {
   initProject,
@@ -21,7 +20,6 @@ import {
   PROMOTION_RULES_SEED,
 } from "../project-init"
 
-const mockCopyFile = vi.mocked(copyFile)
 const mockCreateDirectory = vi.mocked(createDirectory)
 const mockWriteFile = vi.mocked(writeFile)
 const mockFileExists = vi.mocked(fileExists)
@@ -29,10 +27,8 @@ const mockReadFile = vi.mocked(readFile)
 const mockGitInit = vi.mocked(gitInit)
 
 beforeEach(() => {
-  mockCopyFile.mockReset().mockResolvedValue(undefined)
   mockCreateDirectory.mockReset().mockResolvedValue(undefined)
   mockWriteFile.mockReset().mockResolvedValue(undefined)
-  // Default: no .gitignore yet — ensureOriginalsGitignore writes a fresh one.
   mockFileExists.mockReset().mockResolvedValue(false)
   mockReadFile.mockReset().mockResolvedValue("")
   mockGitInit.mockReset().mockResolvedValue(undefined)
@@ -40,21 +36,12 @@ beforeEach(() => {
 
 describe("initProject", () => {
   it("creates every system-prefix directory with a .gitkeep marker", async () => {
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "purpose body",
-    })
+    await initProject({ projectPath: "/tmp/proj" })
 
     for (const dir of SYSTEM_PREFIX_DIRS) {
       expect(mockCreateDirectory).toHaveBeenCalledWith(`/tmp/proj/${dir}`)
       expect(mockWriteFile).toHaveBeenCalledWith(`/tmp/proj/${dir}/.gitkeep`, "")
     }
-    // Stage 1's ingest prefixes + Stage 8's search-side additions
-    // (question_types + the three exclusions/<level>/ subtrees). The
-    // exclusions/ parent itself is created implicitly by create_dir_all
-    // and gets two seed markdown files instead of a .gitkeep.
-    // `processed_1/` was removed in second-fix-develop.md §2 D3.
     expect(SYSTEM_PREFIX_DIRS).toEqual([
       "db",
       "pending",
@@ -67,11 +54,7 @@ describe("initProject", () => {
   })
 
   it("writes the two exclusion seed markdown files into exclusions/", async () => {
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "x",
-    })
+    await initProject({ projectPath: "/tmp/proj" })
 
     expect(mockWriteFile).toHaveBeenCalledWith(
       "/tmp/proj/exclusions/exclusion_schema.md",
@@ -84,43 +67,24 @@ describe("initProject", () => {
   })
 
   it("seeds promotion_rules.md with an explicit 자동 승격 금지 clause", () => {
-    // IDEA §2.6 forbids automatic promotion. The seed file must surface
-    // that constraint so a user editing thresholds can't quietly enable
-    // auto-promotion by lowering a number.
     expect(PROMOTION_RULES_SEED).toMatch(/자동 승격 금지/)
     expect(PROMOTION_RULES_SEED).toMatch(/사람의 명시적 승인/)
   })
 
   it("seeds .gitignore so binary originals + preprocess caches stay untracked", async () => {
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "x",
-    })
+    await initProject({ projectPath: "/tmp/proj" })
 
     const gitignoreCall = mockWriteFile.mock.calls.find(
       ([path]) => path === "/tmp/proj/.gitignore",
     )
     expect(gitignoreCall).toBeDefined()
     const body = String(gitignoreCall![1])
-    // The originals tree is the load-bearing rule — without it, `git
-    // add -A` after an import pulls hundreds of MB of binaries into
-    // the next commit.
     expect(body).toContain("raw/originals/")
-    // Preprocess caches are derivable from the original; no point
-    // versioning them.
     expect(body).toContain("raw/sources/.cache/")
   })
 
   it("writes .gitignore before gitInit so the first commit doesn't capture binaries", async () => {
-    // If a re-init landed on a directory that already had raw/originals/
-    // populated, gitInit would otherwise sweep them into the initial
-    // commit before we'd had a chance to ignore them.
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "x",
-    })
+    await initProject({ projectPath: "/tmp/proj" })
 
     const gitignoreCall = mockWriteFile.mock.calls
       .map((call, i) => ({ path: call[0], order: mockWriteFile.mock.invocationCallOrder[i] }))
@@ -131,9 +95,6 @@ describe("initProject", () => {
   })
 
   it("seeds exclusion_schema.md with the coordinate / application / conflict rules", () => {
-    // Three load-bearing concepts from the plan: single-axis coordinate
-    // system, single-shot application at search start, and the axiom >
-    // pattern + archived-skip conflict rules.
     expect(EXCLUSION_SCHEMA_SEED).toMatch(/좌표계/)
     expect(EXCLUSION_SCHEMA_SEED).toMatch(/적용 시점/)
     expect(EXCLUSION_SCHEMA_SEED).toMatch(/axiom > pattern/)
@@ -141,14 +102,7 @@ describe("initProject", () => {
   })
 
   it("orders writes so seed markdown lands before gitInit captures the tree", async () => {
-    // The initial commit must include the seeds — otherwise users start
-    // out with an untracked exclusions/ workspace and Stage 12's
-    // commit-per-search story breaks on the first run.
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "x",
-    })
+    await initProject({ projectPath: "/tmp/proj" })
 
     const seedWriteOrders = mockWriteFile.mock.calls
       .map((call, i) => ({ path: call[0], order: mockWriteFile.mock.invocationCallOrder[i] }))
@@ -164,67 +118,21 @@ describe("initProject", () => {
     }
   })
 
-  it("copies the selected schema source into <projectPath>/schema.md", async () => {
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/elsewhere/my-schema.md",
-      purposeMarkdown: "",
-    })
-
-    expect(mockCopyFile).toHaveBeenCalledWith("/elsewhere/my-schema.md", "/tmp/proj/schema.md")
-    expect(mockCopyFile).toHaveBeenCalledTimes(1)
-  })
-
-  it("writes the purpose markdown verbatim into <projectPath>/purpose.md", async () => {
-    const purpose = "# 프로젝트 목적\n\n인스턴스 서버 자료 정리"
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: purpose,
-    })
-
-    expect(mockWriteFile).toHaveBeenCalledWith("/tmp/proj/purpose.md", purpose)
-  })
-
-  it("allows empty purpose (writes 0-byte purpose.md)", async () => {
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "",
-    })
-
-    expect(mockWriteFile).toHaveBeenCalledWith("/tmp/proj/purpose.md", "")
-  })
-
   it("strips trailing slashes from projectPath so paths don't double up", async () => {
-    await initProject({
-      projectPath: "/tmp/proj///",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "x",
-    })
+    await initProject({ projectPath: "/tmp/proj///" })
 
     expect(mockCreateDirectory).toHaveBeenCalledWith("/tmp/proj/db")
-    expect(mockCopyFile).toHaveBeenCalledWith("/sources/schema.md", "/tmp/proj/schema.md")
-    expect(mockWriteFile).toHaveBeenCalledWith("/tmp/proj/purpose.md", "x")
     expect(mockGitInit).toHaveBeenCalledWith("/tmp/proj")
   })
 
   it("calls gitInit with the normalized project path after files are on disk", async () => {
-    await initProject({
-      projectPath: "/tmp/proj",
-      schemaSourcePath: "/sources/schema.md",
-      purposeMarkdown: "x",
-    })
+    await initProject({ projectPath: "/tmp/proj" })
 
     expect(mockGitInit).toHaveBeenCalledTimes(1)
     expect(mockGitInit).toHaveBeenCalledWith("/tmp/proj")
 
-    // gitInit must run AFTER the bootstrap writes — otherwise the
-    // initial commit captures an empty tree.
     const gitInitOrder = mockGitInit.mock.invocationCallOrder[0]
     const lastWriteOrder = Math.max(...mockWriteFile.mock.invocationCallOrder)
-    const copyOrder = mockCopyFile.mock.invocationCallOrder[0]
     expect(gitInitOrder).toBeGreaterThan(lastWriteOrder)
-    expect(gitInitOrder).toBeGreaterThan(copyOrder)
   })
 })

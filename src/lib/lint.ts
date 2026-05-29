@@ -8,9 +8,10 @@ import { buildLanguageDirective } from "@/lib/output-language"
 import { loadExclusions } from "@/lib/exclusions"
 import { findStaleAxioms } from "@/lib/exclusion-validity"
 import { loadThresholds } from "@/lib/promotion"
+import { loadGraphPolicy } from "@/lib/graph-policy"
 
 export interface LintResult {
-  type: "orphan" | "broken-link" | "no-outlinks" | "semantic" | "stale-axiom"
+  type: "orphan" | "broken-link" | "no-outlinks" | "semantic" | "stale-axiom" | "graph-unregistered" | "graph-unassigned"
   severity: "warning" | "info"
   page: string
   detail: string
@@ -178,6 +179,42 @@ export async function runStructuralLint(projectPath: string): Promise<LintResult
     }
   } catch (err) {
     console.warn("[lint] stale-axiom check failed:", err)
+  }
+
+  // Graph policy checks — only run when managedGraphs is non-empty.
+  try {
+    const pp = normalizePath(dbRoot.replace(/\/db$/, ""))
+    const policy = await loadGraphPolicy(pp)
+
+    if (policy.managedGraphs.length > 0) {
+      const managedSet = new Set(policy.managedGraphs.map((g) => g.toLowerCase()))
+
+      for (const p of pages) {
+        const shortName = getRelativePath(p.path, dbRoot)
+        const graphMatch = p.content.match(/^---\n[\s\S]*?^graph:\s*["']?(.+?)["']?\s*$/m)
+        const graphValue = graphMatch ? graphMatch[1].trim() : null
+
+        if (!graphValue) {
+          // Page has no graph: field — info level since it's not mandatory
+          results.push({
+            type: "graph-unassigned",
+            severity: "info",
+            page: shortName,
+            detail: `No \`graph:\` field assigned. Consider adding one of: ${policy.managedGraphs.join(", ")}.`,
+          })
+        } else if (!managedSet.has(graphValue.toLowerCase())) {
+          // Page references a graph not in managedGraphs
+          results.push({
+            type: "graph-unregistered",
+            severity: "warning",
+            page: shortName,
+            detail: `\`graph: ${graphValue}\` is not in the project's managed graphs list. Known graphs: ${policy.managedGraphs.join(", ")}.`,
+          })
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[lint] graph policy check failed:", err)
   }
 
   return results

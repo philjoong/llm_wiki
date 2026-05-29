@@ -1,0 +1,244 @@
+/* eslint-disable @typescript-eslint/no-use-before-define */
+/* eslint-disable no-param-reassign */
+/* eslint-disable react/require-default-props */
+
+'use client';
+
+import { prepareArg, securedFetch, GraphRef, Node, Link, Label } from "@/lib/utils";
+import { Dispatch, SetStateAction, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Pencil, TableProperties, X } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import Button from "../components/ui/Button";
+import { IndicatorContext, GraphContext, ConnectionContext } from "../components/provider";
+import DataTable from "./DataTable";
+import AddLabel from "./addLabel";
+import RemoveLabel from "./RemoveLabel";
+
+interface Props {
+    object: Node | Link;
+    onClose: () => void;
+    setLabels: Dispatch<SetStateAction<Label[]>>;
+    canvasRef: GraphRef;
+}
+
+export default function DataPanel({ object, onClose, setLabels, canvasRef }: Props) {
+    const { setIndicator } = useContext(IndicatorContext);
+    const { graph, setGraphInfo } = useContext(GraphContext);
+    const { isReadOnly } = useContext(ConnectionContext);
+
+    const lastObjId = useRef<number | undefined>(undefined);
+    const labelsListRef = useRef<HTMLUListElement>(null);
+
+    const { toast } = useToast();
+
+    const [labelsHover, setLabelsHover] = useState(false);
+    const [label, setLabel] = useState<string[]>([]);
+    const type = !("source" in object);
+
+    const handleClose = useCallback((e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+            onClose();
+        }
+    }, [onClose]);
+
+    useEffect(() => {
+        window.addEventListener("keydown", handleClose);
+
+        return () => {
+            window.removeEventListener("keydown", handleClose);
+        };
+    }, [handleClose]);
+
+    useEffect(() => {
+        if (lastObjId.current !== object.id) {
+            setLabelsHover(false);
+        }
+        setLabel(type ? [...(object as Node).labels.filter((c) => c !== "")] : [object.relationship]);
+        lastObjId.current = object.id;
+    }, [object, type]);
+
+    const handleAddLabel = async (newLabel: string) => {
+        const node = object as Node;
+        if (newLabel === "") {
+            toast({
+                title: "Error",
+                description: "Please fill the label",
+                variant: "destructive"
+            });
+            return false;
+        }
+        if (label.includes(newLabel)) {
+            toast({
+                title: "Error",
+                description: "Label already exists",
+                variant: "destructive"
+            });
+            return false;
+        }
+        const result = await securedFetch(`api/graph/${prepareArg(graph.Id)}/${node.id}/label${isReadOnly ? '?readOnly=true' : ''}`, {
+            method: "POST",
+            body: JSON.stringify({
+                label: newLabel
+            })
+        }, toast, setIndicator);
+
+        if (result.ok) {
+            setLabels([...await graph.addLabel(newLabel, node)]);
+            setLabel([...node.labels]);
+            const newGraphInfo = graph.GraphInfo.clone();
+            setGraphInfo(newGraphInfo);
+            graph.GraphInfo = newGraphInfo;
+
+            const canvas = canvasRef.current;
+
+            if (canvas) {
+                const currentData = canvas.getGraphData();
+
+                currentData.nodes.forEach(canvasNode => {
+                    if (canvasNode.id === node.id) {
+                        canvasNode.labels = [...node.labels];
+                        canvasNode.color = node.color;
+                        canvasNode.size = node.size || canvasNode.size;
+                    }
+                });
+
+                canvas.setGraphData({ ...currentData });
+            }
+
+            return true;
+        }
+
+        return false;
+    };
+
+    const handleRemoveLabel = async (removeLabel: string) => {
+        const node = object as Node;
+
+        if (removeLabel === "") {
+            toast({
+                title: "Error",
+                description: "You cannot remove the default label",
+                variant: "destructive"
+            });
+            return false;
+        }
+
+        const result = await securedFetch(`api/graph/${prepareArg(graph.Id)}/${node.id}/label${isReadOnly ? '?readOnly=true' : ''}`, {
+            method: "DELETE",
+            body: JSON.stringify({
+                label: removeLabel
+            })
+        }, toast, setIndicator);
+
+        if (result.ok) {
+            await graph.removeLabel(removeLabel, node);
+            setLabels([...graph.Labels]);
+            setLabel([...node.labels]);
+            const newGraphInfo = graph.GraphInfo.clone();
+            setGraphInfo(newGraphInfo);
+            graph.GraphInfo = newGraphInfo;
+
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const currentData = canvas.getGraphData();
+
+                currentData.nodes.forEach(canvasNode => {
+                    if (canvasNode.id === node.id) {
+
+                        // Update canvas node to match the updated graph node
+                        canvasNode.labels = [...node.labels];
+                        canvasNode.color = node.color;
+                        canvasNode.size = node.size || canvasNode.size;
+                    }
+                });
+
+                canvas.setGraphData({ ...currentData });
+            }
+
+            return true;
+        }
+
+        return false;
+    };
+
+    return (
+        <div data-testid="DataPanel" className="DataPanel gap-2 p-3 relative">
+            <Button
+                className="absolute top-2 right-2"
+                data-testid="DataPanelClose"
+                title="Close"
+                onClick={() => onClose()}
+            >
+                <X size={16} />
+            </Button>
+            <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between pr-5">
+                    <h1 className="text-lg font-semibold">{type ? "Node" : "Edge"} Data</h1>
+                    <TableProperties size={20} className="text-foreground/50" />
+                </div>
+                <div className="flex flex-col gap-1 text-sm text-nowrap">
+                    <p>ID: <span className="Gradient text-transparent bg-clip-text font-semibold">{object.id}</span></p>
+                    <p data-testid="DataPanelAttributesCount">Attributes: <span className="Gradient text-transparent bg-clip-text font-semibold">{Object.keys(object.data).length}</span></p>
+                </div>
+                <ul
+                    ref={labelsListRef}
+                    data-testid="DataPanelLabel"
+                    className="flex flex-wrap gap-2"
+                    onMouseEnter={() => setLabelsHover(true)}
+                    onMouseLeave={() => setLabelsHover(false)}
+                >
+                    {label.map((l) => (
+                        <li
+                            data-testid={`DataPanelLabel${l}`}
+                            key={l}
+                            className="flex gap-1 p-1 bg-secondary rounded-full items-center"
+                        >
+                            <p>{l || "No Label"}</p>
+                            {
+                                type && l && !isReadOnly &&
+                                <RemoveLabel
+                                    onRemoveLabel={handleRemoveLabel}
+                                    selectedLabel={l}
+                                    trigger={
+                                        <Button
+                                            data-testid={`DataPanelRemoveLabel${l}`}
+                                            title="Remove Label"
+                                            tooltipVariant="Delete"
+                                        >
+                                            <X size={15} />
+                                        </Button>
+                                    }
+                                />
+                            }
+                        </li>
+                    ))}
+                    <li className="h-8 w-[106px] flex justify-center items-center" key="addLabel">
+                        {
+                            type && (labelsHover || label.length === 0) && !isReadOnly &&
+                            <AddLabel
+                                onAddLabel={handleAddLabel}
+                                trigger={
+                                    <Button
+                                        data-testid="DataPanelAddLabel"
+                                        className="p-2 text-nowrap text-xs justify-center border border-border rounded-full"
+                                        label="Add Label"
+                                        title=""
+                                    >
+                                        <Pencil size={15} />
+                                    </Button>
+                                }
+                            />
+                        }
+                    </li>
+                </ul>
+            </div>
+            <DataTable
+                className="h-1 grow w-full"
+                lastObjId={lastObjId}
+                object={object}
+                type={type}
+                canvasRef={canvasRef}
+            />
+        </div >
+    );
+}

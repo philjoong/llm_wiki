@@ -1,0 +1,193 @@
+import { Locator, Page } from "playwright";
+import BasePage from "@/e2e/infra/ui/basePage";
+import { interactWhenVisible, waitForURL } from "@/e2e/infra/utils";
+import urls from '../../config/urls.json'
+
+export default class HeaderComponent extends BasePage {
+    private get falkorDBLogo(): Locator {
+        return this.page.getByLabel("FalkorDB");
+    }
+
+    private get graphsButton(): Locator {
+        return this.page.getByTestId("GraphsButton");
+    }
+
+    private get helpButton(): Locator {
+        return this.page.getByRole("button", { name: "Help" })
+    }
+
+    private get documentationButton(): Locator {
+        return this.page.getByRole("link", { name: "Documentation", exact: true })
+    }
+
+    private get apiDocumentationButton(): Locator {
+        return this.page.getByRole("link", { name: "API Documentation" })
+    }
+
+    private get supportButton(): Locator {
+        return this.page.getByRole("link", { name: "Support" })
+    }
+
+    private get aboutButton(): Locator {
+        return this.page.getByRole("button", { name: "About" })
+    }
+
+    private get settingsButton(): Locator {
+        return this.page.getByTestId("settings")
+    }
+
+    private get LogoutButton(): Locator {
+        return this.page.getByTestId("logoutButton")
+    }
+
+    private get LogoutConfirmButton(): Locator {
+        return this.page.getByTestId("logoutConfirm")
+    }
+
+    private get aboutPopUp(): Locator {
+        return this.page.locator('//div[@id="about"]');
+    }
+
+    async clickFalkorDBLogo(): Promise<void> {
+        await interactWhenVisible(this.falkorDBLogo, (el) => el.click(), "Click FalkorDB Logo");
+    }
+
+    async clickOnGraphsButton(): Promise<void> {
+        await interactWhenVisible(this.graphsButton, (el) => el.click(), "Click Graphs Button", 1000, 15);
+        await waitForURL(this.page, urls.graphUrl);
+    }
+
+    async clickOnHelpBtn(): Promise<void> {
+        await interactWhenVisible(this.helpButton, (el) => el.click(), "Click Help Button");
+    }
+
+    async clickOnAboutBtn(): Promise<void> {
+        await interactWhenVisible(this.aboutButton, (el) => el.click(), "Click About Button");
+    }
+
+    async clickOnDocumentationBtn(): Promise<void> {
+        await interactWhenVisible(this.documentationButton, (el) => el.click(), "Click Documentation Button");
+    }
+
+    async clickOnApiDocumentationBtn(): Promise<void> {
+        await interactWhenVisible(this.apiDocumentationButton, (el) => el.click(), "Click API Documentation Button");
+    }
+
+    async clickOnSupportBtn(): Promise<void> {
+        await interactWhenVisible(this.supportButton, (el) => el.click(), "Click Support Button");
+    }
+
+    async clickOnSettingsBtn(): Promise<void> {
+        await interactWhenVisible(this.settingsButton, (el) => el.click(), "Click Settings Button");
+        await waitForURL(this.page, urls.settingsUrl);
+    }
+
+    async isSettingsButtonEnabled(): Promise<boolean> {
+        const isEnabled = await this.settingsButton.isVisible();
+        return isEnabled;
+    }
+
+    async Logout(): Promise<void> {
+        // If we're on the login page with valid auth, wait for the client-side
+        // redirect to the graph page before looking for the logout button.
+        if (this.page.url().includes('/login')) {
+            await this.page.waitForURL(urls.graphUrl, { timeout: 20000 }).catch(() => {});
+            // If still on the login page after the timeout, the user is not
+            // authenticated — nothing to log out from.
+            if (this.page.url().includes('/login')) return;
+        }
+        await this.waitForPageIdle();
+        await interactWhenVisible(this.LogoutButton, (el) => el.click(), "Click Logout Button");
+        await interactWhenVisible(this.LogoutConfirmButton, (el) => el.click(), "Confirm Logout");
+        await waitForURL(this.page, urls.loginUrl);
+    }
+
+    /**
+     * Clears the session cookie from the browser without triggering the
+     * server-side signOut event. This leaves Token DB entries intact so
+     * parallel tests sharing the same session are not affected.
+     * Use this when you need to reach the login page without destroying
+     * the server-side session state.
+     */
+    async disconnectConnection(): Promise<void> {
+        const context = this.page.context();
+        await context.clearCookies();
+        await this.page.goto(urls.loginUrl);
+        await this.page.waitForLoadState('networkidle');
+    }
+
+    async getFalkorDBLogoHref(): Promise<string | null> {
+        await this.waitForPageIdle();
+        return await this.falkorDBLogo.getAttribute('href');
+    }
+
+    async clickOnFalkor(): Promise<Page> {
+        await this.waitForPageIdle();
+        // Start listening for popup BEFORE triggering the click to avoid race condition
+        const popupPromise = this.page.waitForEvent('popup');
+        await this.clickFalkorDBLogo();
+        const newPage = await popupPromise;
+        return newPage;
+    }
+
+    async getDocumentationLinkHref(): Promise<string | null> {
+        await this.waitForPageIdle();
+        await this.clickOnHelpBtn();
+        return await this.documentationButton.getAttribute('href');
+    }
+
+    async clickOnDocumentation(): Promise<Page> {
+        await this.waitForPageIdle();
+        // Start listening for popup BEFORE triggering the clicks to avoid race condition
+        const popupPromise = this.page.waitForEvent('popup');
+        await this.clickOnHelpBtn();
+        await this.clickOnDocumentationBtn();
+        const newPage = await popupPromise;
+        return newPage;
+    }
+
+    async getApiDocumentationLinkHref(): Promise<string | null> {
+        await this.waitForPageIdle();
+        await this.clickOnHelpBtn();
+        return await this.apiDocumentationButton.getAttribute('href');
+    }
+
+    async clickOnApiDocumentation(): Promise<Page> {
+        await this.waitForPageIdle();
+        await this.clickOnHelpBtn();
+        await this.clickOnApiDocumentationBtn();
+        await this.page.waitForURL('**/docs**', { timeout: 5000 });
+        return this.page;
+    }
+
+    async getSupportLinkHref(): Promise<string | null> {
+        await this.waitForPageIdle();
+        await this.clickOnHelpBtn();
+        return await this.supportButton.getAttribute('href');
+    }
+
+    async clickOnSupport(): Promise<Page> {
+        await this.waitForPageIdle();
+        // Start listening for popup BEFORE triggering the clicks to avoid race condition
+        const popupPromise = this.page.waitForEvent('popup');
+        await this.clickOnHelpBtn();
+        await this.clickOnSupportBtn();
+        const newPage = await popupPromise;
+        return newPage;
+    }
+
+    async isAboutPopUp(): Promise<boolean> {
+        const isVisible = await this.aboutPopUp.isVisible();
+        return isVisible;
+    }
+
+    async closePopUp(): Promise<void> {
+        await this.page.mouse.click(10, 10);
+        await this.page.waitForTimeout(1000);
+    }
+
+    async clickOnAbout(): Promise<void> {
+        await this.clickOnHelpBtn();
+        await this.clickOnAboutBtn();
+    }
+}

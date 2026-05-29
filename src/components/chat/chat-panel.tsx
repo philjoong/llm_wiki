@@ -202,10 +202,7 @@ export function ChatPanel() {
           maxPageSize: MAX_PAGE_SIZE,
         } = computeContextBudget(llmConfig.maxContextSize)
 
-        const [rawIndex, purpose] = await Promise.all([
-          readFile(`${pp}/db/index.md`).catch(() => ""),
-          readFile(`${pp}/purpose.md`).catch(() => ""),
-        ])
+        const rawIndex = await readFile(`${pp}/db/index.md`).catch(() => "")
 
         // ── Phase 1: Exclusion-aware retrieval (IDEA.md Part 2) ───
         // Replaces the prior `searchWiki` call. Pipeline:
@@ -375,7 +372,6 @@ export function ChatPanel() {
             "",
             residueMeta,
             "",
-            purpose ? `## Wiki Purpose\n${purpose}` : "",
             index ? `## Wiki Index\n${index}` : "",
             relevantPages.length > 0 ? `## Page List\n${pageList}` : "",
             `## Wiki Pages\n\n${pagesContext}`,

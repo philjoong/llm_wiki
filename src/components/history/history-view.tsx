@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Clock, RotateCcw, Undo2 } from "lucide-react"
+import { Clock, RotateCcw, Undo2, Network } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath } from "@/lib/path-utils"
@@ -264,6 +264,7 @@ function CommitList({
         {commits.map((c) => {
           const isSelected = c.hash === selectedHash
           const subject = c.message.split("\n")[0]
+          const isGraphRelated = /^graph[_:]|graph.db|graph.policy|managed.graph/i.test(subject)
           return (
             <li key={c.hash}>
               <button
@@ -275,7 +276,12 @@ function CommitList({
                     : "hover:bg-accent/50"
                 }`}
               >
-                <span className="line-clamp-2 font-medium">{subject}</span>
+                <div className="flex items-center gap-1.5 w-full min-w-0">
+                  {isGraphRelated && (
+                    <Network className="h-3 w-3 shrink-0 text-blue-500" title="Graph-related commit" />
+                  )}
+                  <span className="line-clamp-2 font-medium min-w-0">{subject}</span>
+                </div>
                 <span className="text-xs text-muted-foreground">
                   {c.author} · {formatRelative(c.date, t)}
                 </span>

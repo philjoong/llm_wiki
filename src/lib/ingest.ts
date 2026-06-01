@@ -506,7 +506,7 @@ async function autoIngestImpl(
         },
       },
       signal,
-      { temperature: 0.1 },
+      { temperature: 0.1, max_tokens: 32000 },
     )
 
     const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)

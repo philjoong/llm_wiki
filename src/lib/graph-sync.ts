@@ -2,7 +2,6 @@ import { buildWikiGraph, type GraphNode, type GraphEdge } from "./wiki-graph"
 import { createGraphDb, queryGraphDb, listGraphDb, deleteGraphDb } from "@/commands/graph-db"
 import { useReviewStore } from "@/stores/review-store"
 import { detectSchemaDrift } from "./schema-validation"
-import { normalizePath } from "./path-utils"
 
 /**
  * Synchronize the local Markdown-based graph with FalkorDB.
@@ -48,7 +47,7 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
 
   // 1. Group nodes by their assigned graph
   const graphToNodes = new Map<string, GraphNode[]>()
-  const DEFAULT_GRAPH = "main_graph"
+  const DEFAULT_GRAPH = "main"
 
   for (const node of filteredNodes) {
     const g = node.graph || DEFAULT_GRAPH
@@ -86,8 +85,9 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
       const safeId = node.id.replace(/'/g, "\\'")
       const safeType = node.type.replace(/'/g, "\\'")
       const safePath = node.path.replace(/\\/g, "/").replace(/'/g, "\\'")
+      const cypherSources = `[${node.sources.map(s => `'${s.replace(/'/g, "\\'")}'`).join(", ")}]`
       
-      const cypher = `MERGE (n:Page {id: '${safeId}'}) SET n.label = '${safeLabel}', n.type = '${safeType}', n.path = '${safePath}'`
+      const cypher = `MERGE (n:Page {id: '${safeId}'}) SET n.label = '${safeLabel}', n.type = '${safeType}', n.path = '${safePath}', n.sources = ${cypherSources}`
       try {
         await queryGraphDb(projectName, gName, cypher)
       } catch (err) {
@@ -100,6 +100,7 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
       const type = (edge.type || "LINKS_TO").toUpperCase().replace(/[^A-Z0-9_]/g, "_")
       const safeSource = edge.source.replace(/'/g, "\\'")
       const safeTarget = edge.target.replace(/'/g, "\\'")
+      const cypherSources = `[${edge.sources.map(s => `'${s.replace(/'/g, "\\'")}'`).join(", ")}]`
       
       // Ensure target node exists in this graph too (as a shell if it's from another graph)
       const targetNode = nodes.find(n => n.id === edge.target)
@@ -113,6 +114,7 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
       const cypher = `
         MATCH (a:Page {id: '${safeSource}'}), (b:Page {id: '${safeTarget}'})
         MERGE (a)-[r:${type}]->(b)
+        SET r.sources = ${cypherSources}
       `
       try {
         await queryGraphDb(projectName, gName, cypher)

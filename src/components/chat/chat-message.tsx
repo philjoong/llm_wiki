@@ -550,49 +550,89 @@ function MarkdownContent({ content }: { content: string }) {
   const { thinking, answer } = useMemo(() => separateThinking(cleaned), [cleaned])
   const processed = useMemo(() => processContent(answer), [answer])
 
+  // Detect if answer is JSON
+  const jsonContent = useMemo(() => {
+    const trimmed = answer.trim()
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        return JSON.parse(trimmed)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }, [answer])
+
   return (
-    <div>
+    <div className="space-y-3">
       {thinking && <ThinkingBlock content={thinking} />}
-      <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
-          components={{
-            a: ({ href, children }) => {
-              if (href?.startsWith("wikilink:")) {
-                const pageName = href.slice("wikilink:".length)
-                return <WikiLink pageName={pageName}>{children}</WikiLink>
-              }
-              return (
-                <span className="text-primary underline cursor-default" title={href}>
-                  {children}
-                </span>
-              )
-            },
-            table: ({ children, ...props }) => (
-              <div className="my-2 overflow-x-auto rounded border border-border">
-                <table className="w-full border-collapse text-xs" {...props}>{children}</table>
-              </div>
-            ),
-            thead: ({ children, ...props }) => (
-              <thead className="bg-muted" {...props}>{children}</thead>
-            ),
-            th: ({ children, ...props }) => (
-              <th className="border border-border/80 px-3 py-1.5 text-left font-semibold bg-muted" {...props}>{children}</th>
-            ),
-            td: ({ children, ...props }) => (
-              <td className="border border-border/60 px-3 py-1.5" {...props}>{children}</td>
-            ),
-            pre: ({ children, ...props }) => (
-              <pre className="rounded bg-background/50 p-2 text-xs overflow-x-auto" {...props}>{children}</pre>
-            ),
-          }}
-        >
-          {processed}
-        </ReactMarkdown>
-      </div>
+      {jsonContent ? (
+        <div className="rounded-md border bg-background/50 p-3 space-y-2 overflow-x-auto">
+          {Object.entries(jsonContent).map(([key, val]) => (
+            <div key={key} className="space-y-1">
+              <dt className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                {key.replace(/_/g, " ")}
+              </dt>
+              <dd className="text-sm">
+                {typeof val === "string" ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={MARKDOWN_COMPONENTS}
+                  >
+                    {processContent(val)}
+                  </ReactMarkdown>
+                ) : (
+                  <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(val, null, 2)}</pre>
+                )}
+              </dd>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="chat-markdown prose prose-sm max-w-none dark:prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {processed}
+          </ReactMarkdown>
+        </div>
+      )}
     </div>
   )
+}
+
+const MARKDOWN_COMPONENTS = {
+  a: ({ href, children }: any) => {
+    if (href?.startsWith("wikilink:")) {
+      const pageName = href.slice("wikilink:".length)
+      return <WikiLink pageName={pageName}>{children}</WikiLink>
+    }
+    return (
+      <span className="text-primary underline cursor-default" title={href}>
+        {children}
+      </span>
+    )
+  },
+  table: ({ children, ...props }: any) => (
+    <div className="my-2 overflow-x-auto rounded border border-border">
+      <table className="w-full border-collapse text-xs" {...props}>{children}</table>
+    </div>
+  ),
+  thead: ({ children, ...props }: any) => (
+    <thead className="bg-muted" {...props}>{children}</thead>
+  ),
+  th: ({ children, ...props }: any) => (
+    <th className="border border-border/80 px-3 py-1.5 text-left font-semibold bg-muted" {...props}>{children}</th>
+  ),
+  td: ({ children, ...props }: any) => (
+    <td className="border border-border/60 px-3 py-1.5" {...props}>{children}</td>
+  ),
+  pre: ({ children, ...props }: any) => (
+    <pre className="rounded bg-background/50 p-2 text-xs overflow-x-auto" {...props}>{children}</pre>
+  ),
 }
 
 /**

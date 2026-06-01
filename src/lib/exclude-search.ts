@@ -23,6 +23,9 @@ import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { searchPaths, type SearchResult } from "./search"
 import { recordSearchInstance } from "./instance-log"
+import { loadQuestionTypes, type QuestionType } from "./question-types"
+import { classifyQuestion } from "./classify-question"
+import { loadExclusions, applyExclusions, type ExclusionDoc } from "./exclusions"
 
 export interface AppliedEntry {
   pattern: string
@@ -38,6 +41,7 @@ export interface SearchTrace {
     name: string
     confidence: number
     reasoning: string
+    zeroResidueMeaning?: string
   } | null
   appliedEntries: AppliedEntry[]
   initialCandidateCount: number
@@ -56,17 +60,49 @@ export interface ExcludeSearchResult {
    * silently violate IDEA.md §2.5.
    */
   keptPaths: string[]
+  /** The full QuestionType object if classified. */
+  questionType?: QuestionType
 }
 
 export async function runExcludeSearch(
   question: string,
   projectPath: string,
-  _llmConfig: LlmConfig,
+  llmConfig: LlmConfig,
 ): Promise<ExcludeSearchResult> {
   const pp = normalizePath(projectPath)
 
+  // Stage 10 — Classification
+  const types = await loadQuestionTypes(pp)
+  const classification = await classifyQuestion(question, types, llmConfig)
+  const qt = classification ? types.find((t) => t.id === classification.typeId) : undefined
+
   const candidatesRel = await listDbCandidates(pp)
-  const kept = candidatesRel
+  let kept = candidatesRel
+  const appliedEntries: AppliedEntry[] = []
+
+  if (classification) {
+    const allExDoc = await loadExclusions(pp)
+    const activeDocs = allExDoc.filter((d) => 
+      d.questionTypeIds.includes(classification.typeId)
+    )
+
+    for (const doc of activeDocs) {
+      const { kept: nextKept, excludedByEntry } = applyExclusions(kept, doc.entries)
+      kept = nextKept
+      
+      for (const [pattern, matched] of excludedByEntry.entries()) {
+        const entry = doc.entries.find((e) => e.pattern === pattern)
+        if (entry) {
+          appliedEntries.push({
+            pattern,
+            rationale: entry.rationale,
+            matched,
+            filePath: doc.filePath,
+          })
+        }
+      }
+    }
+  }
 
   const absoluteKept = kept.map((rel) => `${pp}/${rel}`)
   const hits =
@@ -75,13 +111,25 @@ export async function runExcludeSearch(
       : []
 
   const trace: SearchTrace = {
-    judgedType: null,
-    appliedEntries: [],
+    judgedType: classification && qt ? {
+      id: classification.typeId,
+      name: qt.name,
+      confidence: classification.confidence,
+      reasoning: classification.reasoning,
+      zeroResidueMeaning: qt.zeroResidueMeaning,
+    } : null,
+    appliedEntries,
     initialCandidateCount: candidatesRel.length,
     residueCount: kept.length,
+    zeroResidueMeaning: kept.length === 0 && qt ? qt.zeroResidueMeaning : undefined,
   }
 
-  const out: ExcludeSearchResult = { hits, trace, keptPaths: absoluteKept }
+  const out: ExcludeSearchResult = { 
+    hits, 
+    trace, 
+    keptPaths: absoluteKept,
+    questionType: qt,
+  }
 
   // Stage 12 — Level 1 instance log. Skipped for empty/whitespace-only
   // questions as a safety net (real noise like greetings is already

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
 import { invoke } from "@tauri-apps/api/core"
-import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown } from "lucide-react"
+import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown, Network } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -24,6 +24,7 @@ import {
 import { parseSources, writeSources } from "@/lib/sources-merge"
 import { decidePageFate } from "@/lib/source-delete-decision"
 import { copyOriginal, ensureOriginalsGitignore, injectOriginalRef } from "@/lib/originals"
+import { findRelatedGraphs } from "@/commands/graph-db"
 
 export function SourcesView() {
   const { t } = useTranslation()
@@ -34,10 +35,14 @@ export function SourcesView() {
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const setChatExpanded = useWikiStore((s) => s.setChatExpanded)
+  const setSelectedGraph = useWikiStore((s) => s.setSelectedGraph)
+  const setHighlightSource = useWikiStore((s) => s.setHighlightSource)
   const llmConfig = useWikiStore((s) => s.llmConfig)
   const [sources, setSources] = useState<FileNode[]>([])
   const [importing, setImporting] = useState(false)
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
+  const [relatedGraphs, setRelatedGraphs] = useState<string[]>([])
+  const [loadingGraphs, setLoadingGraphs] = useState(false)
 
   const loadSources = useCallback(async () => {
     if (!project) return
@@ -55,6 +60,22 @@ export function SourcesView() {
   useEffect(() => {
     loadSources()
   }, [loadSources])
+
+  useEffect(() => {
+    if (project && selectedFile && selectedFile.includes("/raw/sources/")) {
+      const fileName = selectedFile.split("/").pop() || ""
+      setLoadingGraphs(true)
+      findRelatedGraphs(project.name, fileName)
+        .then(setRelatedGraphs)
+        .catch(err => {
+          console.error("Failed to find related graphs:", err)
+          setRelatedGraphs([])
+        })
+        .finally(() => setLoadingGraphs(false))
+    } else {
+      setRelatedGraphs([])
+    }
+  }, [project, selectedFile])
 
   async function handleImport() {
     if (!project) return
@@ -351,12 +372,20 @@ export function SourcesView() {
 
   async function handleOpenSource(node: FileNode) {
     setSelectedFile(node.path)
+    setHighlightSource(null) // Clear highlight when switching files
     try {
       const content = await readFile(node.path)
       setFileContent(content)
     } catch (err) {
       console.error("Failed to read source:", err)
     }
+  }
+
+  function handleJumpToGraph(graphName: string) {
+    if (!selectedFile) return
+    setSelectedGraph(graphName)
+    setHighlightSource(selectedFile)
+    setActiveView("graph")
   }
 
   async function handleDelete(node: FileNode) {
@@ -570,6 +599,41 @@ export function SourcesView() {
           </div>
         )}
       </ScrollArea>
+
+      {/* Related Knowledge Graphs Section */}
+      {selectedFile && (
+        <div className="border-t bg-muted/30 p-4">
+          <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <Network className="h-3.5 w-3.5" />
+            {t("sources.relatedGraphs", "Related Knowledge Graphs")}
+          </h3>
+          {loadingGraphs ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <RefreshCw className="h-3 w-3 animate-spin" />
+              Searching...
+            </div>
+          ) : relatedGraphs.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {relatedGraphs.map((g) => (
+                <Button
+                  key={g}
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 text-xs"
+                  onClick={() => handleJumpToGraph(g)}
+                >
+                  <Network className="h-3 w-3" />
+                  {g}
+                </Button>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-muted-foreground italic">
+              {t("sources.noRelatedGraphs", "No related graphs found for this document.")}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="border-t px-4 py-2 text-xs text-muted-foreground">
         {t("sources.sourceCount", { count: countFiles(sources) })}

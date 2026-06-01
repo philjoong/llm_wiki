@@ -1,0 +1,21 @@
+name: 회귀 테스트
+description: 이전 패치/변경 이후 깨질 가능성이 있는 영역을 식별한다.
+fields:
+  regression_candidates: 회귀 후보 페이지 (영향받을 가능성이 높은 시스템·콘텐츠·QA 케이스)
+  existing_cases: 적용 가능한 기존 회귀 케이스 인용
+prompt_template: |
+  당신은 QA 엔지니어입니다.
+  다음 입력 데이터를 바탕으로 회귀 테스트 대상을 식별하고 결과를 구조화된 형식으로 출력하세요.
+  
+  ## Context
+  {{context}}
+  
+  ## User Question
+  {{question}}
+  
+  ## Output Format
+  JSON 형식으로 답변하세요. 키는 다음과 같습니다:
+  - regression_candidates: {{fields.regression_candidates}}
+  - existing_cases: {{fields.existing_cases}}
+zero_residue_meaning: |
+  잔존 0 = **영향 없음**. 변경된 영역이 다른 시스템·콘텐츠와 격리되어 있으며 회귀 위험이 없다는 신호.

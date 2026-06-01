@@ -6,7 +6,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
-import { createGraphDb, deleteGraphDb, listGraphDb, queryGraphDb } from "@/commands/graph-db"
+import { deleteGraphDb, listGraphDb, queryGraphDb } from "@/commands/graph-db"
 import { FalkorCanvas } from "./falkor-canvas"
 import { parseFalkorQueryResult, assignColors, type CanvasData } from "@/lib/falkor-visualization"
 
@@ -15,6 +15,9 @@ export function GraphView() {
   const dataVersion = useWikiStore((s) => s.dataVersion)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const setFileContent = useWikiStore((s) => s.setFileContent)
+  const selectedGraph = useWikiStore((s) => s.selectedGraph)
+  const setSelectedGraph = useWikiStore((s) => s.setSelectedGraph)
+  const highlightSource = useWikiStore((s) => s.highlightSource)
 
   const [graphData, setGraphData] = useState<CanvasData>({ nodes: [], links: [] })
   const [loading, setLoading] = useState(false)
@@ -22,7 +25,10 @@ export function GraphView() {
   const [showInsights, setShowInsights] = useState(false)
   const [relationTypes, setRelationTypes] = useState<string[]>([])
   const [managedGraphs, setManagedGraphs] = useState<string[]>([])
-  const [graphFilter, setGraphFilter] = useState<string>("main")
+  const [forbiddenTypes, setForbiddenTypes] = useState<string[]>([])
+  const [newRelationType, setNewRelationType] = useState("")
+  const [newGraphName, setNewGraphName] = useState("")
+  const [graphOpMessage, setGraphOpMessage] = useState<string | null>(null)
   const [selectedElement, setSelectedElement] = useState<any>(null)
   const lastLoadedVersion = useRef(-1)
 
@@ -33,10 +39,35 @@ export function GraphView() {
     try {
       // Fetch all nodes and edges from the selected sub-graph
       const cypher = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r"
-      const result = await queryGraphDb(project.name, graphFilter, cypher)
+      const result = await queryGraphDb(project.name, selectedGraph, cypher)
       
       const parsed = parseFalkorQueryResult(result)
       const colored = assignColors(parsed)
+      
+      // Apply highlighting if highlightSource is set
+      if (highlightSource) {
+        const fileName = highlightSource.split("/").pop() || highlightSource
+        colored.nodes = colored.nodes.map(n => {
+          const isHighlighted = n.data?.sources?.includes(fileName)
+          return {
+            ...n,
+            highlighted: isHighlighted,
+            size: isHighlighted ? 12 : 6,
+            // If highlighted, use a bright yellow/gold or red. 
+            // Let's use red for strong contrast.
+            color: isHighlighted ? "#ef4444" : n.color
+          }
+        })
+        colored.links = colored.links.map(l => {
+          const isHighlighted = l.data?.sources?.includes(fileName)
+          return {
+            ...l,
+            highlighted: isHighlighted,
+            color: isHighlighted ? "#ef4444" : l.color
+          }
+        })
+      }
+      
       setGraphData(colored)
       
       lastLoadedVersion.current = useWikiStore.getState().dataVersion
@@ -46,13 +77,13 @@ export function GraphView() {
     } finally {
       setLoading(false)
     }
-  }, [project, graphFilter])
+  }, [project, selectedGraph, highlightSource])
 
   useEffect(() => {
-    if (dataVersion !== lastLoadedVersion.current || !graphData.nodes.length) {
+    if (dataVersion !== lastLoadedVersion.current || !graphData.nodes.length || highlightSource) {
       loadGraph()
     }
-  }, [loadGraph, dataVersion])
+  }, [loadGraph, dataVersion, highlightSource])
 
   const handleNodeClick = useCallback(
     async (node: any) => {
@@ -81,8 +112,21 @@ export function GraphView() {
       const policy = await loadGraphPolicy(normalizePath(project.path))
       setRelationTypes(policy.relationTypes)
       setManagedGraphs(policy.managedGraphs)
+      setForbiddenTypes(policy.forbiddenTypes)
     })()
   }, [project])
+
+  const addRelationType = useCallback(async () => {
+    if (!project || !newRelationType.trim()) return
+    const nextRelations = [...new Set([...relationTypes, newRelationType.trim().toUpperCase()])]
+    const saved = await saveGraphPolicy(normalizePath(project.path), {
+      relationTypes: nextRelations,
+      managedGraphs,
+      forbiddenTypes,
+    })
+    setRelationTypes(saved.relationTypes)
+    setNewRelationType("")
+  }, [project, newRelationType, relationTypes, managedGraphs, forbiddenTypes])
 
   const removeRelationType = useCallback(async (value: string) => {
     if (!project) return
@@ -90,9 +134,23 @@ export function GraphView() {
     const saved = await saveGraphPolicy(normalizePath(project.path), {
       relationTypes: nextRelations,
       managedGraphs,
+      forbiddenTypes,
     })
     setRelationTypes(saved.relationTypes)
-  }, [project, relationTypes, managedGraphs])
+  }, [project, relationTypes, managedGraphs, forbiddenTypes])
+
+  const addManagedGraph = useCallback(async () => {
+    if (!project || !newGraphName.trim()) return
+    const nextGraphs = [...new Set([...managedGraphs, newGraphName.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_")])]
+    const saved = await saveGraphPolicy(normalizePath(project.path), {
+      relationTypes,
+      managedGraphs: nextGraphs,
+      forbiddenTypes,
+    })
+    setManagedGraphs(saved.managedGraphs)
+    setNewGraphName("")
+    setGraphOpMessage(`Added graph: ${newGraphName}`)
+  }, [project, newGraphName, relationTypes, managedGraphs, forbiddenTypes])
 
   const removeManagedGraph = useCallback(async (value: string) => {
     if (!project) return
@@ -106,10 +164,11 @@ export function GraphView() {
     const saved = await saveGraphPolicy(normalizePath(project.path), {
       relationTypes,
       managedGraphs: nextGraphs,
+      forbiddenTypes,
     })
     setManagedGraphs(saved.managedGraphs)
-    if (graphFilter === value) setGraphFilter("main")
-  }, [project, relationTypes, managedGraphs, graphFilter])
+    if (selectedGraph === value) setSelectedGraph("main")
+  }, [project, relationTypes, managedGraphs, selectedGraph, setSelectedGraph, forbiddenTypes])
 
   const syncManagedGraphsFromDb = useCallback(async () => {
     if (!project) return
@@ -119,12 +178,13 @@ export function GraphView() {
       const saved = await saveGraphPolicy(normalizePath(project.path), {
         relationTypes,
         managedGraphs: next,
+        forbiddenTypes,
       })
       setManagedGraphs(saved.managedGraphs)
     } catch (err) {
       console.error("Failed to sync graphs:", err)
     }
-  }, [project, relationTypes])
+  }, [project, relationTypes, forbiddenTypes])
 
   if (!project) {
     return (
@@ -168,8 +228,8 @@ export function GraphView() {
             <span className="rounded bg-muted px-1.5 py-0.5">{graphData.links.length} links</span>
           </div>
           <select
-            value={graphFilter}
-            onChange={(e) => setGraphFilter(e.target.value)}
+            value={selectedGraph}
+            onChange={(e) => setSelectedGraph(e.target.value)}
             className="h-6 rounded border bg-background px-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           >
             <option value="main">main</option>
@@ -340,22 +400,6 @@ export function GraphView() {
                 <button
                   className="p-1 rounded hover:bg-muted text-muted-foreground"
                   onClick={() => setShowInsights(false)}
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-3 flex flex-col gap-4 text-xs text-muted-foreground italic">
-              Insights are currently disabled in FalkorDB view mode.
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-setShowInsights(false)}
                 >
                   <X className="h-4 w-4" />
                 </button>

@@ -10,56 +10,105 @@
  * Malformed files (read errors, parse errors) are logged and skipped —
  * a single broken file should not break the rest of the search wiring.
  */
+import yaml from "js-yaml"
 import { listDirectory, readFile } from "@/commands/fs"
+import { getProjectRoot } from "@/lib/project-init"
 import type { FileNode } from "@/types/wiki"
 
 export interface QuestionType {
   /** Filename stem — stable id used by the classifier and exclusion map. */
   id: string
-  /** Display name. Frontmatter `title:` wins; falls back to first H1, then id. */
+  /** Display name. */
   name: string
-  /** First non-heading paragraph in the body. */
+  /** Description for the classifier and UI. */
   description: string
-  /** Body of `## Input` section, if present. */
-  inputShape?: string
-  /** Body of `## Output` section, if present. */
-  outputShape?: string
-  /** Body of `## Zero residue` section — surfaced to the user when residue == 0 (§2.10). */
+  /** Keys the LLM should fill in its structured response. Map of key -> description. */
+  fields: Record<string, string>
+  /** Prompt template for execution. */
+  promptTemplate: string
+  /** Body of `Zero residue` section — surfaced to the user when residue == 0 (§2.10). */
   zeroResidueMeaning?: string
 }
 
 export async function loadQuestionTypes(
   projectPath: string,
 ): Promise<QuestionType[]> {
-  let nodes: FileNode[]
+  const projectSpecificPath = `${projectPath}/question_types`
+  const userOverridePath = `${await getProjectRoot()}/.llm-wiki/question-types`
+  // In dev, schema is at the root. In production, it might be bundled.
+  // We'll try to find it relative to the process CWD or a known resource path.
+  const appDefaultPath = `schema/question_types`
+
+  const projectNodes = await tryListDirectory(projectSpecificPath)
+  const userNodes = await tryListDirectory(userOverridePath)
+  const appNodes = await tryListDirectory(appDefaultPath)
+
+  const outMap = new Map<string, QuestionType>()
+
+  // Load app defaults
+  for (const node of appNodes) {
+    const qt = await loadNode(appDefaultPath, node)
+    if (qt) outMap.set(qt.id, qt)
+  }
+
+  // Load project-specific (shared via git)
+  for (const node of projectNodes) {
+    const qt = await loadNode(projectSpecificPath, node)
+    if (qt) outMap.set(qt.id, qt)
+  }
+
+  // Load user overrides (private to .llm-wiki)
+  for (const node of userNodes) {
+    const qt = await loadNode(userOverridePath, node)
+    if (qt) outMap.set(qt.id, qt)
+  }
+
+  return Array.from(outMap.values())
+}
+
+async function tryListDirectory(path: string): Promise<FileNode[]> {
   try {
-    nodes = await listDirectory(`${projectPath}/question_types`)
+    return await listDirectory(path)
   } catch {
     return []
   }
-  const out: QuestionType[] = []
-  for (const node of nodes) {
-    if (node.is_dir) continue
-    if (node.name.startsWith(".")) continue
-    if (!node.name.endsWith(".md")) continue
-    const id = node.name.replace(/\.md$/, "")
-    let content: string
-    try {
-      content = await readFile(`${projectPath}/question_types/${node.name}`)
-    } catch (err) {
-      console.warn(`[question-types] failed to read ${node.name}:`, err)
-      continue
-    }
-    try {
-      out.push(parseQuestionType(id, content))
-    } catch (err) {
-      console.warn(`[question-types] failed to parse ${node.name}:`, err)
-    }
-  }
-  return out
 }
 
-function parseQuestionType(id: string, content: string): QuestionType {
+async function loadNode(dir: string, node: FileNode): Promise<QuestionType | null> {
+  if (node.is_dir) return null
+  if (node.name.startsWith(".")) return null
+  
+  const isYaml = node.name.endsWith(".yaml") || node.name.endsWith(".yml")
+  const isMd = node.name.endsWith(".md")
+  if (!isYaml && !isMd) return null
+
+  const id = node.name.replace(/\.(yaml|yml|md)$/, "")
+  try {
+    const content = await readFile(`${dir}/${node.name}`)
+    if (isYaml) {
+      return parseYamlQuestionType(id, content)
+    } else {
+      return parseMdQuestionType(id, content)
+    }
+  } catch (err) {
+    console.warn(`[question-types] failed to load ${node.name}:`, err)
+    return null
+  }
+}
+
+function parseYamlQuestionType(id: string, content: string): QuestionType {
+  const raw = yaml.load(content) as any
+  return {
+    id,
+    name: raw.name || id,
+    description: raw.description || "",
+    fields: raw.fields || {},
+    promptTemplate: raw.prompt_template || raw.promptTemplate || "",
+    zeroResidueMeaning: raw.zero_residue_meaning || raw.zeroResidueMeaning,
+  }
+}
+
+function parseMdQuestionType(id: string, content: string): QuestionType {
   const { fm, body } = parseFrontmatter(content)
   let name = ""
   if (typeof fm.title === "string" && fm.title.trim()) {
@@ -79,13 +128,17 @@ function parseQuestionType(id: string, content: string): QuestionType {
   ])
   const description = extractDescription(body)
 
+  // Legacy MD doesn't have fields/promptTemplate in the same way.
+  // We'll map Input/Output to description/fields for now.
   return {
     id,
     name,
-    description,
-    ...(inputShape ? { inputShape } : {}),
-    ...(outputShape ? { outputShape } : {}),
-    ...(zeroResidueMeaning ? { zeroResidueMeaning } : {}),
+    description: description || inputShape || "",
+    fields: {
+      answer: outputShape || "General answer",
+    },
+    promptTemplate: "", // MD doesn't have a template
+    zeroResidueMeaning,
   }
 }
 

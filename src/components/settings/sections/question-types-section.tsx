@@ -1,0 +1,186 @@
+import { useState, useEffect, useCallback } from "react"
+import { useTranslation } from "react-i18next"
+import { Plus, Edit2, Trash2, Save, X, FileJson, AlertCircle } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { useWikiStore } from "@/stores/wiki-store"
+import { loadQuestionTypes, type QuestionType } from "@/lib/question-types"
+import { writeFile, deleteFile, createDirectory, fileExists } from "@/commands/fs"
+import { getProjectRoot } from "@/lib/project-init"
+import yaml from "js-yaml"
+
+export function QuestionTypesSection() {
+  const { t } = useTranslation()
+  const projectPath = useWikiStore((s) => s.projectPath)
+  const [types, setTypes] = useState<QuestionType[]>([])
+  const [editing, setEditing] = useState<Partial<QuestionType> | null>(null)
+  const [yamlText, setYamlText] = useState("")
+  const [error, setError] = useState<string | null>(null)
+
+  const reload = useCallback(async () => {
+    if (!projectPath) return
+    const qts = await loadQuestionTypes(projectPath)
+    setTypes(qts)
+  }, [projectPath])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  const handleEdit = (qt: QuestionType) => {
+    setEditing(qt)
+    const { id, ...rest } = qt
+    setYamlText(yaml.dump(rest))
+    setError(null)
+  }
+
+  const handleNew = () => {
+    setEditing({ id: "new_type", name: "New Question Type", fields: { answer: "Description" }, promptTemplate: "" })
+    setYamlText(yaml.dump({ name: "New Question Type", description: "", fields: { answer: "Description" }, prompt_template: "" }))
+    setError(null)
+  }
+
+  const handleSave = async () => {
+    if (!editing || !projectPath) return
+    try {
+      const parsed = yaml.load(yamlText) as any
+      if (!parsed || typeof parsed !== "object") throw new Error("Invalid YAML")
+      
+      const id = editing.id || parsed.name?.toLowerCase().replace(/\s+/g, "_") || "unnamed"
+      const userPath = `${await getProjectRoot()}/.llm-wiki/question-types`
+      
+      if (!(await fileExists(userPath))) {
+        await createDirectory(userPath)
+      }
+      
+      await writeFile(`${userPath}/${id}.yaml`, yamlText)
+      setEditing(null)
+      await reload()
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!projectPath) return
+    if (!confirm(t("settings.questionTypes.confirmDelete", { id }))) return
+    
+    // Try to delete from user overrides first
+    const userPath = `${await getProjectRoot()}/.llm-wiki/question-types/${id}.yaml`
+    const userPathYml = `${await getProjectRoot()}/.llm-wiki/question-types/${id}.yml`
+    
+    if (await fileExists(userPath)) {
+      await deleteFile(userPath)
+    } else if (await fileExists(userPathYml)) {
+      await deleteFile(userPathYml)
+    } else {
+      // If not in user overrides, maybe it's in the system path?
+      // But we shouldn't delete system ones usually, or we just can't.
+      alert("Cannot delete system-default question types.")
+      return
+    }
+    
+    await reload()
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-medium">{t("settings.questionTypes.title", "Question Types")}</h3>
+          <p className="text-sm text-muted-foreground">
+            {t("settings.questionTypes.description", "Manage specialized question types and their LLM templates.")}
+          </p>
+        </div>
+        <Button onClick={handleNew} size="sm" variant="outline" className="gap-2">
+          <Plus className="h-4 w-4" />
+          {t("settings.questionTypes.add", "Add Type")}
+        </Button>
+      </div>
+
+      {editing ? (
+        <div className="rounded-lg border bg-card p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileJson className="h-4 w-4 text-primary" />
+              <span className="font-mono text-sm">{editing.id}.yaml</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button onClick={() => setEditing(null)} variant="ghost" size="sm">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          
+          <div className="space-y-2">
+            <textarea
+              value={yamlText}
+              onChange={(e) => setYamlText(e.target.value)}
+              className="min-h-[300px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="name: ...\ndescription: ...\nfields:\n  key: value\nprompt_template: |"
+            />
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                {error}
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setEditing(null)} variant="outline" size="sm">
+              {t("common.cancel", "Cancel")}
+            </Button>
+            <Button onClick={handleSave} size="sm" className="gap-2">
+              <Save className="h-4 w-4" />
+              {t("common.save", "Save")}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {types.map((qt) => (
+            <div
+              key={qt.id}
+              className="group flex items-center justify-between rounded-lg border p-3 transition-colors hover:bg-accent/50"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{qt.name}</span>
+                  <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase font-mono tracking-tighter">
+                    {qt.id}
+                  </span>
+                </div>
+                <p className="truncate text-xs text-muted-foreground mt-0.5">
+                  {qt.description}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-4">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => handleEdit(qt)}
+                >
+                  <Edit2 className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  onClick={() => handleDelete(qt.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+          {types.length === 0 && (
+            <div className="text-center py-8 border border-dashed rounded-lg text-muted-foreground italic text-sm">
+              {t("settings.questionTypes.empty", "No specialized question types found.")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

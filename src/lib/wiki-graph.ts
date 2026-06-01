@@ -10,6 +10,7 @@ export interface GraphNode {
   label: string
   type: string
   path: string
+  sources: string[] // Original source document filenames
   graph: string | null // managed graph name from frontmatter `graph:` field
   linkCount: number // inbound + outbound
   community: number // community id from Louvain detection
@@ -20,6 +21,7 @@ export interface GraphEdge {
   target: string
   type?: string // relationship type (e.g. REQUIRES, NAVIGATES_TO)
   weight: number // relevance score between source and target
+  sources: string[] // Original source document filenames
 }
 
 export interface CommunityInfo {
@@ -150,6 +152,14 @@ function extractGraph(content: string): string | null {
   return null
 }
 
+function extractSources(content: string): string[] {
+  const match = content.match(/^---\n[\s\S]*?^sources:\s*\n((?:\s*-\s*file:.*(?:\n|$))*)/m)
+  if (!match) return []
+  const sourcesBlock = match[1]
+  const sourceMatches = sourcesBlock.matchAll(/\s*-\s*file:\s*["']?(.+?)["']?\s*(?:\n|$)/g)
+  return Array.from(sourceMatches).map(m => m[1].trim())
+}
+
 function extractWikilinks(content: string): { target: string; type: string | null }[] {
   const links: { target: string; type: string | null }[] = []
   const regex = new RegExp(WIKILINK_REGEX.source, "g")
@@ -192,6 +202,7 @@ export async function buildWikiGraph(
       type: string
       graph: string | null
       path: string
+      sources: string[]
       links: { target: string; type: string | null }[]
     }
   >()
@@ -212,6 +223,7 @@ export async function buildWikiGraph(
       type: extractType(content),
       graph: extractGraph(content),
       path: file.path,
+      sources: extractSources(content),
       links: extractWikilinks(content),
     })
   }
@@ -246,6 +258,7 @@ export async function buildWikiGraph(
         target: targetId,
         type: link.type || undefined,
         weight: 1,
+        sources: nodeData.sources,
       })
 
       linkCounts.set(sourceId, (linkCounts.get(sourceId) ?? 0) + 1)
@@ -253,17 +266,22 @@ export async function buildWikiGraph(
     }
   }
 
-  // Deduplicate edges
-  const seenEdges = new Set<string>()
-  const dedupedEdges: { source: string; target: string; type?: string }[] = []
+  // Deduplicate edges and merge sources
+  const edgeMap = new Map<string, GraphEdge>()
   for (const edge of rawEdges) {
     const key = `${edge.source}:::${edge.target}:::${edge.type || ""}`
     const reverseKey = `${edge.target}:::${edge.source}:::${edge.type || ""}`
-    if (!seenEdges.has(key) && !seenEdges.has(reverseKey)) {
-      seenEdges.add(key)
-      dedupedEdges.push(edge)
+    
+    const existing = edgeMap.get(key) || edgeMap.get(reverseKey)
+    if (existing) {
+      // Merge sources, avoiding duplicates
+      const mergedSources = Array.from(new Set([...existing.sources, ...edge.sources]))
+      existing.sources = mergedSources
+    } else {
+      edgeMap.set(key, { ...edge })
     }
   }
+  const dedupedEdges = Array.from(edgeMap.values())
 
   // Calculate relevance weights using the retrieval graph
   let retrievalGraph: Awaited<ReturnType<typeof buildRetrievalGraph>> | null = null
@@ -284,7 +302,7 @@ export async function buildWikiGraph(
         weight = calculateRelevance(nodeA, nodeB, retrievalGraph)
       }
     }
-    return { source: e.source, target: e.target, type: e.type, weight }
+    return { ...e, weight }
   })
 
   // Build preliminary nodes for community detection
@@ -302,6 +320,7 @@ export async function buildWikiGraph(
     type: n.type,
     graph: n.graph,
     path: n.path,
+    sources: n.sources,
     linkCount: linkCounts.get(n.id) ?? 0,
     community: assignments.get(n.id) ?? 0,
   }))

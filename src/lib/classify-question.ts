@@ -111,7 +111,10 @@ function buildPrompt(question: string, types: QuestionType[]): string {
     .map((t) => {
       const lines = [`- id: ${t.id}`, `  name: ${t.name}`]
       if (t.description) lines.push(`  description: ${t.description}`)
-      if (t.inputShape) lines.push(`  input: ${t.inputShape.replace(/\n+/g, " ")}`)
+      const fieldKeys = Object.keys(t.fields)
+      if (fieldKeys.length > 0) {
+        lines.push(`  fields: [${fieldKeys.join(", ")}]`)
+      }
       return lines.join("\n")
     })
     .join("\n")

@@ -44,6 +44,34 @@ export async function exportGraphDb(projectName: string, graphName: string): Pro
   return invoke<any>("graph_db_export", { graphName: prefixedName, url: await getUrl() })
 }
 
+export async function findRelatedGraphs(projectName: string, fileName: string): Promise<string[]> {
+  const graphs = await listGraphDb(projectName)
+  const related: string[] = []
+  
+  const safeFileName = fileName.replace(/'/g, "\\'")
+
+  for (const g of graphs) {
+    try {
+      // Check nodes
+      const nodeRes = await queryGraphDb(projectName, g, `MATCH (n) WHERE '${safeFileName}' IN n.sources RETURN n LIMIT 1`)
+      if (nodeRes && nodeRes.length > 0) {
+        related.push(g)
+        continue
+      }
+      
+      // Check edges
+      const edgeRes = await queryGraphDb(projectName, g, `MATCH ()-[r]->() WHERE '${safeFileName}' IN r.sources RETURN r LIMIT 1`)
+      if (edgeRes && edgeRes.length > 0) {
+        related.push(g)
+      }
+    } catch (err) {
+      console.warn(`[findRelatedGraphs] Failed to query graph ${g}:`, err)
+    }
+  }
+  
+  return related
+}
+
 export async function pingGraphDb(): Promise<void> {
   return invoke<void>("graph_db_ping", { url: await getUrl() })
 }

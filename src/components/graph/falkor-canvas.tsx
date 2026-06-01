@@ -1,17 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { CanvasData } from "@/lib/falkor-visualization"
 
-/**
- * Type declarations for @falkordb/canvas web component
- */
-declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      "falkordb-canvas": any
-    }
-  }
-}
-
 interface FalkorCanvasProps {
   data: CanvasData
   onNodeClick?: (node: any) => void
@@ -58,9 +47,11 @@ export function FalkorCanvas({
     }
   }, [loaded, data, onNodeClick, onLinkClick, backgroundColor, foregroundColor])
 
+  const CanvasElement = "falkordb-canvas" as any
+
   return (
     <div className="h-full w-full overflow-hidden">
-      <falkordb-canvas ref={canvasRef} style={{ width: "100%", height: "100%" }} />
+      <CanvasElement ref={canvasRef} style={{ width: "100%", height: "100%" }} />
     </div>
   )
 }

@@ -100,6 +100,8 @@ interface WikiState {
   outputLanguage: OutputLanguage
   selectedBranch: string | null
   dataVersion: number
+  selectedGraph: string // Active sub-graph name for visualization
+  highlightSource: string | null // Source file path to highlight in graph
 
   setProject: (project: WikiProject | null) => void
   setFileTree: (tree: FileNode[]) => void
@@ -114,6 +116,8 @@ interface WikiState {
   setOutputLanguage: (lang: OutputLanguage) => void
   setSelectedBranch: (branch: string | null) => void
   bumpDataVersion: () => void
+  setSelectedGraph: (graph: string) => void
+  setHighlightSource: (source: string | null) => void
 }
 
 export const useWikiStore = create<WikiState>((set) => ({
@@ -136,6 +140,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   selectedBranch: null,
 
   dataVersion: 0,
+  selectedGraph: "main",
+  highlightSource: null,
 
   setProject: (project) => set({ project }),
   setFileTree: (fileTree) => set({ fileTree }),
@@ -159,6 +165,8 @@ export const useWikiStore = create<WikiState>((set) => ({
   setOutputLanguage: (outputLanguage) => set({ outputLanguage }),
   setSelectedBranch: (selectedBranch) => set({ selectedBranch }),
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
+  setSelectedGraph: (selectedGraph) => set({ selectedGraph }),
+  setHighlightSource: (highlightSource) => set({ highlightSource }),
 }))
 
 export type { WikiState, LlmConfig, EmbeddingConfig, OutputLanguage }

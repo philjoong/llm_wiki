@@ -10,6 +10,7 @@ import { executeIngestWrites } from "@/lib/ingest"
 import { listDirectory, readFile, deleteFile } from "@/commands/fs"
 import { runExcludeSearch, type SearchTrace } from "@/lib/exclude-search"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
+import { getGraphContext, type CypherQueryResult } from "@/lib/graph-qna"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
@@ -284,6 +285,17 @@ export function ChatPanel() {
         }
         graphExpansions.sort((a, b) => b.relevance - a.relevance)
 
+        // ── Phase 2.5: Cypher Knowledge Retrieval ─────────────
+        const cypherResults = await getGraphContext(text, pp, project.name, llmConfig)
+        const cypherContext = cypherResults.length > 0
+          ? [
+              "## Knowledge Graph Context",
+              ...cypherResults.map((r) => 
+                `### Graph: ${r.graphName}\nReasoning: ${r.reasoning}\nQuery: ${r.query}\nResult: ${JSON.stringify(r.result, null, 2)}`
+              )
+            ].join("\n\n")
+          : ""
+
         // ── Phase 3 & 4: Page budget control ───────────────────
         let usedChars = 0
         type PageEntry = { title: string; path: string; content: string; priority: number }
@@ -350,43 +362,70 @@ export function ChatPanel() {
               "No question type was classified for this turn, so no exclusions were applied — the wiki pages below come from the unfiltered candidate space.",
             ].join("\n")
 
-        systemMessages.push({
-          role: "system",
-          content: [
-            "You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
-            "",
-            "## Rules",
-            "- Answer based ONLY on the numbered wiki pages provided below.",
-            "- If the provided pages don't contain enough information, say so honestly.",
-            "- Use [[wikilink]] syntax to reference wiki pages.",
-            "- When citing information, use the page number in brackets, e.g. [1], [2].",
-            "- At the END of your response, add a `## Sources` section listing every page you cited as a wikilink, one per line, in the order you cited them.",
-            "  Example:",
-            "  ## Sources",
-            "  - [[entities/foo]]",
-            "  - [[concepts/bar]]",
-            "- After the `## Sources` section, add a hidden comment listing which page numbers you used:",
-            "  <!-- cited: 1, 3, 5 -->",
-            "",
-            "Use markdown formatting for clarity.",
-            "",
-            residueMeta,
-            "",
-            index ? `## Wiki Index\n${index}` : "",
-            relevantPages.length > 0 ? `## Page List\n${pageList}` : "",
-            `## Wiki Pages\n\n${pagesContext}`,
-            "",
-            "---",
-            "",
-            `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
-            "",
-            `You MUST write your entire response in **${outLang}**.`,
-            `The wiki content above may be in a different language, but this is IRRELEVANT to your output language.`,
-            `Ignore the language of the wiki content. Write in ${outLang} only.`,
-            `Even proper nouns should use standard ${outLang} transliteration when appropriate.`,
-            `DO NOT use any other language. This overrides all other instructions.`,
-          ].filter(Boolean).join("\n"),
-        })
+        const qt = exclude.questionType
+        if (qt && qt.promptTemplate) {
+          let systemContent = qt.promptTemplate
+            .replace("{{context}}", `${cypherContext}\n\n## Wiki Pages\n\n${pagesContext}`)
+            .replace("{{question}}", text)
+            .replace("{{language}}", outLang)
+          
+          // Inject field descriptions if template uses {{fields.xxx}}
+          for (const [key, desc] of Object.entries(qt.fields)) {
+            systemContent = systemContent.replace(new RegExp(`{{fields\.${key}}}`, "g"), desc)
+          }
+
+          systemMessages.push({
+            role: "system",
+            content: [
+              systemContent,
+              "",
+              "---",
+              "",
+              `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
+              `Respond in ${outLang} only.`,
+            ].join("\n")
+          })
+        } else {
+          systemMessages.push({
+            role: "system",
+            content: [
+              "You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
+              "",
+              "## Rules",
+              "- Answer based ONLY on the numbered wiki pages provided below.",
+              "- If the provided pages don't contain enough information, say so honestly.",
+              "- Use [[wikilink]] syntax to reference wiki pages.",
+              "- When citing information, use the page number in brackets, e.g. [1], [2].",
+              "- At the END of your response, add a `## Sources` section listing every page you cited as a wikilink, one per line, in the order you cited them.",
+              "  Example:",
+              "  ## Sources",
+              "  - [[entities/foo]]",
+              "  - [[concepts/bar]]",
+              "- After the `## Sources` section, add a hidden comment listing which page numbers you used:",
+              "  <!-- cited: 1, 3, 5 -->",
+              "",
+              "Use markdown formatting for clarity.",
+              "",
+              residueMeta,
+              "",
+              cypherContext,
+              "",
+              index ? `## Wiki Index\n${index}` : "",
+              relevantPages.length > 0 ? `## Page List\n${pageList}` : "",
+              `## Wiki Pages\n\n${pagesContext}`,
+              "",
+              "---",
+              "",
+              `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
+              "",
+              `You MUST write your entire response in **${outLang}**.`,
+              `The wiki content above may be in a different language, but this is IRRELEVANT to your output language.`,
+              `Ignore the language of the wiki content. Write in ${outLang} only.`,
+              `Even proper nouns should use standard ${outLang} transliteration when appropriate.`,
+              `DO NOT use any other language. This overrides all other instructions.`,
+            ].filter(Boolean).join("\n"),
+          })
+        }
 
         // Reminder injected later, right before the user's current message
         // (after history so it's the last system instruction the LLM sees).

@@ -1,27 +1,33 @@
-# Development Plan - Step 9: RAG & Graph-based Q&A
+# Development Plan - Step 9: RAG & Graph-based Q&A [COMPLETED]
 
 ## Objective
-Implement an AI assistant that answers questions using both RAG (vector search on documents) and the Knowledge Graph.
+Implemented an AI assistant that answers questions using both RAG (vector search on documents) and the Knowledge Graph.
+
+## Status
+- **Implemented**: June 1, 2026
+- **Files Created**: `src/lib/graph-qna.ts`
+- **Files Modified**: `src/components/chat/chat-panel.tsx`
 
 ## Requirements
-- Hybrid search: Vector search + Cypher queries.
-- LLM synthesizes an answer from both sources.
+- Hybrid search: Vector search + Cypher queries. (DONE)
+- LLM synthesizes an answer from both sources. (DONE)
 
 ## Implementation Details
 
 ### 1. Vector Search (RAG)
-- Utilize the existing embedding pipeline in `src/lib/embedding.ts`.
-- Perform similarity search on user queries to retrieve relevant document chunks.
+- Utilized the existing embedding pipeline in `src/lib/embedding.ts`.
+- Integrated via `runExcludeSearch` (which uses `searchPaths`) and `buildRetrievalGraph` in `ChatPanel.tsx`.
 
 ### 2. Graph Search
-- Use LLM to translate natural language questions into Cypher queries.
-- **Strict Isolation:** Ensure the LLM-generated queries respect the `projectName___graphName` prefixing convention for all graph operations.
-- Execute Cypher on FalkorDB via the established `queryGraphDb` command.
+- **Sub-graph Selection:** Implemented in `src/lib/graph-qna.ts` using LLM to identify relevant sub-graphs from `loadGraphPolicy`.
+- **Query Generation:** Implemented in `src/lib/graph-qna.ts` using LLM to translate questions into Cypher.
+- **Strict Isolation:** Uses the `projectName` from the wiki store to prefix all graph names (`projectName___graphName`) via `queryGraphDb`.
+- **Execution:** Executes Cypher on FalkorDB via the `queryGraphDb` command.
 
 ### 3. Answer Generation
-- Combine context from RAG and Graph results.
-- Send to LLM (Codex, Claude, etc.) for final response.
+- **Phase 2.5 in ChatPanel:** Added a dedicated phase to fetch graph context.
+- **Context Synthesis:** Combined document RAG residue and Cypher results into a unified system prompt.
 
 ## Verification Plan
-- **Accuracy Test:** Ask a question that requires graph traversal (e.g., "What is the relationship between X and Y?").
-- **Hybrid Test:** Ask a question that requires both specific document text and structural knowledge.
+- **Accuracy Test:** Verified by asking questions requiring graph traversal.
+- **Hybrid Test:** Verified by asking questions requiring both document text and structural knowledge.

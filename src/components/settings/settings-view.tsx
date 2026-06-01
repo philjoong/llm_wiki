@@ -6,6 +6,7 @@ import {
   Palette,
   Info,
   Database,
+  FileJson,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import i18n from "@/i18n"
@@ -20,12 +21,14 @@ import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { AboutSection } from "./sections/about-section"
 import { FalkordbSection } from "./sections/falkordb-section"
+import { QuestionTypesSection } from "./sections/question-types-section"
 
 type CategoryId =
   | "llm"
   | "embedding"
   | "output"
   | "interface"
+  | "question-types"
   | "falkordb"
   | "about"
 
@@ -43,6 +46,7 @@ const CATEGORIES: Category[] = [
   { id: "embedding", labelKey: "settings.categories.embedding", icon: Binary },
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
+  { id: "question-types", labelKey: "settings.categories.questionTypes", icon: FileJson },
   { id: "falkordb", labelKey: "settings.categories.falkordb", icon: Database },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
@@ -181,6 +185,8 @@ export function SettingsView() {
         return <OutputSection draft={draft} setDraft={setDraft} />
       case "interface":
         return <InterfaceSection draft={draft} setDraft={setDraft} />
+      case "question-types":
+        return <QuestionTypesSection />
       case "falkordb":
         return <FalkordbSection />
       case "about":

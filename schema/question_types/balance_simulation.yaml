@@ -1,0 +1,22 @@
+name: 밸런스 시뮬레이션
+description: 특정 빌드·세팅에서 클래스/스킬/아이템 조합이 어떻게 성능을 발휘하는지를 가상으로 검증한다.
+fields:
+  simulation_result: 시뮬레이션 결과 한 줄 + 인용된 공식·수치 페이지
+  strengths_weaknesses: 기준 대비 강·약점 요약
+prompt_template: |
+  당신은 게임 밸런스 시뮬레이터입니다.
+  다음 입력 데이터를 바탕으로 시뮬레이션을 수행하고 결과를 구조화된 형식으로 출력하세요.
+  
+  ## Context
+  {{context}}
+  
+  ## User Question
+  {{question}}
+  
+  ## Output Format
+  JSON 형식으로 답변하세요. 키는 다음과 같습니다:
+  - simulation_result: {{fields.simulation_result}}
+  - strengths_weaknesses: {{fields.strengths_weaknesses}}
+zero_residue_meaning: |
+  잔존 0 = **시뮬레이션에 필요한 수치 정보 부족**. 공식·계수·기준치 중 일부가 wiki에 정의되어 있지 않다는 신호.
+  "결과 없음"이 아니라 "사람이 데이터를 채워야 한다"는 출력이다.

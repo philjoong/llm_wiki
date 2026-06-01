@@ -24,6 +24,7 @@ export interface CanvasNode {
   visible: boolean
   size?: number
   data: Record<string, any>
+  highlighted?: boolean
 }
 
 export interface CanvasEdge {
@@ -34,6 +35,7 @@ export interface CanvasEdge {
   source: number
   target: number
   data: Record<string, any>
+  highlighted?: boolean
 }
 
 export interface CanvasData {

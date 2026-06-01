@@ -124,7 +124,7 @@ export async function initProject({ projectPath }: InitProjectOptions): Promise<
 
   await writeFile(`${pp}/exclusions/exclusion_schema.md`, EXCLUSION_SCHEMA_SEED)
   await writeFile(`${pp}/exclusions/promotion_rules.md`, PROMOTION_RULES_SEED)
-  await saveGraphPolicy(pp, { relationTypes: [], managedGraphs: [] })
+  await saveGraphPolicy(pp, { relationTypes: [], managedGraphs: [], forbiddenTypes: [] })
 
   // Seed .gitignore before `git init` so the initial commit doesn't
   // accidentally pick up an originals/ tree from a re-init scenario.

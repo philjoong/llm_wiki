@@ -1,0 +1,22 @@
+name: 변경 영향 분석
+description: 특정 수치·공식·정책·콘텐츠 변경이 다른 시스템·콘텐츠에 어떤 영향을 주는지 추적한다.
+fields:
+  affected_pages: 영향받는 페이지 목록 (related: 연결 + 출처 인용을 따라간 결과)
+  update_candidates: 동시 갱신이 필요한 페이지 후보
+prompt_template: |
+  당신은 시스템 영향 분석가입니다.
+  다음 입력 데이터를 바탕으로 변경 영향을 분석하고 결과를 구조화된 형식으로 출력하세요.
+  
+  ## Context
+  {{context}}
+  
+  ## User Question
+  {{question}}
+  
+  ## Output Format
+  JSON 형식으로 답변하세요. 키는 다음과 같습니다:
+  - affected_pages: {{fields.affected_pages}}
+  - update_candidates: {{fields.update_candidates}}
+zero_residue_meaning: |
+  잔존 0 = **영향 격리 완료**. 이 변경이 다른 페이지로 전이되지 않는다는 신호.
+  독립적으로 적용 가능하다.

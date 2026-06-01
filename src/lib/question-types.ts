@@ -12,7 +12,6 @@
  */
 import yaml from "js-yaml"
 import { listDirectory, readFile } from "@/commands/fs"
-import { getProjectRoot } from "@/lib/project-init"
 import type { FileNode } from "@/types/wiki"
 
 export interface QuestionType {
@@ -23,9 +22,13 @@ export interface QuestionType {
   /** Description for the classifier and UI. */
   description: string
   /** Keys the LLM should fill in its structured response. Map of key -> description. */
-  fields: Record<string, string>
+  fields?: Record<string, string>
   /** Prompt template for execution. */
-  promptTemplate: string
+  promptTemplate?: string
+  /** Legacy markdown shape description used by older tests and docs. */
+  inputShape?: string
+  /** Legacy markdown output description used by older tests and docs. */
+  outputShape?: string
   /** Body of `Zero residue` section — surfaced to the user when residue == 0 (§2.10). */
   zeroResidueMeaning?: string
 }
@@ -34,7 +37,7 @@ export async function loadQuestionTypes(
   projectPath: string,
 ): Promise<QuestionType[]> {
   const projectSpecificPath = `${projectPath}/question_types`
-  const userOverridePath = `${await getProjectRoot()}/.llm-wiki/question-types`
+  const userOverridePath = `${projectPath}/.llm-wiki/question-types`
   // In dev, schema is at the root. In production, it might be bundled.
   // We'll try to find it relative to the process CWD or a known resource path.
   const appDefaultPath = `schema/question_types`
@@ -138,6 +141,8 @@ function parseMdQuestionType(id: string, content: string): QuestionType {
       answer: outputShape || "General answer",
     },
     promptTemplate: "", // MD doesn't have a template
+    inputShape,
+    outputShape,
     zeroResidueMeaning,
   }
 }

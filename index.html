@@ -7,7 +7,35 @@
     <title>LLM Wiki</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      LLM Wiki booting: HTML loaded, waiting for JavaScript...
+    </div>
+    <script>
+      window.addEventListener("error", function (event) {
+        var root = document.getElementById("root");
+        if (root) {
+          root.style.whiteSpace = "pre-wrap";
+          root.textContent =
+            "LLM Wiki boot error before React rendered\n\n" +
+            event.message +
+            "\n" +
+            event.filename +
+            ":" +
+            event.lineno +
+            ":" +
+            event.colno;
+        }
+      });
+      window.addEventListener("unhandledrejection", function (event) {
+        var root = document.getElementById("root");
+        if (root) {
+          root.style.whiteSpace = "pre-wrap";
+          root.textContent =
+            "LLM Wiki unhandled promise rejection before React rendered\n\n" +
+            String(event.reason);
+        }
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

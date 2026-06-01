@@ -80,13 +80,6 @@ fn redis_value_to_json(val: redis::Value) -> serde_json::Value {
     match val {
         redis::Value::Nil => serde_json::Value::Null,
         redis::Value::Int(i) => serde_json::Value::Number(i.into()),
-        redis::Value::Data(d) => {
-            if let Ok(s) = String::from_utf8(d) {
-                serde_json::Value::String(s)
-            } else {
-                serde_json::Value::String("<binary>".to_string())
-            }
-        }
         redis::Value::BulkString(d) => {
             if let Ok(s) = String::from_utf8(d) {
                 serde_json::Value::String(s)
@@ -97,7 +90,7 @@ fn redis_value_to_json(val: redis::Value) -> serde_json::Value {
         redis::Value::Array(arr) => {
             serde_json::Value::Array(arr.into_iter().map(redis_value_to_json).collect())
         }
-        redis::Value::Status(s) => serde_json::Value::String(s),
+        redis::Value::SimpleString(s) => serde_json::Value::String(s),
         redis::Value::Okay => serde_json::Value::String("OK".to_string()),
         _ => serde_json::Value::String(format!("{:?}", val)),
     }

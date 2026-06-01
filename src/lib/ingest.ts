@@ -1,4 +1,5 @@
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
+import { invoke } from "@tauri-apps/api/core"
 import { streamChat, isCliProvider } from "@/lib/llm-client"
 import { autoIngestViaAgent } from "@/lib/agent-ingest"
 import type { LlmConfig } from "@/stores/wiki-store"
@@ -454,8 +455,13 @@ async function autoIngestImpl(
     // runner and cause the task to be filter()'d out. Throw instead so
     // processNext's catch-block path (retry / mark failed) engages.
     const analysisActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+    const analysisDebug = `[ingest:analysis] ${chunkLabel}file=${fileName} chars=${analysis.length} status=${analysisActivity?.status ?? "unknown"}`
+    console.log(analysisDebug)
+    invoke("app_debug", { message: analysisDebug }).catch(() => {})
     if (analysisActivity?.status === "error") {
-      throw new Error(analysisActivity.detail || `${chunkLabel}Analysis stream failed`)
+      const errMsg = analysisActivity.detail || `${chunkLabel}Analysis stream failed`
+      invoke("app_debug", { message: `[ingest:analysis:ERROR] ${errMsg}` }).catch(() => {})
+      throw new Error(errMsg)
     }
 
     // ── Step 2: Generation (FILE blocks under db/) ────────────────
@@ -504,13 +510,23 @@ async function autoIngestImpl(
     )
 
     const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
+    const generationPreview = generation.slice(0, 300).replace(/\n/g, "↵")
+    const generationDebug = `[ingest:generation] ${chunkLabel}file=${fileName} chars=${generation.length} status=${generationActivity?.status ?? "unknown"} preview="${generationPreview}"`
+    console.log(generationDebug)
+    invoke("app_debug", { message: generationDebug }).catch(() => {})
     if (generationActivity?.status === "error") {
-      throw new Error(generationActivity.detail || `${chunkLabel}Generation stream failed`)
+      const errMsg = generationActivity.detail || `${chunkLabel}Generation stream failed`
+      invoke("app_debug", { message: `[ingest:generation:ERROR] ${errMsg}` }).catch(() => {})
+      throw new Error(errMsg)
     }
 
     // ── Step 3: Write files ───────────────────────────────────────
     activity.updateItem(activityId, { detail: `${chunkLabel}Writing files...` })
     const { writtenPaths, warnings: writeWarnings, hardFailures, proposals } = await writeFileBlocks(pp, generation, fileName)
+
+    const writeDebug = `[ingest:write] ${chunkLabel}file=${fileName} written=${writtenPaths.length} [${writtenPaths.join(", ")}] hardFailures=${hardFailures.length} [${hardFailures.join(", ")}] warnings=${writeWarnings.length} [${writeWarnings.join(" | ")}]`
+    console.log(writeDebug)
+    invoke("app_debug", { message: writeDebug }).catch(() => {})
 
     allWrittenPaths.push(...writtenPaths)
     allHardFailures.push(...hardFailures)

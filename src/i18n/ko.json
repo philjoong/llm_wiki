@@ -196,7 +196,12 @@
         "apiKeyPlaceholder": "API 키를 입력하세요",
         "savedBadge": "저장됨",
         "configuredBadge": "설정됨",
-        "activeBadge": "● 활성"
+        "activeBadge": "● 활성",
+        "connectionTest": "연결 테스트",
+        "connectionTestButton": "테스트",
+        "connectionTestRunning": "테스트 중…",
+        "connectionTestOk": "연결 성공 — 응답을 받았습니다.",
+        "connectionTestErr": "연결 실패."
       },
       "embedding": {
         "title": "벡터 임베딩",

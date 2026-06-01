@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react"
-import { ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2, XCircle } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2, XCircle, Wifi } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
 import { Input } from "@/components/ui/input"
@@ -9,6 +9,7 @@ import { LLM_PRESETS, type LlmPreset } from "../llm-presets"
 import { ContextSizeSelector } from "../context-size-selector"
 import { resolveConfig } from "../preset-resolver"
 import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
+import { streamChat, isCliProvider } from "@/lib/llm-client"
 
 export function LlmProviderSection() {
   const { t } = useTranslation()
@@ -83,6 +84,7 @@ export function LlmProviderSection() {
             onToggleActive={() => toggleActive(preset.id)}
             onToggleExpand={() => toggleExpand(preset.id)}
             onChange={(patch) => updateOverride(preset.id, patch)}
+            resolvedConfig={resolveConfig(preset, providerConfigs[preset.id], llmConfig)}
           />
         ))}
       </div>
@@ -99,6 +101,7 @@ interface PresetRowProps {
   onToggleActive: () => void
   onToggleExpand: () => void
   onChange: (patch: ProviderOverride) => void
+  resolvedConfig: import("@/stores/wiki-store").LlmConfig
 }
 
 function PresetRow({
@@ -110,6 +113,7 @@ function PresetRow({
   onToggleActive,
   onToggleExpand,
   onChange,
+  resolvedConfig,
 }: PresetRowProps) {
   const { t } = useTranslation()
   const ov = override ?? {}
@@ -302,6 +306,8 @@ function PresetRow({
               onChange={(v) => onChange({ maxContextSize: v })}
             />
           </div>
+
+          <ConnectionTestButton config={resolvedConfig} />
         </div>
       )}
     </div>
@@ -538,6 +544,91 @@ function CliStatusPill({ binary, detectCmd, installHint }: CliStatusPillProps) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+interface ConnectionTestButtonProps {
+  config: import("@/stores/wiki-store").LlmConfig
+}
+
+function ConnectionTestButton({ config }: ConnectionTestButtonProps) {
+  const { t } = useTranslation()
+  const [state, setState] = useState<"idle" | "loading" | "ok" | "err">("idle")
+  const [errorMsg, setErrorMsg] = useState<string>("")
+  const abortRef = useRef<AbortController | null>(null)
+
+  async function runTest() {
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    setState("loading")
+    setErrorMsg("")
+
+    try {
+      await streamChat(
+        config,
+        [{ role: "user", content: "Hi" }],
+        {
+          onToken: () => {},
+          onDone: () => { setState("ok") },
+          onError: (err) => {
+            setErrorMsg(err.message)
+            setState("err")
+          },
+        },
+        ctrl.signal,
+        { max_tokens: 1 },
+      )
+    } catch (e) {
+      if (!ctrl.signal.aborted) {
+        setErrorMsg(e instanceof Error ? e.message : String(e))
+        setState("err")
+      }
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <Label className="m-0">{t("settings.sections.llm.connectionTest")}</Label>
+        <button
+          type="button"
+          onClick={() => void runTest()}
+          disabled={state === "loading"}
+          className="flex items-center gap-1.5 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+        >
+          {state === "loading" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Wifi className="h-3.5 w-3.5" />
+          )}
+          {state === "loading"
+            ? t("settings.sections.llm.connectionTestRunning")
+            : t("settings.sections.llm.connectionTestButton")}
+        </button>
+      </div>
+
+      {state !== "idle" && (
+        <div
+          className={`flex items-start gap-1.5 rounded-md border px-2 py-1.5 text-xs ${
+            state === "ok"
+              ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+              : state === "err"
+                ? "border-rose-500/40 bg-rose-500/5 text-rose-700 dark:text-rose-400"
+                : "border-border bg-background/50 text-muted-foreground"
+          }`}
+        >
+          {state === "loading" && <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />}
+          {state === "ok" && <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          {state === "err" && <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          <div>
+            {state === "loading" && t("settings.sections.llm.connectionTestRunning")}
+            {state === "ok" && t("settings.sections.llm.connectionTestOk")}
+            {state === "err" && (errorMsg || t("settings.sections.llm.connectionTestErr"))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

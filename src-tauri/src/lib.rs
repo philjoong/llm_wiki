@@ -4,6 +4,7 @@ mod panic_guard;
 mod types;
 
 use panic_guard::run_guarded;
+use tauri::Emitter;
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -13,9 +14,16 @@ fn clip_server_status() -> String {
     .unwrap_or_else(|e| format!("error: {e}"))
 }
 
+#[tauri::command]
+fn app_debug(message: String) {
+    eprintln!("[app-debug] {message}");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    eprintln!("[tauri-debug] run: starting clip server");
     clip_server::start_clip_server();
+    eprintln!("[tauri-debug] run: building tauri app");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -26,12 +34,29 @@ pub fn run() {
         // Ark's api/coding/v3, etc.) still work. Requests leave the app
         // from Rust, never the webview.
         .plugin(tauri_plugin_http::init())
+        .on_page_load(|webview, payload| {
+            eprintln!(
+                "[tauri-debug] page-load: label={} url={}",
+                webview.label(),
+                payload.url()
+            );
+        })
         .setup(|app| {
+            eprintln!("[tauri-debug] setup: start");
             // Let the PDF extractor find the bundled pdfium dynamic
             // library via Tauri's platform-correct resource path.
             use tauri::Manager;
             if let Ok(dir) = app.path().resource_dir() {
+                eprintln!("[tauri-debug] setup: resource_dir={}", dir.display());
                 commands::fs::set_resource_dir_hint(dir);
+            } else {
+                eprintln!("[tauri-debug] setup: resource_dir unavailable");
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                eprintln!("[tauri-debug] setup: main window found");
+                let _ = window.set_title("LLM Wiki - debug attached");
+            } else {
+                eprintln!("[tauri-debug] setup: main window NOT found");
             }
             // Registry of running `claude` subprocesses, keyed by the
             // frontend-generated stream id. Populated by claude_cli_spawn,
@@ -41,6 +66,7 @@ pub fn run() {
             // owns its own child registry so kill targets the right pid.
             app.manage(commands::codex_cli::CodexCliState::default());
             app.manage(commands::gemini_cli::GeminiCliState::default());
+            eprintln!("[tauri-debug] setup: finished");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -58,6 +84,7 @@ pub fn run() {
             commands::project::open_project,
             commands::migrate::migrate_raw_sources,
             clip_server_status,
+            app_debug,
             commands::vectorstore::vector_upsert,
             commands::vectorstore::vector_search,
             commands::vectorstore::vector_delete,

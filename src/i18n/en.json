@@ -196,7 +196,12 @@
         "apiKeyPlaceholder": "Enter your API key",
         "savedBadge": "saved",
         "configuredBadge": "configured",
-        "activeBadge": "● active"
+        "activeBadge": "● active",
+        "connectionTest": "Connection test",
+        "connectionTestButton": "Test",
+        "connectionTestRunning": "Testing…",
+        "connectionTestOk": "Connected — response received.",
+        "connectionTestErr": "Connection failed."
       },
       "embedding": {
         "title": "Vector Embeddings",

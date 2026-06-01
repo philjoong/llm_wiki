@@ -651,6 +651,8 @@ pub async fn git_pull(project_path: String, remote: String, branch: String) -> R
 #[tauri::command]
 pub async fn git_ls_remote(url: String) -> Result<Vec<String>, String> {
     let git = locate_git()?;
+    eprintln!("[git_ls_remote] git binary: {:?}", git);
+    eprintln!("[git_ls_remote] url: {}", url);
     let mut cmd = Command::new(&git);
     cmd.args(&["ls-remote", "--heads", &url])
         .stdin(Stdio::null())
@@ -662,8 +664,10 @@ pub async fn git_ls_remote(url: String) -> Result<Vec<String>, String> {
         .await
         .map_err(|e| format!("git ls-remote 실패: {}", e))?;
 
+    eprintln!("[git_ls_remote] exit status: {}", out.status);
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).to_string();
+        eprintln!("[git_ls_remote] stderr: {}", err.trim());
         return Err(format!("git ls-remote 실패: {}", err.trim()));
     }
 

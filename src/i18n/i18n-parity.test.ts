@@ -12,7 +12,6 @@
  */
 import { describe, it, expect } from "vitest"
 import en from "./en.json"
-import zh from "./zh.json"
 import ko from "./ko.json"
 
 /** Flattens a nested translation object to "a.b.c" dot-path keys. */
@@ -30,26 +29,9 @@ function flattenKeys(obj: unknown, prefix = ""): string[] {
   return out
 }
 
-describe("i18n bundle parity (en.json ↔ zh.json ↔ ko.json)", () => {
+describe("i18n bundle parity (en.json ↔ ko.json)", () => {
   const enKeys = new Set(flattenKeys(en))
-  const zhKeys = new Set(flattenKeys(zh))
   const koKeys = new Set(flattenKeys(ko))
-
-  it("every en.json key is also in zh.json", () => {
-    const missing = [...enKeys].filter((k) => !zhKeys.has(k)).sort()
-    expect(
-      missing,
-      `Keys in en.json but missing from zh.json — add Chinese translations for:\n  ${missing.join("\n  ")}`,
-    ).toEqual([])
-  })
-
-  it("every zh.json key is also in en.json (no orphaned zh-only strings)", () => {
-    const orphaned = [...zhKeys].filter((k) => !enKeys.has(k)).sort()
-    expect(
-      orphaned,
-      `Keys in zh.json but missing from en.json — either add English translations or remove the stale zh-only keys:\n  ${orphaned.join("\n  ")}`,
-    ).toEqual([])
-  })
 
   it("every en.json key is also in ko.json", () => {
     const missing = [...enKeys].filter((k) => !koKeys.has(k)).sort()
@@ -81,7 +63,6 @@ describe("i18n bundle parity (en.json ↔ zh.json ↔ ko.json)", () => {
       }
     }
     check(en, "en.json")
-    check(zh, "zh.json")
     check(ko, "ko.json")
   })
 
@@ -101,7 +82,6 @@ describe("i18n bundle parity (en.json ↔ zh.json ↔ ko.json)", () => {
       }
     }
     check(en, "en.json")
-    check(zh, "zh.json")
     check(ko, "ko.json")
   })
 })

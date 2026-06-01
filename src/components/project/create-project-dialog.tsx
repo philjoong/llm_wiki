@@ -14,19 +14,12 @@ import { createGraphDb } from "@/commands/graph-db"
 import { initProject } from "@/lib/project-init"
 import type { WikiProject } from "@/types/wiki"
 
-const GIT_USER = import.meta.env.VITE_GIT_USER
-const GIT_PASSWORD = import.meta.env.VITE_GIT_PASSWORD
+const GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
 const REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
 
 const getRepoUrl = () => {
-  const encodedUser = GIT_USER ? encodeURIComponent(GIT_USER) : ""
-  const encodedPass = GIT_PASSWORD ? encodeURIComponent(GIT_PASSWORD) : ""
-
-  if (encodedUser && encodedPass) {
-    return `https://${encodedUser}:${encodedPass}@${REPO_BASE_URL}`
-  }
-  if (encodedUser) {
-    return `https://${encodedUser}@${REPO_BASE_URL}`
+  if (GIT_TOKEN) {
+    return `https://oauth2:${encodeURIComponent(GIT_TOKEN)}@${REPO_BASE_URL}`
   }
   return `https://${REPO_BASE_URL}`
 }

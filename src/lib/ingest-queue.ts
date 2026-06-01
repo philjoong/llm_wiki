@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "@/commands/fs"
+import { invoke } from "@tauri-apps/api/core"
 import { autoIngest } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
@@ -528,10 +529,14 @@ async function processNext(projectId: string): Promise<void> {
 
     if (next.retryCount >= MAX_RETRIES) {
       next.status = "failed"
-      console.log(`[Ingest Queue] Failed (${next.retryCount}x): ${next.sourcePath} — ${message}`)
+      const failMsg = `[Ingest Queue] FINAL FAILURE (${next.retryCount}x): ${next.sourcePath} — ${message}`
+      console.log(failMsg)
+      invoke("app_debug", { message: failMsg }).catch(() => {})
     } else {
       next.status = "pending" // will retry
-      console.log(`[Ingest Queue] Error (retry ${next.retryCount}/${MAX_RETRIES}): ${next.sourcePath} — ${message}`)
+      const retryMsg = `[Ingest Queue] Error (retry ${next.retryCount}/${MAX_RETRIES}): ${next.sourcePath} — ${message}`
+      console.log(retryMsg)
+      invoke("app_debug", { message: retryMsg }).catch(() => {})
     }
 
     await saveQueue(pp)

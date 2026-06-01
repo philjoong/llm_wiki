@@ -10,7 +10,7 @@ import { executeIngestWrites } from "@/lib/ingest"
 import { listDirectory, readFile, deleteFile } from "@/commands/fs"
 import { runExcludeSearch, type SearchTrace } from "@/lib/exclude-search"
 import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
-import { getGraphContext, type CypherQueryResult } from "@/lib/graph-qna"
+import { getGraphContext } from "@/lib/graph-qna"
 import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
@@ -370,7 +370,7 @@ export function ChatPanel() {
             .replace("{{language}}", outLang)
           
           // Inject field descriptions if template uses {{fields.xxx}}
-          for (const [key, desc] of Object.entries(qt.fields)) {
+          for (const [key, desc] of Object.entries(qt.fields ?? {})) {
             systemContent = systemContent.replace(new RegExp(`{{fields\.${key}}}`, "g"), desc)
           }
 

@@ -5,12 +5,11 @@ import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { loadQuestionTypes, type QuestionType } from "@/lib/question-types"
 import { writeFile, deleteFile, createDirectory, fileExists } from "@/commands/fs"
-import { getProjectRoot } from "@/lib/project-init"
 import yaml from "js-yaml"
 
 export function QuestionTypesSection() {
   const { t } = useTranslation()
-  const projectPath = useWikiStore((s) => s.projectPath)
+  const projectPath = useWikiStore((s) => s.project?.path ?? null)
   const [types, setTypes] = useState<QuestionType[]>([])
   const [editing, setEditing] = useState<Partial<QuestionType> | null>(null)
   const [yamlText, setYamlText] = useState("")
@@ -46,7 +45,7 @@ export function QuestionTypesSection() {
       if (!parsed || typeof parsed !== "object") throw new Error("Invalid YAML")
       
       const id = editing.id || parsed.name?.toLowerCase().replace(/\s+/g, "_") || "unnamed"
-      const userPath = `${await getProjectRoot()}/.llm-wiki/question-types`
+      const userPath = `${projectPath}/.llm-wiki/question-types`
       
       if (!(await fileExists(userPath))) {
         await createDirectory(userPath)
@@ -65,8 +64,8 @@ export function QuestionTypesSection() {
     if (!confirm(t("settings.questionTypes.confirmDelete", { id }))) return
     
     // Try to delete from user overrides first
-    const userPath = `${await getProjectRoot()}/.llm-wiki/question-types/${id}.yaml`
-    const userPathYml = `${await getProjectRoot()}/.llm-wiki/question-types/${id}.yml`
+    const userPath = `${projectPath}/.llm-wiki/question-types/${id}.yaml`
+    const userPathYml = `${projectPath}/.llm-wiki/question-types/${id}.yml`
     
     if (await fileExists(userPath)) {
       await deleteFile(userPath)

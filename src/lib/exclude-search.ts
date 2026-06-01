@@ -25,7 +25,7 @@ import { searchPaths, type SearchResult } from "./search"
 import { recordSearchInstance } from "./instance-log"
 import { loadQuestionTypes, type QuestionType } from "./question-types"
 import { classifyQuestion } from "./classify-question"
-import { loadExclusions, applyExclusions, type ExclusionDoc } from "./exclusions"
+import { loadExclusions, applyExclusions } from "./exclusions"
 
 export interface AppliedEntry {
   pattern: string

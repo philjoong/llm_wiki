@@ -4,6 +4,7 @@ import {
   FileText, Users, Lightbulb, BookOpen, GitMerge, BarChart3, HelpCircle, Layout,
   RotateCcw, X, Clock,
 } from "lucide-react"
+import { confirm } from "@tauri-apps/plugin-dialog"
 import { useActivityStore, type ActivityItem } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, getFileName, isAbsolutePath } from "@/lib/path-utils"
@@ -67,15 +68,17 @@ export function ActivityPanel() {
     cancelTask(taskId)
   }, [project])
 
-  const handleCancelAll = useCallback(() => {
+  const handleCancelAll = useCallback(async () => {
     if (!project) return
     const activeCount = queueSummary.pending + queueSummary.processing
     if (activeCount === 0) return
-    if (!window.confirm(
+    const ok = await confirm(
       `Cancel all ${activeCount} queued/processing task${activeCount > 1 ? "s" : ""}? ` +
       `Partial files from the in-progress task will be removed. ` +
       `Failed tasks will be kept so you can retry them.`,
-    )) return
+      { title: "Cancel tasks", kind: "warning" },
+    )
+    if (!ok) return
     cancelAllTasks()
   }, [project, queueSummary.pending, queueSummary.processing])
 
@@ -111,10 +114,10 @@ export function ActivityPanel() {
   const isActive = runningCount > 0 || queueSummary.processing > 0 || queueSummary.pending > 0
 
   return (
-    <div className="border-t bg-muted/30">
+    <div className="rounded-lg border bg-background/95 shadow-lg backdrop-blur-sm">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent/50"
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-accent/50"
       >
         {isActive ? (
           <Loader2 className="h-3 w-3 animate-spin shrink-0" />

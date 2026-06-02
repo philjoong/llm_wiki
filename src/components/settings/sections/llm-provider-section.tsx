@@ -9,7 +9,7 @@ import { LLM_PRESETS, type LlmPreset } from "../llm-presets"
 import { ContextSizeSelector } from "../context-size-selector"
 import { resolveConfig } from "../preset-resolver"
 import { normalizeEndpoint } from "@/lib/endpoint-normalizer"
-import { streamChat, isCliProvider } from "@/lib/llm-client"
+import { streamChat } from "@/lib/llm-client"
 
 export function LlmProviderSection() {
   const { t } = useTranslation()

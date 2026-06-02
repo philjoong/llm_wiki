@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
 import { loadFalkordbUrl } from "@/lib/project-store"
+import { parseFalkorQueryResult } from "@/lib/falkor-visualization"
 
 async function getUrl(): Promise<string | undefined> {
   return (await loadFalkordbUrl()) ?? undefined
@@ -44,24 +45,41 @@ export async function exportGraphDb(projectName: string, graphName: string): Pro
   return invoke<any>("graph_db_export", { graphName: prefixedName, url: await getUrl() })
 }
 
-export async function findRelatedGraphs(projectName: string, fileName: string): Promise<string[]> {
+function escapeCypherString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+}
+
+function hasQueryResults(result: any): boolean {
+  const parsed = parseFalkorQueryResult(result)
+  return parsed.nodes.length > 0 || parsed.links.length > 0
+}
+
+export async function findRelatedGraphs(
+  projectName: string,
+  fileName: string,
+  filePath?: string,
+  assignedGraph?: string | null,
+): Promise<string[]> {
   const graphs = await listGraphDb(projectName)
   const related: string[] = []
-  
-  const safeFileName = fileName.replace(/'/g, "\\'")
+  const candidates = assignedGraph
+    ? graphs.includes(assignedGraph) ? [assignedGraph] : []
+    : graphs
+  const id = fileName.replace(/\.md$/i, "")
+  const safeId = escapeCypherString(id)
+  const safePath = filePath ? escapeCypherString(filePath.replace(/\\/g, "/")) : null
 
-  for (const g of graphs) {
+  for (const g of candidates) {
     try {
-      // Check nodes
-      const nodeRes = await queryGraphDb(projectName, g, `MATCH (n) WHERE '${safeFileName}' IN n.sources RETURN n LIMIT 1`)
-      if (nodeRes && nodeRes.length > 0) {
+      const nodeRes = await queryGraphDb(projectName, g, `MATCH (n:Page {id: '${safeId}'}) RETURN n LIMIT 1`)
+      if (hasQueryResults(nodeRes)) {
         related.push(g)
         continue
       }
-      
-      // Check edges
-      const edgeRes = await queryGraphDb(projectName, g, `MATCH ()-[r]->() WHERE '${safeFileName}' IN r.sources RETURN r LIMIT 1`)
-      if (edgeRes && edgeRes.length > 0) {
+
+      if (!safePath) continue
+      const pathRes = await queryGraphDb(projectName, g, `MATCH (n) WHERE n.path = '${safePath}' RETURN n LIMIT 1`)
+      if (hasQueryResults(pathRes)) {
         related.push(g)
       }
     } catch (err) {

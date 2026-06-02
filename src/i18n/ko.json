@@ -273,7 +273,11 @@
     "clearCompleted": "완료 항목 정리"
   },
   "fileTree": {
-    "noProject": "열려 있는 프로젝트 없음"
+    "noProject": "열려 있는 프로젝트 없음",
+    "openInExplorer": "탐색기에서 열기",
+    "inject": "지식 추출",
+    "injecting": "지식 추출 중...",
+    "injectDialogTitle": "지식 추출할 파일 선택"
   },
   "time": {
     "justNow": "방금 전",

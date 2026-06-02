@@ -1,7 +1,7 @@
 import { createDirectory, writeFile } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
 import { ensureOriginalsGitignore } from "@/lib/originals"
-import { saveGraphPolicy } from "@/lib/graph-policy"
+import { saveGraphPolicy, DEFAULT_POLICY } from "@/lib/graph-policy"
 
 /**
  * System prefix directories the ingest pipeline writes into. These must
@@ -124,7 +124,7 @@ export async function initProject({ projectPath }: InitProjectOptions): Promise<
 
   await writeFile(`${pp}/exclusions/exclusion_schema.md`, EXCLUSION_SCHEMA_SEED)
   await writeFile(`${pp}/exclusions/promotion_rules.md`, PROMOTION_RULES_SEED)
-  await saveGraphPolicy(pp, { relationTypes: [], managedGraphs: [], forbiddenTypes: [] })
+  await saveGraphPolicy(pp, DEFAULT_POLICY)
 
   // Seed .gitignore before `git init` so the initial commit doesn't
   // accidentally pick up an originals/ tree from a re-init scenario.

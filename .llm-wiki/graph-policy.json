@@ -1,0 +1,405 @@
+{
+  "relationTypes": [
+    "UPGRADES_TO",
+    "WEAK_AGAINST",
+    "DROPS_ITEM",
+    "UNLOCKS"
+  ],
+  "managedGraphs": [
+    "combat_weakness_graph",
+    "combat_combo_graph",
+    "skill_upgrade_graph",
+    "skill_require_graph",
+    "skill_synergy_graph",
+    "skill_scaling_graph",
+    "skill_tag_graph",
+    "enemy_loot_graph",
+    "enemy_spawn_graph",
+    "enemy_tactic_graph",
+    "dungeon_route_graph",
+    "dungeon_unlock_graph",
+    "item_craft_graph",
+    "item_enhance_graph",
+    "item_set_graph",
+    "quest_flow_graph",
+    "quest_reward_graph",
+    "ui_nav_graph",
+    "ui_trigger_graph",
+    "progression_unlock_graph",
+    "progression_require_graph",
+    "stat_relation_graph",
+    "system_loop_graph",
+    "system_logic_graph",
+    "npc_relation_graph",
+    "npc_service_graph",
+    "faction_war_graph",
+    "faction_trade_graph",
+    "map_connect_graph",
+    "map_contain_graph",
+    "economy_trade_graph",
+    "economy_produce_graph",
+    "ability_stack_graph",
+    "ability_trigger_graph",
+    "buff_counter_graph",
+    "buff_apply_graph",
+    "class_promote_graph",
+    "class_synergy_graph",
+    "achievement_track_graph",
+    "achievement_reward_graph",
+    "event_chain_graph",
+    "event_condition_graph",
+    "pet_evolve_graph",
+    "pet_skill_graph",
+    "mount_unlock_graph",
+    "mount_terrain_graph",
+    "guild_rank_graph",
+    "guild_alliance_graph",
+    "dialogue_flow_graph",
+    "dialogue_impact_graph",
+    "lore_reference_graph",
+    "lore_timeline_graph",
+    "status_apply_graph",
+    "status_interact_graph",
+    "zone_tier_graph",
+    "zone_resource_graph"
+  ],
+  "forbiddenTypes": [],
+  "graphRelationTypes": {
+    "combat_weakness_graph": [
+      "WEAK_AGAINST",
+      "STRONG_AGAINST",
+      "COUNTERS",
+      "RESISTS"
+    ],
+    "combat_combo_graph": [
+      "COMBO_WITH",
+      "INTERRUPTS",
+      "CHAINS_INTO",
+      "CANCELS"
+    ],
+    "skill_upgrade_graph": [
+      "UPGRADES_TO",
+      "BRANCHES_INTO",
+      "UNLOCKS",
+      "PROMOTES_TO"
+    ],
+    "skill_require_graph": [
+      "REQUIRES",
+      "ENHANCED_BY",
+      "CONSUMES",
+      "MODIFIED_BY"
+    ],
+    "skill_synergy_graph": [
+      "SYNERGIZES_WITH",
+      "COMBOS_WITH",
+      "REDUCES_CD",
+      "BOOSTS"
+    ],
+    "skill_scaling_graph": [
+      "SCALES_WITH",
+      "REQUIRES_STAT",
+      "CONVERTS_TO",
+      "CAPPED_BY"
+    ],
+    "skill_tag_graph": [
+      "HAS_TAG",
+      "ELEMENT_OF",
+      "WEAPON_TYPE",
+      "CATEGORY_OF"
+    ],
+    "enemy_loot_graph": [
+      "DROPS_ITEM",
+      "GUARDS",
+      "ENRAGES_AT",
+      "DROPS_FROM"
+    ],
+    "enemy_spawn_graph": [
+      "SPAWNS_IN",
+      "VARIANTS_OF",
+      "PATROLS",
+      "ALLIED_WITH"
+    ],
+    "enemy_tactic_graph": [
+      "USES_SKILL",
+      "TARGETS",
+      "FLEES_AT",
+      "PHASES_INTO"
+    ],
+    "dungeon_route_graph": [
+      "CONNECTS_TO",
+      "LEADS_TO",
+      "BRANCHES_INTO",
+      "LOOPS_BACK"
+    ],
+    "dungeon_unlock_graph": [
+      "REQUIRES_ITEM",
+      "HAS_BOSS",
+      "UNLOCKS",
+      "BLOCKS"
+    ],
+    "item_craft_graph": [
+      "CRAFTS_INTO",
+      "REQUIRES",
+      "CONSUMED_BY",
+      "PRICED_BY"
+    ],
+    "item_enhance_graph": [
+      "ENHANCES",
+      "DROPS_FROM",
+      "UPGRADES_TO",
+      "DISMANTLES_INTO"
+    ],
+    "item_set_graph": [
+      "PART_OF_SET",
+      "SYNERGIZES_WITH",
+      "REQUIRED_FOR",
+      "EQUIPPED_BY"
+    ],
+    "quest_flow_graph": [
+      "NEXT",
+      "TRIGGERS",
+      "BLOCKS",
+      "BRANCHES_INTO"
+    ],
+    "quest_reward_graph": [
+      "REQUIRES",
+      "UNLOCKS",
+      "REWARDS",
+      "PART_OF"
+    ],
+    "ui_nav_graph": [
+      "NAVIGATES_TO",
+      "OPENS",
+      "CLOSES",
+      "PARENT_OF"
+    ],
+    "ui_trigger_graph": [
+      "TRIGGERS",
+      "REQUIRES",
+      "BLOCKS",
+      "CHILD_OF"
+    ],
+    "progression_unlock_graph": [
+      "UPGRADES_TO",
+      "UNLOCKS",
+      "GRANTS",
+      "CAPS_AT"
+    ],
+    "progression_require_graph": [
+      "REQUIRES",
+      "PREREQUISITES",
+      "PART_OF",
+      "LEADS_TO"
+    ],
+    "stat_relation_graph": [
+      "INFLUENCES",
+      "DERIVED_FROM",
+      "CAPS",
+      "AUGMENTS"
+    ],
+    "system_loop_graph": [
+      "FEEDS_INTO",
+      "PROVIDES_RESOURCE_FOR",
+      "GATED_BY",
+      "CONSUMES"
+    ],
+    "system_logic_graph": [
+      "OVERRIDES",
+      "TRIGGERS",
+      "BLOCKS",
+      "REQUIRES"
+    ],
+    "npc_relation_graph": [
+      "ALLIED_WITH",
+      "HOSTILE_TO",
+      "MEMBER_OF",
+      "RIVALS"
+    ],
+    "npc_service_graph": [
+      "SELLS",
+      "GIVES_QUEST",
+      "LOCATED_IN",
+      "GUARDS"
+    ],
+    "faction_war_graph": [
+      "ALLIED_WITH",
+      "AT_WAR_WITH",
+      "RIVALS",
+      "CONTROLS"
+    ],
+    "faction_trade_graph": [
+      "TRADES_WITH",
+      "GOVERNS",
+      "DOMINATES",
+      "TRIBUTE_TO"
+    ],
+    "map_connect_graph": [
+      "CONNECTS_TO",
+      "ADJACENT_TO",
+      "LEADS_TO",
+      "PART_OF"
+    ],
+    "map_contain_graph": [
+      "CONTAINS",
+      "OWNED_BY",
+      "SPAWNS",
+      "BORDERS"
+    ],
+    "economy_trade_graph": [
+      "TRADES_WITH",
+      "PRICED_BY",
+      "COMPETES_WITH",
+      "MONOPOLIZES"
+    ],
+    "economy_produce_graph": [
+      "PRODUCES",
+      "REQUIRES",
+      "CONSUMED_BY",
+      "CRAFTS_INTO"
+    ],
+    "ability_stack_graph": [
+      "STACKS_WITH",
+      "OVERRIDES",
+      "EXTENDS",
+      "MODIFIED_BY"
+    ],
+    "ability_trigger_graph": [
+      "ENHANCES",
+      "REQUIRES",
+      "TRIGGERS",
+      "APPLIED_BY"
+    ],
+    "buff_counter_graph": [
+      "COUNTERS",
+      "OVERRIDES",
+      "STACKS_WITH",
+      "EXTENDS"
+    ],
+    "buff_apply_graph": [
+      "APPLIED_BY",
+      "REMOVED_BY",
+      "TRIGGERED_BY",
+      "GRANTS"
+    ],
+    "class_promote_graph": [
+      "PROMOTES_TO",
+      "SPECIALIZES_INTO",
+      "BRANCHES_INTO",
+      "RIVALS"
+    ],
+    "class_synergy_graph": [
+      "REQUIRES",
+      "SHARES_SKILL_WITH",
+      "SYNERGIZES_WITH",
+      "COUNTERS"
+    ],
+    "achievement_track_graph": [
+      "TRACKS",
+      "PART_OF",
+      "LEADS_TO",
+      "CHAINS_INTO"
+    ],
+    "achievement_reward_graph": [
+      "REQUIRES",
+      "UNLOCKS",
+      "REWARDS",
+      "PREREQUISITES"
+    ],
+    "event_chain_graph": [
+      "TRIGGERS",
+      "FOLLOWS",
+      "BRANCHES_INTO",
+      "CANCELS"
+    ],
+    "event_condition_graph": [
+      "REQUIRES",
+      "EXCLUDES",
+      "REWARDS",
+      "PART_OF"
+    ],
+    "pet_evolve_graph": [
+      "EVOLVES_INTO",
+      "BONDS_WITH",
+      "HATCHES_FROM",
+      "VARIANT_OF"
+    ],
+    "pet_skill_graph": [
+      "TEACHES",
+      "SYNERGIZES_WITH",
+      "REQUIRES",
+      "ENHANCES"
+    ],
+    "mount_unlock_graph": [
+      "UNLOCKS",
+      "UPGRADES_TO",
+      "REQUIRES",
+      "OBTAINABLE_FROM"
+    ],
+    "mount_terrain_graph": [
+      "TRAVERSES",
+      "BLOCKED_BY",
+      "ENHANCED_BY",
+      "PART_OF"
+    ],
+    "guild_rank_graph": [
+      "PROMOTES_TO",
+      "GRANTS",
+      "REQUIRES",
+      "OVERSEES"
+    ],
+    "guild_alliance_graph": [
+      "ALLIED_WITH",
+      "AT_WAR_WITH",
+      "MERGED_WITH",
+      "RIVALS"
+    ],
+    "dialogue_flow_graph": [
+      "LEADS_TO",
+      "BRANCHES_INTO",
+      "TRIGGERS",
+      "REQUIRES"
+    ],
+    "dialogue_impact_graph": [
+      "INCREASES",
+      "DECREASES",
+      "LOCKS",
+      "UNLOCKS"
+    ],
+    "lore_reference_graph": [
+      "REFERENCES",
+      "CONTRADICTS",
+      "EXPANDS_ON",
+      "PART_OF"
+    ],
+    "lore_timeline_graph": [
+      "PRECEDES",
+      "CAUSES",
+      "CONCURRENT_WITH",
+      "RETCONNED_BY"
+    ],
+    "status_apply_graph": [
+      "INFLICTED_BY",
+      "CURED_BY",
+      "IMMUNE_TO",
+      "TRIGGERS"
+    ],
+    "status_interact_graph": [
+      "COMBINES_WITH",
+      "OVERRIDES",
+      "EXTENDS",
+      "COUNTERS"
+    ],
+    "zone_tier_graph": [
+      "HIGHER_TIER_THAN",
+      "CONNECTS_TO",
+      "UNLOCKS",
+      "PART_OF"
+    ],
+    "zone_resource_graph": [
+      "CONTAINS",
+      "EXCLUSIVE_TO",
+      "SHARED_WITH",
+      "SEASONAL_IN"
+    ]
+  }
+}

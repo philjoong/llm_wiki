@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { open } from "@tauri-apps/plugin-dialog"
 import { invoke } from "@tauri-apps/api/core"
-import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown, Network } from "lucide-react"
+import { Plus, FileText, RefreshCw, Trash2, Folder, ChevronRight, ChevronDown, Network } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -9,7 +9,6 @@ import { useActivityStore } from "@/stores/activity-store"
 import { listDirectory, readFile, writeFile, deleteFile, findRelatedWikiPages, preprocessFile } from "@/commands/fs"
 import { gitCommit } from "@/commands/git"
 import type { FileNode } from "@/types/wiki"
-import { startIngest } from "@/lib/ingest"
 import { enqueueIngest, enqueueBatch } from "@/lib/ingest-queue"
 import { useTranslation } from "react-i18next"
 import { normalizePath, getFileName } from "@/lib/path-utils"
@@ -34,13 +33,10 @@ export function SourcesView() {
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const setFileTree = useWikiStore((s) => s.setFileTree)
-  const setChatExpanded = useWikiStore((s) => s.setChatExpanded)
   const setSelectedGraph = useWikiStore((s) => s.setSelectedGraph)
   const setHighlightSource = useWikiStore((s) => s.setHighlightSource)
-  const llmConfig = useWikiStore((s) => s.llmConfig)
   const [sources, setSources] = useState<FileNode[]>([])
   const [importing, setImporting] = useState(false)
-  const [ingestingPath, setIngestingPath] = useState<string | null>(null)
   const [relatedGraphs, setRelatedGraphs] = useState<string[]>([])
   const [loadingGraphs, setLoadingGraphs] = useState(false)
 
@@ -537,20 +533,6 @@ export function SourcesView() {
     }
   }
 
-  async function handleIngest(node: FileNode) {
-    if (!project || ingestingPath) return
-    setIngestingPath(node.path)
-    try {
-      setChatExpanded(true)
-      setActiveView("wiki")
-      await startIngest(normalizePath(project.path), node.path, llmConfig)
-    } catch (err) {
-      console.error("Failed to start ingest:", err)
-    } finally {
-      setIngestingPath(null)
-    }
-  }
-
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-4 py-3">
@@ -591,9 +573,7 @@ export function SourcesView() {
             <SourceTree
               nodes={sources}
               onOpen={handleOpenSource}
-              onIngest={handleIngest}
               onDelete={handleDelete}
-              ingestingPath={ingestingPath}
               depth={0}
             />
           </div>
@@ -747,16 +727,12 @@ function countFiles(nodes: FileNode[]): number {
 function SourceTree({
   nodes,
   onOpen,
-  onIngest,
   onDelete,
-  ingestingPath,
   depth,
 }: {
   nodes: FileNode[]
   onOpen: (node: FileNode) => void
-  onIngest: (node: FileNode) => void
   onDelete: (node: FileNode) => void
-  ingestingPath: string | null
   depth: number
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -799,9 +775,7 @@ function SourceTree({
                 <SourceTree
                   nodes={node.children}
                   onOpen={onOpen}
-                  onIngest={onIngest}
                   onDelete={onDelete}
-                  ingestingPath={ingestingPath}
                   depth={depth + 1}
                 />
               )}
@@ -822,16 +796,6 @@ function SourceTree({
               <FileText className="h-4 w-4 shrink-0" />
               <span className="truncate">{node.name}</span>
             </button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0"
-              title="Ingest"
-              disabled={ingestingPath === node.path}
-              onClick={() => onIngest(node)}
-            >
-              <BookOpen className="h-4 w-4" />
-            </Button>
             <Button
               variant="ghost"
               size="icon"

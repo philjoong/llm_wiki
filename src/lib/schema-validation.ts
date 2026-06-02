@@ -12,10 +12,10 @@ export async function detectSchemaDrift(
   const policy = await loadGraphPolicy(projectPath)
   const proposals: SchemaProposal[] = []
 
-  // 1. Get managed graphs
-  const managedGraphs = policy.managedGraphs.length > 0 
-    ? policy.managedGraphs 
-    : ["main_graph"]
+  // 1. Get managed graphs — schema check only runs against graphs that exist.
+  // If none are configured, there's nothing to check against yet.
+  if (policy.managedGraphs.length === 0) return proposals
+  const managedGraphs = policy.managedGraphs
 
   // 2. Fetch existing types from each graph
   const existingLabels = new Set<string>()
@@ -63,19 +63,20 @@ export async function detectSchemaDrift(
     }
   }
 
-  // 4. Compare with incoming edges
+  // 4. Compare with incoming edges — check against union of all per-graph + global allowed types
+  const allAllowedRelTypes = new Set<string>([
+    ...policy.relationTypes.map(t => t.toLowerCase()),
+    ...Object.values(policy.graphRelationTypes).flat().map(t => t.toLowerCase()),
+  ])
+  const forbiddenSet = new Set(policy.forbiddenTypes.map(t => t.toLowerCase()))
   const incomingRelTypes = new Set(edges.map(e => (e.type || "LINKS_TO").toLowerCase()))
   for (const relType of incomingRelTypes) {
     if (relType === "links_to") continue
-    if (!existingRelTypes.has(relType) && !policy.forbiddenTypes.map(t => t.toLowerCase()).includes(relType)) {
-      // Also check against allowed relationTypes in policy
-      const isAllowedByPolicy = policy.relationTypes.some(t => t.toLowerCase() === relType)
-      if (!isAllowedByPolicy && !existingRelTypes.has(relType)) {
-        proposals.push({
-          type: "relation_type",
-          name: relType,
-        })
-      }
+    if (!existingRelTypes.has(relType) && !forbiddenSet.has(relType) && !allAllowedRelTypes.has(relType)) {
+      proposals.push({
+        type: "relation_type",
+        name: relType,
+      })
     }
   }
 

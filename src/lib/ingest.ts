@@ -17,6 +17,8 @@ import { gitCommit } from "@/commands/git"
 import { parseSourceRefs } from "@/lib/sources-merge"
 import { buildGraphPolicyPrompt, loadGraphPolicy } from "@/lib/graph-policy"
 import { syncGraphToFalkorDb } from "@/lib/graph-sync"
+import { buildWikiGraph } from "@/lib/wiki-graph"
+import type { GraphNode } from "@/lib/wiki-graph"
 import {
   loadCounterexamples,
   loadRejectionLog,
@@ -410,6 +412,16 @@ async function autoIngestImpl(
     relevantRejections,
   )
 
+  // Build existing graph summary for analysis prompt so LLM can assign
+  // pages to existing graphs and link to existing nodes.
+  let existingGraphSummary = ""
+  try {
+    const { nodes: existingNodes } = await buildWikiGraph(pp)
+    existingGraphSummary = buildExistingGraphSummary(existingNodes)
+  } catch {
+    // Non-fatal: analysis prompt will just omit the graph context section.
+  }
+
   // Split oversized sources into chunks. Small files run as a single
   // chunk (length 1) — semantically identical to the pre-chunking flow.
   const chunks = chunkSourceContent(sourceContent)
@@ -437,7 +449,7 @@ async function autoIngestImpl(
     await streamChat(
       llmConfig,
       [
-        { role: "system", content: buildAnalysisPrompt(currentDbIndex, chunk, dismissalContext, graphPolicyPrompt) },
+        { role: "system", content: buildAnalysisPrompt(currentDbIndex, chunk, dismissalContext, graphPolicyPrompt, existingGraphSummary) },
         { role: "user", content: `Analyze this source document and propose db/ paths:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length} (this is one slice of a larger document; only analyze what's below)` : ""}\n\n---\n\n${chunk}` },
       ],
       {
@@ -657,10 +669,20 @@ async function autoIngestImpl(
   // ── Step 8: Sync to FalkorDB Knowledge Graph ────────────────
   if (allWrittenPaths.length > 0) {
     const projectName = useWikiStore.getState().project?.name || "default"
+    activity.updateItem(activityId, { detail: "Syncing knowledge graph..." })
     try {
-      await syncGraphToFalkorDb(pp, projectName)
+      const graphSummary = await syncGraphToFalkorDb(pp, projectName, (msg) => {
+        activity.updateItem(activityId, { detail: msg })
+      })
+      const graphDebug = `[ingest:graph] ${graphSummary}`
+      console.log(graphDebug)
+      invoke("app_debug", { message: graphDebug }).catch(() => {})
     } catch (err) {
-      console.warn(`[ingest] graph sync failed: ${err instanceof Error ? err.message : String(err)}`)
+      const graphErrMsg = `Knowledge graph sync failed: ${err instanceof Error ? err.message : String(err)}`
+      console.warn(`[ingest] ${graphErrMsg}`)
+      invoke("app_debug", { message: `[ingest:graph:ERROR] ${graphErrMsg}` }).catch(() => {})
+      activity.updateItem(activityId, { detail: graphErrMsg, status: "error" })
+      return allWrittenPaths
     }
   }
 
@@ -968,7 +990,28 @@ export function buildAnalysisPrompt(
   sourceContent: string = "",
   dismissalContext: string = "",
   graphPolicyPrompt: string = "",
+  existingGraphSummary: string = "",
 ): string {
+  const graphSummarySection = existingGraphSummary
+    ? [
+        "## Existing Knowledge Graphs",
+        "",
+        "The following graphs already exist in this project. Each entry shows the graph",
+        "name and its current node labels.",
+        "",
+        existingGraphSummary,
+        "",
+        "When decomposing the source document:",
+        "1. If a proposed page's concept is related to nodes in an existing graph, assign",
+        "   it to that graph (set `graph: <name>` in frontmatter) and link it to the",
+        "   relevant existing nodes using [[ExistingNode|RELATION_TYPE]].",
+        "2. Only create a new graph name when the concept belongs to a domain not covered",
+        "   by any existing graph. Choose a concise, descriptive name in English.",
+        "3. A page may belong to at most one graph (one `graph:` field). If a concept",
+        "   spans multiple graphs, prefer the most closely related one.",
+      ].join("\n")
+    : ""
+
   return [
     "You are a knowledge-base decomposer. Read the raw source document and",
     "decide how to split it into logical pages under `db/`.",
@@ -1000,6 +1043,8 @@ export function buildAnalysisPrompt(
     "Be concrete: 'the source has a section on dungeon A entry rules → it",
     "decomposes to db/world/dungeons/dungeon_a/entry_rules.md' beats vague",
     "categorical hand-waving.",
+    "",
+    graphSummarySection,
     "",
     dbIndex ? `## Current db/ index (pages that already exist)\n\n${dbIndex}` : "## Current db/ index\n\n(empty — this is the first ingest into this project)",
     "",
@@ -1059,7 +1104,15 @@ export function buildGenerationPrompt(
     "  For markdown sources, the heading path (`## 3. 던전 A — 보상`) is best.",
     "",
     "Other content rules:",
-    "- Use `[[wikilink]]` for cross-references to other db/ pages.",
+    "- Express relationships between concepts as `[[TargetPage|RELATION_TYPE]]`.",
+    "- RELATION_TYPE must be an uppercase snake_case verb (e.g. REQUIRES, PART_OF).",
+    "- Within each graph, use at most 4 distinct relation types total.",
+    "  Reuse the same type across FILE blocks rather than inventing new ones.",
+    "- Plain `[[TargetPage]]` (no type) is allowed only for weak associative links",
+    "  that carry no meaningful directional semantics.",
+    "- You may link to nodes in other existing graphs using their page id.",
+    "  If no graph-policy relation types are configured, default to:",
+    "  REQUIRES, PART_OF, RELATED_TO, LEADS_TO.",
     "- Do NOT generate index, overview, or log pages — those aren't part of",
     "  the Stage 3 pipeline.",
     "- Do NOT invent content that isn't in the source. If a section is too",
@@ -1120,6 +1173,22 @@ export function buildGenerationPrompt(
     "",
     languageRule(sourceContent),
   ].filter(Boolean).join("\n")
+}
+
+function buildExistingGraphSummary(nodes: GraphNode[]): string {
+  const byGraph = new Map<string, string[]>()
+  for (const n of nodes) {
+    const g = n.graph || "main"
+    const list = byGraph.get(g) ?? []
+    list.push(n.label)
+    byGraph.set(g, list)
+  }
+  if (byGraph.size === 0) return ""
+  return Array.from(byGraph.entries())
+    .map(([g, labels]) =>
+      `- ${g}: ${labels.slice(0, 10).join(", ")}${labels.length > 10 ? ` … (+${labels.length - 10} more)` : ""}`,
+    )
+    .join("\n")
 }
 
 function getStore() {

@@ -176,8 +176,21 @@ function fileNameToId(fileName: string): string {
   return fileName.replace(/\.md$/, "")
 }
 
+export async function listDbFiles(projectPath: string): Promise<FileNode[]> {
+  const dbRoot = `${normalizePath(projectPath)}/db`
+  let tree: FileNode[]
+  try {
+    tree = await listDirectory(dbRoot)
+  } catch {
+    return []
+  }
+  return flattenMdFiles(tree)
+}
+
 export async function buildWikiGraph(
   projectPath: string,
+  onProgress?: (message: string) => void,
+  allowedPaths?: Set<string>,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; communities: CommunityInfo[] }> {
   const dbRoot = `${normalizePath(projectPath)}/db`
 
@@ -188,7 +201,10 @@ export async function buildWikiGraph(
     return { nodes: [], edges: [], communities: [] }
   }
 
-  const mdFiles = flattenMdFiles(tree)
+  const allFiles = flattenMdFiles(tree)
+  const mdFiles = allowedPaths
+    ? allFiles.filter((f) => allowedPaths.has(f.path))
+    : allFiles
   if (mdFiles.length === 0) {
     return { nodes: [], edges: [], communities: [] }
   }
@@ -207,7 +223,12 @@ export async function buildWikiGraph(
     }
   >()
 
-  for (const file of mdFiles) {
+  const BATCH = 50
+  for (let i = 0; i < mdFiles.length; i++) {
+    const file = mdFiles[i]
+    if (i % BATCH === 0) {
+      onProgress?.(`Reading files... ${i}/${mdFiles.length}`)
+    }
     const id = fileNameToId(file.name)
     let content = ""
     try {
@@ -227,6 +248,7 @@ export async function buildWikiGraph(
       links: extractWikilinks(content),
     })
   }
+  onProgress?.(`Reading files... ${mdFiles.length}/${mdFiles.length}`)
 
   // Filter out query nodes (research results, saved chat answers) — they are
   // intermediate artifacts, not knowledge structure. The entities/concepts

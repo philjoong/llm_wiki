@@ -62,16 +62,19 @@ VERB_NOUN   (대문자, 언더스코어 구분)
 | Graph | 추천 Edge Types |
 |---|---|
 | `ui_graph` | `NAVIGATES_TO`, `CONTAINS`, `TRIGGERS` |
-| `skill_graph` | `UPGRADES_TO`, `REQUIRES`, `MODIFIES` |
-| `enemy_graph` | `TARGETS`, `SPAWNS`, `WEAK_AGAINST` |
-| `server_movement_graph` | `CONNECTS_TO`, `REQUIRES_ITEM`, `HAS_LEVEL_LIMIT` |
-| `item_graph` | `CRAFTS_INTO`, `REQUIRES`, `ENHANCES` |
+| `skill_upgrade_graph` | `UPGRADES_TO`, `BRANCHES_INTO`, `UNLOCKS`, `PROMOTES_TO` |
+| `skill_synergy_graph` | `SYNERGIZES_WITH`, `COMBOS_WITH`, `REDUCES_CD`, `BOOSTS` |
+| `skill_scaling_graph` | `SCALES_WITH`, `REQUIRES_STAT`, `CONVERTS_TO`, `CAPPED_BY` |
+| `skill_tag_graph` | `HAS_TAG`, `ELEMENT_OF`, `WEAPON_TYPE`, `CATEGORY_OF` |
+| `enemy_tactic_graph` | `USES_SKILL`, `TARGETS`, `FLEES_AT`, `PHASES_INTO` |
+| `item_set_graph` | `PART_OF_SET`, `SYNERGIZES_WITH`, `REQUIRED_FOR`, `EQUIPPED_BY` |
+| `stat_relation_graph` | `INFLUENCES`, `DERIVED_FROM`, `CAPS`, `AUGMENTS` |
+| `system_loop_graph` | `FEEDS_INTO`, `PROVIDES_RESOURCE_FOR`, `GATED_BY`, `CONSUMES` |
+| `system_logic_graph` | `OVERRIDES`, `TRIGGERS`, `BLOCKS`, `REQUIRES` |
 | `quest_graph` | `NEXT`, `REQUIRES`, `UNLOCKS` |
-| `dialogue_graph` | `LEADS_TO`, `CONDITIONAL`, `ENDS` |
 | `economy_graph` | `GENERATES`, `CONSUMES`, `EXCHANGES` |
 | `faction_graph` | `ALLY`, `ENEMY`, `NEUTRAL` |
 | `event_graph` | `TRIGGERS`, `CONDITIONAL`, `CHAINED_TO` |
-| `ai_behavior_graph` | `TRANSITIONS_TO`, `CONDITION`, `ACTION` |
 | `progression_graph` | `LEVELS_TO`, `UNLOCKS`, `REQUIRES_XP` |
 
 ---

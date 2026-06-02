@@ -1,19 +1,37 @@
+import { invoke } from "@tauri-apps/api/core"
 import { buildWikiGraph, type GraphNode, type GraphEdge } from "./wiki-graph"
 import { createGraphDb, queryGraphDb, listGraphDb, deleteGraphDb } from "@/commands/graph-db"
 import { useReviewStore } from "@/stores/review-store"
 import { detectSchemaDrift } from "./schema-validation"
 
+function debug(msg: string) {
+  console.log(`[graph-sync] ${msg}`)
+  invoke("app_debug", { message: `[graph-sync] ${msg}` }).catch(() => {})
+}
+
 /**
  * Synchronize the local Markdown-based graph with FalkorDB.
- * Each node and edge is routed to one or more managed graphs based on 
+ * Each node and edge is routed to one or more managed graphs based on
  * the frontmatter `graph:` field.
+ * Returns a summary string (e.g. "5 nodes, 3 edges synced to main") for logging.
  */
-export async function syncGraphToFalkorDb(projectPath: string, projectName: string): Promise<void> {
-  const { nodes, edges } = await buildWikiGraph(projectPath)
-  if (nodes.length === 0) return
+export async function syncGraphToFalkorDb(
+  projectPath: string,
+  projectName: string,
+  onProgress?: (message: string) => void,
+  allowedPaths?: Set<string>,
+): Promise<string> {
+  const { nodes, edges } = await buildWikiGraph(projectPath, onProgress, allowedPaths)
+  debug(`buildWikiGraph done: ${nodes.length} nodes, ${edges.length} edges`)
+  if (nodes.length === 0) {
+    debug("0 nodes — nothing to sync")
+    return "0 nodes (nothing to sync)"
+  }
 
+  onProgress?.("Validating schema...")
   // 0. Schema Validation
   const proposals = await detectSchemaDrift(projectPath, projectName, nodes, edges)
+  debug(`detectSchemaDrift: ${proposals.length} proposals — [${proposals.map(p => p.name).join(", ")}]`)
   if (proposals.length > 0) {
     const reviewItems = proposals.map(p => ({
       type: "schema" as const,
@@ -43,7 +61,11 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
     return !pendingTypeNames.has(type) && !forbiddenTypeNames.has(type)
   })
 
-  if (filteredNodes.length === 0) return
+  debug(`after schema filter: ${filteredNodes.length} nodes, ${filteredEdges.length} edges`)
+  if (filteredNodes.length === 0) {
+    debug("0 nodes after schema filtering — all types pending approval or forbidden")
+    return "0 nodes after schema filtering (nothing to sync)"
+  }
 
   // 1. Group nodes by their assigned graph
   const graphToNodes = new Map<string, GraphNode[]>()
@@ -69,34 +91,46 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
 
   const managedGraphs = Array.from(new Set([...graphToNodes.keys(), ...graphToEdges.keys()]))
 
+  const REPORT_EVERY = 20
+
+  debug(`graphs to sync: [${managedGraphs.join(", ")}]`)
+
   // 3. For each graph, ensure it exists and sync data
   for (const gName of managedGraphs) {
-    // Ensure graph exists (creation is idempotent in the backend usually, 
-    // but here we might want to clear it first or just MERGE)
-    // For now, we use MERGE for idempotency without full wipe.
+    debug(`[${gName}] creating graph...`)
     await createGraphDb(projectName, gName)
 
     const nodesInGraph = graphToNodes.get(gName) ?? []
     const edgesInGraph = graphToEdges.get(gName) ?? []
 
     // Sync Nodes
-    for (const node of nodesInGraph) {
+    for (let i = 0; i < nodesInGraph.length; i++) {
+      if (i % REPORT_EVERY === 0) {
+        onProgress?.(`[${gName}] Syncing nodes... ${i}/${nodesInGraph.length}`)
+      }
+      const node = nodesInGraph[i]
       const safeLabel = node.label.replace(/'/g, "\\'")
       const safeId = node.id.replace(/'/g, "\\'")
       const safeType = node.type.replace(/'/g, "\\'")
       const safePath = node.path.replace(/\\/g, "/").replace(/'/g, "\\'")
       const cypherSources = `[${node.sources.map(s => `'${s.replace(/'/g, "\\'")}'`).join(", ")}]`
-      
+
       const cypher = `MERGE (n:Page {id: '${safeId}'}) SET n.label = '${safeLabel}', n.type = '${safeType}', n.path = '${safePath}', n.sources = ${cypherSources}`
       try {
         await queryGraphDb(projectName, gName, cypher)
       } catch (err) {
-        console.error(`[graph-sync] Failed to sync node ${node.id} to ${gName}:`, err)
+        debug(`[${gName}] ERROR syncing node ${node.id}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    debug(`[${gName}] nodes done (${nodesInGraph.length})`)
+    onProgress?.(`[${gName}] Nodes done (${nodesInGraph.length}). Syncing edges...`)
 
     // Sync Edges
-    for (const edge of edgesInGraph) {
+    for (let i = 0; i < edgesInGraph.length; i++) {
+      if (i % REPORT_EVERY === 0 && edgesInGraph.length > REPORT_EVERY) {
+        onProgress?.(`[${gName}] Syncing edges... ${i}/${edgesInGraph.length}`)
+      }
+      const edge = edgesInGraph[i]
       const type = (edge.type || "LINKS_TO").toUpperCase().replace(/[^A-Z0-9_]/g, "_")
       const safeSource = edge.source.replace(/'/g, "\\'")
       const safeTarget = edge.target.replace(/'/g, "\\'")
@@ -119,10 +153,16 @@ export async function syncGraphToFalkorDb(projectPath: string, projectName: stri
       try {
         await queryGraphDb(projectName, gName, cypher)
       } catch (err) {
-        console.error(`[graph-sync] Failed to sync edge ${edge.source}->${edge.target} to ${gName}:`, err)
+        debug(`[${gName}] ERROR syncing edge ${edge.source}->${edge.target}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    debug(`[${gName}] done — ${nodesInGraph.length} nodes, ${edgesInGraph.length} edges`)
+    onProgress?.(`[${gName}] Done — ${nodesInGraph.length} nodes, ${edgesInGraph.length} edges`)
   }
+
+  const summary = `${filteredNodes.length} nodes, ${filteredEdges.length} edges synced to [${managedGraphs.join(", ")}]`
+  debug(summary)
+  return summary
 }
 
 /**

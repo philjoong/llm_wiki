@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, FolderOpen, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History, Network, TrendingUp,
+  FileText, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History, Network, TrendingUp, DatabaseZap,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -9,12 +9,14 @@ import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
 import logoImg from "@/assets/logo.jpg"
 import type { WikiState } from "@/stores/wiki-store"
+import { open } from "@tauri-apps/plugin-dialog"
+import { enqueueIngest } from "@/lib/ingest-queue"
+import { normalizePath } from "@/lib/path-utils"
 
 type NavView = WikiState["activeView"]
 
 const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = [
   { view: "wiki", icon: FileText, labelKey: "nav.wiki" },
-  { view: "sources", icon: FolderOpen, labelKey: "nav.sources" },
   { view: "graph", icon: Network, labelKey: "nav.graph" },
   { view: "lint", icon: ClipboardCheck, labelKey: "nav.lint" },
   { view: "review", icon: ClipboardList, labelKey: "nav.review" },
@@ -32,6 +34,34 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const pendingCount = useReviewStore((s) => s.items.filter((i) => !i.resolved).length)
   const updateBannerVisible = useUpdateStore((s) => shouldShowUpdateBanner(s))
+  const project = useWikiStore((s) => s.project)
+  const [injecting, setInjecting] = useState(false)
+
+  async function handleInject() {
+    if (!project || injecting) return
+    const pp = normalizePath(project.path)
+    const selected = await open({
+      multiple: true,
+      defaultPath: `${pp}/raw/sources`,
+      title: t("fileTree.injectDialogTitle"),
+      filters: [{ name: "All Files", extensions: ["*"] }],
+    })
+    if (!selected || selected.length === 0) return
+    const paths = Array.isArray(selected) ? selected : [selected]
+    setInjecting(true)
+    try {
+      for (const filePath of paths) {
+        const rel = filePath.startsWith(pp)
+          ? filePath.slice(pp.length).replace(/^[\\/]/, "")
+          : filePath
+        await enqueueIngest(project.id, rel)
+      }
+    } catch (err) {
+      console.error("Failed to enqueue ingest:", err)
+    } finally {
+      setInjecting(false)
+    }
+  }
 
   // Daemon health check
   const [daemonStatus, setDaemonStatus] = useState<string>("starting")
@@ -87,8 +117,19 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             </Tooltip>
           ))}
         </div>
-        {/* Bottom: daemon status + settings + switch project */}
+        {/* Bottom: inject + daemon status + settings + switch project */}
         <div className="flex flex-col items-center gap-1 pb-1">
+          {project && (
+            <Tooltip>
+              <TooltipTrigger
+                onClick={handleInject}
+                className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground ${injecting ? "animate-pulse" : ""}`}
+              >
+                <DatabaseZap className="h-5 w-5" />
+              </TooltipTrigger>
+              <TooltipContent side="right">{t("fileTree.inject")}</TooltipContent>
+            </Tooltip>
+          )}
           {/* Daemon status indicator */}
           <Tooltip>
             <TooltipTrigger className="flex h-6 w-6 items-center justify-center">

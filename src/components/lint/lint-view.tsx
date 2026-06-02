@@ -14,6 +14,7 @@ import {
   Network,
   CircleDashed,
 } from "lucide-react"
+import { confirm } from "@tauri-apps/plugin-dialog"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
@@ -182,7 +183,7 @@ export function LintView() {
     if (!project) return
     const pp = normalizePath(project.path)
     const pagePath = `${pp}/db/${result.page}`
-    const confirmed = window.confirm(`Delete orphan page "${result.page}"?`)
+    const confirmed = await confirm(`Delete orphan page "${result.page}"?`, { title: "Delete page", kind: "warning" })
     if (!confirmed) return
 
     try {

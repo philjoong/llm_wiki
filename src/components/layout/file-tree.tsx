@@ -1,9 +1,10 @@
 import { useState } from "react"
-import { ChevronRight, ChevronDown, File, Folder } from "lucide-react"
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
+import { openPath } from "@tauri-apps/plugin-opener"
 
 function TreeNode({ node, depth }: { node: FileNode; depth: number }) {
   const [expanded, setExpanded] = useState(depth < 1)
@@ -68,8 +69,15 @@ export function FileTree() {
   return (
     <ScrollArea className="h-full min-w-0 overflow-hidden">
       <div className="p-2">
-        <div className="mb-2 px-2 text-xs font-semibold uppercase text-muted-foreground">
-          {project.name}
+        <div className="mb-2 flex items-center justify-between px-2">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">{project.name}</span>
+          <button
+            onClick={() => openPath(project.path)}
+            title={t("fileTree.openInExplorer")}
+            className="text-muted-foreground hover:text-accent-foreground"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+          </button>
         </div>
         {fileTree.map((node) => (
           <TreeNode key={node.path} node={node} depth={0} />

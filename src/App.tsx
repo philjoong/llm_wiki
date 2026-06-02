@@ -328,6 +328,15 @@ function App() {
       const branch = useWikiStore.getState().selectedBranch || "main"
       // Attempt to pull from origin. Fail silently if remote is not set up yet.
       try {
+        const { gitRemoteAdd: ensureRemote } = await import("@/commands/git")
+        const repoBaseUrl = import.meta.env.VITE_GIT_REPO_URL || ""
+        const gitToken = import.meta.env.VITE_GIT_TOKEN
+        if (repoBaseUrl) {
+          const remoteUrl = gitToken
+            ? `https://oauth2:${encodeURIComponent(gitToken)}@${repoBaseUrl}`
+            : `https://${repoBaseUrl}`
+          await ensureRemote(proj.path, "origin", remoteUrl)
+        }
         debug("project-open: before gitPull", { remote: "origin", branch })
         await gitPull(proj.path, "origin", branch)
         debug("project-open: after gitPull")
@@ -414,25 +423,34 @@ function App() {
     if (!project) return
     const { exportGraphDb } = await import("@/commands/graph-db")
     const { writeFile } = await import("@/commands/fs")
-    const { gitCommit, gitPush } = await import("@/commands/git")
+    const { gitCommit, gitPush, gitRemoteAdd } = await import("@/commands/git")
     const { vcDbSaveSnapshot } = await import("@/commands/vc-db")
-    
+
     // 1. Export graph to JSON
     const graphData = await exportGraphDb(project.name, "main")
     const graphJson = JSON.stringify(graphData, null, 2)
-    
+
     // 2. Write to graph.json
     await writeFile(`${project.path}/graph.json`, graphJson)
-    
+
     // 3. Commit graph.json
     const commitRes = await gitCommit(project.path, "sync: update graph snapshot", ["graph.json"])
-    
+
     // 4. Save to SQLite if committed
     if (commitRes.committed && commitRes.commitHash) {
       await vcDbSaveSnapshot(project.path, commitRes.commitHash, graphJson)
     }
-    
-    // 5. Push to remote
+
+    // 5. Ensure remote origin is registered (handles case where project creation
+    //    failed mid-way and gitRemoteAdd was never called or succeeded).
+    const repoBaseUrl = import.meta.env.VITE_GIT_REPO_URL || ""
+    const gitToken = import.meta.env.VITE_GIT_TOKEN
+    const remoteUrl = gitToken
+      ? `https://oauth2:${encodeURIComponent(gitToken)}@${repoBaseUrl}`
+      : `https://${repoBaseUrl}`
+    await gitRemoteAdd(project.path, "origin", remoteUrl)
+
+    // 6. Push to remote — git push -u creates the branch on remote if absent
     const branch = useWikiStore.getState().selectedBranch || "main"
     await gitPush(project.path, "origin", branch)
   }

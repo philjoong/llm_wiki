@@ -90,7 +90,7 @@ interface WikiState {
   selectedFile: string | null
   fileContent: string
   chatExpanded: boolean
-  activeView: "wiki" | "sources" | "graph" | "lint" | "review" | "promotion" | "history" | "settings"
+  activeView: "wiki" | "graph" | "lint" | "review" | "promotion" | "history" | "settings"
   llmConfig: LlmConfig
   /** Per-provider-preset stored overrides (API key, model, endpoint, …). */
   providerConfigs: ProviderConfigs

@@ -1,7 +1,6 @@
 import { useWikiStore } from "@/stores/wiki-store"
 import { ChatPanel } from "@/components/chat/chat-panel"
 import { SettingsView } from "@/components/settings/settings-view"
-import { SourcesView } from "@/components/sources/sources-view"
 import { ReviewView } from "@/components/review/review-view"
 import { LintView } from "@/components/lint/lint-view"
 import { GraphView } from "@/components/graph/graph-view"
@@ -14,8 +13,6 @@ export function ContentArea() {
   switch (activeView) {
     case "settings":
       return <SettingsView />
-    case "sources":
-      return <SourcesView />
     case "review":
       return <ReviewView />
     case "promotion":

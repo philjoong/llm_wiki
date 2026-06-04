@@ -28,8 +28,6 @@ export async function deleteGraphDb(projectName: string, graphName: string): Pro
 export async function listGraphDb(projectName: string): Promise<string[]> {
   const allGraphs = await invoke<string[]>("graph_db_list", { url: await getUrl() })
   const prefix = `${projectName}___`
-  
-  // Filter only graphs belonging to this project and remove the prefix for UI display
   return allGraphs
     .filter((name) => name.startsWith(prefix))
     .map((name) => name.slice(prefix.length))

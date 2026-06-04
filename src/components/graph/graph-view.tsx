@@ -1,13 +1,11 @@
 import { useEffect, useCallback, useState, useRef } from "react"
-import { Network, RefreshCw, X, Info, DatabaseZap, FileText } from "lucide-react"
+import { Network, RefreshCw, X, Info, FileText } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
-import { readFile } from "@/commands/fs"
+import { readFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { loadGraphPolicy, type GraphPolicy } from "@/lib/graph-policy"
-import { queryGraphDb, findRelatedGraphs } from "@/commands/graph-db"
-import { syncGraphToFalkorDb } from "@/lib/graph-sync"
+import { queryGraphDb, findRelatedGraphs, listGraphDb } from "@/commands/graph-db"
 import { listDbFiles } from "@/lib/wiki-graph"
 import type { FileNode } from "@/types/wiki"
 import { FalkorCanvas } from "./falkor-canvas"
@@ -15,6 +13,25 @@ import { parseFalkorQueryResult, assignColors, type CanvasData } from "@/lib/fal
 import { WikiEditor } from "@/components/editor/wiki-editor"
 
 type TabId = "knowledge" | "files"
+
+function nonEmptyGraphsCacheKey(projectName: string): string {
+  return `llm-wiki:non-empty-graphs:${projectName}`
+}
+
+function loadCachedGraphs(projectName: string): string[] {
+  try {
+    const raw = localStorage.getItem(nonEmptyGraphsCacheKey(projectName))
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch {
+    return []
+  }
+}
+
+function saveCachedGraphs(projectName: string, graphs: string[]): void {
+  try {
+    localStorage.setItem(nonEmptyGraphsCacheKey(projectName), JSON.stringify(graphs))
+  } catch {}
+}
 
 function extractFrontmatterGraph(content: string): string | null {
   const match = content.match(/^---\n[\s\S]*?^graph:\s*["']?(.+?)["']?\s*$/m)
@@ -32,27 +49,24 @@ export function GraphView() {
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const selectedGraph = useWikiStore((s) => s.selectedGraph)
   const setSelectedGraph = useWikiStore((s) => s.setSelectedGraph)
+  const setFileTree = useWikiStore((s) => s.setFileTree)
+  const bumpDataVersion = useWikiStore((s) => s.bumpDataVersion)
 
   const [activeTab, setActiveTab] = useState<TabId>("knowledge")
 
   // Graph data & state
   const [graphData, setGraphData] = useState<CanvasData>({ nodes: [], links: [] })
   const [loading, setLoading] = useState(false)
-  const [rebuilding, setRebuilding] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedElement, setSelectedElement] = useState<any>(null)
   const lastLoadedVersion = useRef(-1)
 
-  // Policy state
-  const [policy, setPolicy] = useState<GraphPolicy>({
-    relationTypes: [],
-    managedGraphs: [],
-    forbiddenTypes: [],
-    graphRelationTypes: {},
-  })
+  // Live graphs from FalkorDB (only graphs that actually have nodes)
+  const [liveGraphs, setLiveGraphs] = useState<string[]>(() =>
+    project ? loadCachedGraphs(project.name) : []
+  )
 
-  // Derived from policy
-  const managedGraphs = policy.managedGraphs
+  const allGraphs = liveGraphs
 
   // Files tab state
   const [dbFiles, setDbFiles] = useState<FileNode[]>([])
@@ -62,8 +76,6 @@ export function GraphView() {
   const [relatedGraphs, setRelatedGraphs] = useState<string[]>([])
   const [loadingRelated, setLoadingRelated] = useState(false)
   const [selectedRelatedGraph, setSelectedRelatedGraph] = useState<string | null>(null)
-
-  const allGraphs = ["main", ...managedGraphs.filter((g) => g !== "main")]
 
   const loadGraph = useCallback(async (graphName?: string) => {
     if (!project) return
@@ -115,29 +127,76 @@ export function GraphView() {
     setSelectedElement(link)
   }, [])
 
-  useEffect(() => {
+  const refreshLiveGraphs = useCallback(async (forceAll = false) => {
     if (!project) return
-    void (async () => {
-      const loaded = await loadGraphPolicy(normalizePath(project.path))
-      setPolicy(loaded)
-    })()
+    try {
+      const allGraphs = await listGraphDb(project.name, false)
+      const cached = forceAll ? [] : loadCachedGraphs(project.name)
+      const cachedSet = new Set(cached)
+
+      // Start with cached non-empty graphs that still exist
+      const stillExist = cached.filter((g) => allGraphs.includes(g))
+      if (stillExist.length !== cached.length) {
+        // Some cached graphs were deleted — update cache immediately
+        saveCachedGraphs(project.name, stillExist)
+        setLiveGraphs(stillExist)
+      } else if (forceAll) {
+        setLiveGraphs([])
+      } else {
+        setLiveGraphs(stillExist)
+      }
+
+      // Check uncached graphs in background and add them as found
+      const unchecked = allGraphs.filter((g) => !cachedSet.has(g))
+      if (unchecked.length === 0) return
+
+      const results = await Promise.all(
+        unchecked.map(async (g) => {
+          try {
+            const res = await queryGraphDb(project.name, g, "MATCH (n) RETURN n LIMIT 1")
+            const parsed = parseFalkorQueryResult(res)
+            return parsed.nodes.length > 0 ? g : null
+          } catch {
+            return null
+          }
+        })
+      )
+      const newNonEmpty = results.filter((g): g is string => g !== null)
+      if (newNonEmpty.length > 0) {
+        setLiveGraphs((prev) => {
+          const merged = [...new Set([...prev, ...newNonEmpty])]
+          saveCachedGraphs(project.name, merged)
+          return merged
+        })
+      }
+    } catch {
+      setLiveGraphs(loadCachedGraphs(project.name))
+    }
   }, [project])
 
-  const rebuildGraph = useCallback(async () => {
-    if (!project) return
-    setRebuilding(true)
-    try {
-      await syncGraphToFalkorDb(
-        normalizePath(project.path),
-        project.name,
-      )
-      await loadGraph()
-    } catch (err) {
-      setError(`Rebuild failed: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setRebuilding(false)
+  // Keep selectedGraph valid whenever liveGraphs changes
+  useEffect(() => {
+    if (liveGraphs.length > 0 && !liveGraphs.includes(selectedGraph)) {
+      setSelectedGraph(liveGraphs[0])
     }
-  }, [project, loadGraph])
+  }, [liveGraphs, selectedGraph, setSelectedGraph])
+
+  useEffect(() => {
+    void refreshLiveGraphs()
+  }, [project, dataVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFullRefresh = useCallback(async () => {
+    if (!project) return
+    try {
+      const tree = await listDirectory(normalizePath(project.path))
+      setFileTree(tree)
+    } catch (err) {
+      console.error("Failed to refresh file tree:", err)
+    }
+    bumpDataVersion()
+    await refreshLiveGraphs(true)
+    await loadGraph()
+  }, [project, setFileTree, bumpDataVersion, refreshLiveGraphs, loadGraph])
 
   // Files tab handlers
   const loadDbFiles = useCallback(async () => {
@@ -214,7 +273,7 @@ export function GraphView() {
   return (
     <div className="flex h-full flex-col">
       {/* Tab bar */}
-      <div className="flex shrink-0 border-b">
+      <div className="flex shrink-0 items-center border-b">
         {(["knowledge", "files"] as TabId[]).map((tab) => (
           <button
             key={tab}
@@ -228,34 +287,29 @@ export function GraphView() {
             {tab === "knowledge" ? "Knowledge" : "Files"}
           </button>
         ))}
+        <div className="ml-auto pr-2">
+          <Button variant="ghost" size="sm" onClick={() => { void handleFullRefresh() }} disabled={loading} className="h-7 gap-1 text-xs" title="Refresh">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
       </div>
 
       {activeTab === "knowledge" ? (
         <div className="flex h-full min-h-0 flex-col">
-          {/* Graph selector + actions */}
-          <div className="flex shrink-0 items-center justify-between border-b px-4 py-2">
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedGraph}
-                onChange={(e) => setSelectedGraph(e.target.value)}
-                className="h-7 rounded border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                {allGraphs.map((g) => (
-                  <option key={g} value={g}>{g}</option>
-                ))}
-              </select>
-              <span className="text-xs text-muted-foreground">
-                {graphData.nodes.length} nodes - {graphData.links.length} links
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="sm" onClick={() => { void rebuildGraph() }} disabled={rebuilding} className="h-7 gap-1 text-xs" title="Rebuild graph">
-                <DatabaseZap className={`h-3.5 w-3.5 ${rebuilding ? "animate-pulse" : ""}`} />
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => loadGraph()} className="h-7 gap-1 text-xs">
-                <RefreshCw className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+          {/* Graph selector + stats */}
+          <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
+            <select
+              value={selectedGraph}
+              onChange={(e) => setSelectedGraph(e.target.value)}
+              className="h-7 rounded border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {allGraphs.map((g) => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
+            <span className="text-xs text-muted-foreground">
+              {graphData.nodes.length} nodes - {graphData.links.length} links
+            </span>
           </div>
 
           {/* Canvas */}

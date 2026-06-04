@@ -14,7 +14,6 @@ export type Provider =
   | "google"
   | "ollama"
   | "custom"
-  | "minimax"
   | "claude-code"
   | "codex-cli"
   | "gemini-cli"
@@ -247,8 +246,6 @@ export const LLM_PRESETS: LlmPreset[] = [
   //     "deepseek-ai/deepseek-v3.2",
   //     "moonshotai/kimi-k2.6",
   //     "qwen/qwen3.5-397b-a17b",
-  //     "minimaxai/minimax-m2.7",
-  //     "minimaxai/minimax-m2.5",
   //     "z-ai/glm5",
   //     "openai/gpt-oss-120b",
   //     // Mistral family
@@ -320,30 +317,6 @@ export const LLM_PRESETS: LlmPreset[] = [
   //   suggestedContextSize: 128000,
   // },
   // {
-  //   id: "minimax-global",
-  //   label: "MiniMax (Global)",
-  //   hint: "api.minimax.io/anthropic",
-  //   provider: "custom",
-  //   baseUrl: "https://api.minimax.io/anthropic",
-  //   defaultModel: "MiniMax-M2.7",
-  //   apiMode: "anthropic_messages",
-  //   // Current-gen only. M2 and M2.1 are legacy and being retired —
-  //   // users who need them can type the id into the custom input.
-  //   suggestedModels: ["MiniMax-M2.7", "MiniMax-M2.5"],
-  //   suggestedContextSize: 200000,
-  // },
-  // {
-  //   id: "minimax-cn",
-  //   label: "MiniMax (中国)",
-  //   hint: "api.minimaxi.com/anthropic",
-  //   provider: "custom",
-  //   baseUrl: "https://api.minimaxi.com/anthropic",
-  //   defaultModel: "MiniMax-M2.7",
-  //   apiMode: "anthropic_messages",
-  //   suggestedModels: ["MiniMax-M2.7", "MiniMax-M2.5"],
-  //   suggestedContextSize: 200000,
-  // },
-  // {
   //   id: "bailian-coding",
   //   label: "阿里百炼 Coding Plan",
   //   hint: "coding.dashscope.aliyuncs.com",
@@ -359,15 +332,12 @@ export const LLM_PRESETS: LlmPreset[] = [
   //   },
   //   // Bailian's subscription-only "Coding Plan" exposes the same model
   //   // catalog on both wires. Key must come from the Bailian console's
-  //   // Coding Plan tab — a regular DashScope key will 401. The
-  //   // Anthropic-compat path uses Bearer auth (see requiresBearerAuth
-  //   // in llm-providers.ts), matching the MiniMax gateway convention.
+  //   // Coding Plan tab — a regular DashScope key will 401.
   //   defaultModel: "qwen3.6-plus",
   //   suggestedModels: [
   //     "qwen3.6-plus",
   //     "kimi-k2.5",
   //     "glm-5",
-  //     "MiniMax-M2.5",
   //     "qwen3.5-plus",
   //     "qwen3-max-2026-01-23",
   //     "qwen3-coder-plus",
@@ -414,7 +384,6 @@ export const LLM_PRESETS: LlmPreset[] = [
   //     "Doubao-Seed-2.0-pro",
   //     "Doubao-Seed-2.0-lite",
   //     "Doubao-Seed-Code",
-  //     "MiniMax-M2.5",
   //     "Kimi-K2.5",
   //     "GLM-4.7",
   //     "DeepSeek-V3",

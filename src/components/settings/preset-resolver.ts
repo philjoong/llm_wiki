@@ -67,9 +67,7 @@ export function resolveConfig(
     }
   }
 
-  // openai / anthropic / google / minimax — use fixed endpoint baked into the
-  // provider dispatch. We still let users override baseUrl via apiKey env if
-  // needed by editing manually, but presets for these don't expose it.
+  // openai / anthropic / google — use fixed endpoint baked into the provider dispatch.
   return {
     provider: preset.provider,
     apiKey,

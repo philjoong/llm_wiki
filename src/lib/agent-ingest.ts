@@ -28,7 +28,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import type { LlmConfig } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { streamClaudeCodeCli } from "./claude-cli-transport"
-import { isSafeIngestPath } from "./ingest"
+import { isSafeIngestPath, chunkSourceContent } from "./ingest"
 import { getFileName, normalizePath } from "./path-utils"
 import { buildGraphPolicyPrompt, loadGraphPolicy } from "./graph-policy"
 import { syncGraphToFalkorDb } from "./graph-sync"
@@ -194,45 +194,54 @@ export async function autoIngestViaAgent(
   ])
   const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
 
-  const systemPrompt = buildAgentIngestPrompt(dbIndex, "", graphPolicyPrompt)
-  const userMessage = [
-    `Source file: ${fileName}${folderContext ? ` (folder: ${folderContext})` : ""}`,
-    "",
-    sourceContent,
-  ].join("\n")
+  const chunks = chunkSourceContent(sourceContent)
+  const allFiles: ParsedAgentFile[] = []
 
-  activity.updateItem(activityId, { detail: "Calling Claude Code (tools disabled)..." })
+  for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+    const chunk = chunks[chunkIdx]
+    const chunkLabel = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length} · ` : ""
 
-  let buffer = ""
-  await new Promise<void>((resolve, reject) => {
-    void streamClaudeCodeCli(
-      llmConfig,
-      [{ role: "user", content: userMessage }],
-      {
-        onToken: (token) => {
-          buffer += token
+    const systemPrompt = buildAgentIngestPrompt(dbIndex, "", graphPolicyPrompt)
+    const userMessage = [
+      `Source file: ${fileName}${folderContext ? ` (folder: ${folderContext})` : ""}${chunks.length > 1 ? ` (section ${chunkIdx + 1} of ${chunks.length})` : ""}`,
+      "",
+      chunk,
+    ].join("\n")
+
+    activity.updateItem(activityId, { detail: `${chunkLabel}Calling Claude Code (tools disabled)...` })
+
+    let buffer = ""
+    await new Promise<void>((resolve, reject) => {
+      void streamClaudeCodeCli(
+        llmConfig,
+        [{ role: "user", content: userMessage }],
+        {
+          onToken: (token) => {
+            buffer += token
+          },
+          onDone: () => resolve(),
+          onError: (err) => reject(err),
         },
-        onDone: () => resolve(),
-        onError: (err) => reject(err),
-      },
-      signal,
-      { disableTools: true, systemPrompt, cwd: pp },
-    ).catch(reject)
-  })
+        signal,
+        { disableTools: true, systemPrompt, cwd: pp },
+      ).catch(reject)
+    })
+
+    let chunkFiles: ParsedAgentFile[]
+    try {
+      chunkFiles = parseAgentIngestResponse(buffer)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      activity.updateItem(activityId, { status: "error", detail: msg })
+      throw err
+    }
+    allFiles.push(...chunkFiles)
+  }
 
   activity.updateItem(activityId, { detail: "Writing files..." })
 
-  let files: ParsedAgentFile[]
-  try {
-    files = parseAgentIngestResponse(buffer)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    activity.updateItem(activityId, { status: "error", detail: msg })
-    throw err
-  }
-
   const writtenPaths: string[] = []
-  for (const { path: rel, content } of files) {
+  for (const { path: rel, content } of allFiles) {
     try {
       await writeFile(`${pp}/${rel}`, content)
       writtenPaths.push(rel)

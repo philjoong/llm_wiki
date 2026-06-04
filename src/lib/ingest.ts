@@ -15,10 +15,9 @@ import { detectLanguage } from "@/lib/detect-language"
 import { formatIngestMessage } from "@/lib/auto-commit"
 import { gitCommit } from "@/commands/git"
 import { parseSourceRefs } from "@/lib/sources-merge"
-import { buildGraphPolicyPrompt, loadGraphPolicy } from "@/lib/graph-policy"
+import { buildGraphPolicyPrompt, loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
+import type { GraphPolicy } from "@/lib/graph-policy"
 import { syncGraphToFalkorDb } from "@/lib/graph-sync"
-import { buildWikiGraph } from "@/lib/wiki-graph"
-import type { GraphNode } from "@/lib/wiki-graph"
 import {
   loadCounterexamples,
   loadRejectionLog,
@@ -371,11 +370,7 @@ async function autoIngestImpl(
     filesWritten: [],
   })
 
-  const [sourceContent, graphPolicy] = await Promise.all([
-    tryReadFile(sp),
-    loadGraphPolicy(pp),
-  ])
-  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
+  const sourceContent = await tryReadFile(sp)
 
   // ── Cache check: skip re-ingest if source content hasn't changed ──
   const cachedFiles = await checkIngestCache(pp, fileName, sourceContent)
@@ -412,16 +407,6 @@ async function autoIngestImpl(
     relevantRejections,
   )
 
-  // Build existing graph summary for analysis prompt so LLM can assign
-  // pages to existing graphs and link to existing nodes.
-  let existingGraphSummary = ""
-  try {
-    const { nodes: existingNodes } = await buildWikiGraph(pp)
-    existingGraphSummary = buildExistingGraphSummary(existingNodes)
-  } catch {
-    // Non-fatal: analysis prompt will just omit the graph context section.
-  }
-
   // Split oversized sources into chunks. Small files run as a single
   // chunk (length 1) — semantically identical to the pre-chunking flow.
   const chunks = chunkSourceContent(sourceContent)
@@ -437,102 +422,139 @@ async function autoIngestImpl(
   // instead of clobbering pages chunk-1 just generated.
   let currentDbIndex = dbIndex
 
+  // graphPolicy is mutable — Stage 2 may register new graphs into it.
+  let graphPolicy = await loadGraphPolicy(pp)
+
   for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
     const chunk = chunks[chunkIdx]
     const chunkLabel = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length} · ` : ""
 
-    // ── Step 1: Analysis (decomposition planner) ─────────────────
-    activity.updateItem(activityId, { detail: `${chunkLabel}Step 1/2: Planning decomposition...` })
+    // ── Stage 1: Decomposition — extract concepts + relations ────────
+    activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1/3: Decomposing document...` })
 
-    let analysis = ""
+    let stage1Raw = ""
 
     await streamChat(
       llmConfig,
       [
-        { role: "system", content: buildAnalysisPrompt(currentDbIndex, chunk, dismissalContext, graphPolicyPrompt, existingGraphSummary) },
-        { role: "user", content: `Analyze this source document and propose db/ paths:\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length} (this is one slice of a larger document; only analyze what's below)` : ""}\n\n---\n\n${chunk}` },
+        { role: "system", content: buildDecompositionPrompt(currentDbIndex, chunk, dismissalContext) },
+        { role: "user", content: `Decompose this source document into concepts with their relationships.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n---\n\n${chunk}` },
       ],
       {
-        onToken: (token) => { analysis += token },
+        onToken: (token) => { stage1Raw += token },
         onDone: () => {},
         onError: (err) => {
-          activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Analysis failed: ${err.message}` })
+          activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Stage 1 failed: ${err.message}` })
         },
       },
       signal,
-      { temperature: 0.1 },
+      { temperature: 0.1, response_format: { type: "json_object" } },
     )
 
-    // A silent `return []` here would look like success to the queue
-    // runner and cause the task to be filter()'d out. Throw instead so
-    // processNext's catch-block path (retry / mark failed) engages.
-    const analysisActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
-    const analysisDebug = `[ingest:analysis] ${chunkLabel}file=${fileName} chars=${analysis.length} status=${analysisActivity?.status ?? "unknown"}`
-    console.log(analysisDebug)
-    invoke("app_debug", { message: analysisDebug }).catch(() => {})
-    if (analysisActivity?.status === "error") {
-      const errMsg = analysisActivity.detail || `${chunkLabel}Analysis stream failed`
-      invoke("app_debug", { message: `[ingest:analysis:ERROR] ${errMsg}` }).catch(() => {})
+    const stage1Activity = useActivityStore.getState().items.find((i) => i.id === activityId)
+    invoke("app_debug", { message: `[ingest:stage1] ${chunkLabel}file=${fileName} chars=${stage1Raw.length}` }).catch(() => {})
+    if (stage1Activity?.status === "error") {
+      const errMsg = stage1Activity.detail || `${chunkLabel}Stage 1 stream failed`
       throw new Error(errMsg)
     }
 
-    // ── Step 2: Generation (FILE blocks under db/) ────────────────
-    activity.updateItem(activityId, { detail: `${chunkLabel}Step 2/2: Generating db/ pages...` })
+    let stage1Sections: Stage1Section[] = []
+    try {
+      const parsed = JSON.parse(stage1Raw)
+      stage1Sections = Array.isArray(parsed) ? parsed : (parsed.sections ?? [])
+    } catch {
+      invoke("app_debug", { message: `[ingest:stage1] JSON parse failed — falling back to empty sections` }).catch(() => {})
+    }
 
-    let generation = ""
+    // ── Stage 2: Graph Assignment — assign concepts to graphs ────────
+    activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2/3: Assigning to graphs...` })
 
-    await streamChat(
-      llmConfig,
-      [
-        { role: "system", content: buildGenerationPrompt(currentDbIndex, fileName, chunk, graphPolicyPrompt) },
+    const MAX_RETRIES = 3
+    let assignments: Stage2Assignment[] = []
+    let retryCount = 0
+    let sectionsToAssign = stage1Sections
+
+    while (retryCount <= MAX_RETRIES) {
+      const currentPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
+      let stage2Raw = ""
+
+      await streamChat(
+        llmConfig,
+        [
+          { role: "system", content: buildGraphAssignmentPrompt(currentPolicyPrompt) },
+          {
+            role: "user",
+            content: retryCount === 0
+              ? `Assign each section below to a graph.\n\n${JSON.stringify(sectionsToAssign, null, 2)}`
+              : `Some assignments failed validation. Re-assign only the sections below.\n\n${JSON.stringify(sectionsToAssign, null, 2)}`,
+          },
+        ],
         {
-          role: "user",
-          content: [
-            `Source document to process: **${fileName}**${chunks.length > 1 ? ` (section ${chunkIdx + 1}/${chunks.length})` : ""}`,
-            "",
-            "The Stage 1 decomposition plan below is CONTEXT. Do NOT echo it as",
-            "prose. Your output must be FILE/REVIEW blocks as specified in the",
-            "system prompt — nothing else.",
-            "",
-            "## Stage 1 Decomposition Plan (context only — do not repeat)",
-            "",
-            analysis,
-            "",
-            chunks.length > 1 ? `## Original Source Content (section ${chunkIdx + 1}/${chunks.length})` : "## Original Source Content",
-            "",
-            chunk,
-            "",
-            "---",
-            "",
-            `Now emit the FILE blocks for the db/ pages derived from **${fileName}**${chunks.length > 1 ? ` (this section only — other sections are processed in separate rounds)` : ""}.`,
-            "Your response MUST begin with `---FILE: db/` as the very first characters.",
-            "No preamble. No analysis prose. Start immediately.",
-          ].join("\n"),
+          onToken: (token) => { stage2Raw += token },
+          onDone: () => {},
+          onError: () => {},
         },
-      ],
-      {
-        onToken: (token) => { generation += token },
-        onDone: () => {},
-        onError: (err) => {
-          activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Generation failed: ${err.message}` })
-        },
-      },
-      signal,
-      { temperature: 0.1, max_tokens: 32000 },
-    )
+        signal,
+        { temperature: 0.1, response_format: { type: "json_object" } },
+      )
 
-    const generationActivity = useActivityStore.getState().items.find((i) => i.id === activityId)
-    const generationPreview = generation.slice(0, 300).replace(/\n/g, "↵")
-    const generationDebug = `[ingest:generation] ${chunkLabel}file=${fileName} chars=${generation.length} status=${generationActivity?.status ?? "unknown"} preview="${generationPreview}"`
-    console.log(generationDebug)
-    invoke("app_debug", { message: generationDebug }).catch(() => {})
-    if (generationActivity?.status === "error") {
-      const errMsg = generationActivity.detail || `${chunkLabel}Generation stream failed`
-      invoke("app_debug", { message: `[ingest:generation:ERROR] ${errMsg}` }).catch(() => {})
-      throw new Error(errMsg)
+      let parsed: Stage2Assignment[] = []
+      try {
+        const obj = JSON.parse(stage2Raw)
+        parsed = Array.isArray(obj) ? obj : (obj.assignments ?? [])
+      } catch {
+        // parse failure — all sections retry
+      }
+
+      // Register new graphs immediately so subsequent validation uses updated policy
+      for (const item of parsed) {
+        if (item.new_graph && item.graph && !graphPolicy.managedGraphs.includes(item.graph)) {
+          const newTypes = Array.isArray(item.graph_relation_types) ? item.graph_relation_types.slice(0, 4) : []
+          graphPolicy = {
+            ...graphPolicy,
+            managedGraphs: [...graphPolicy.managedGraphs, item.graph],
+            graphRelationTypes: { ...graphPolicy.graphRelationTypes, [item.graph]: newTypes },
+          }
+          try {
+            await saveGraphPolicy(pp, graphPolicy)
+          } catch {
+            // non-fatal
+          }
+        }
+      }
+
+      // Merge new assignments (replace previous entry for same concept+graph if retrying)
+      for (const item of parsed) {
+        const idx = assignments.findIndex((a) => a.concept === item.concept && a.graph === item.graph)
+        if (idx >= 0) assignments[idx] = item
+        else assignments.push(item)
+      }
+
+      // Validate — collect failing source_ranges for retry
+      const failures = validateStage2(assignments, graphPolicy)
+      if (failures.length === 0 || retryCount >= MAX_RETRIES) break
+
+      const failingConcepts = new Set(failures.map((f) => f.concept))
+      sectionsToAssign = stage1Sections.filter((s) => {
+        // Match sections whose assigned concepts failed
+        return assignments.some((a) => failingConcepts.has(a.concept) && a.source_range === s.source_range)
+      })
+      if (sectionsToAssign.length === 0) break
+      retryCount++
+      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2/3: Retrying ${failingConcepts.size} concept(s) (attempt ${retryCount}/${MAX_RETRIES})...` })
     }
 
-    // ── Step 3: Write files ───────────────────────────────────────
+    const totalRelations = assignments.reduce((sum, a) => sum + (a.relations?.length ?? 0), 0)
+    const assignmentsWithRelations = assignments.filter(a => (a.relations?.length ?? 0) > 0).length
+    invoke("app_debug", { message: `[ingest:stage2] ${chunkLabel}file=${fileName} assignments=${assignments.length} withRelations=${assignmentsWithRelations} totalRelations=${totalRelations} retries=${retryCount} sample=${JSON.stringify(assignments.slice(0, 2))}` }).catch(() => {})
+
+    // ── Stage 3: Generate FILE blocks from Stage 2 assignments (code, no LLM) ──
+    activity.updateItem(activityId, { detail: `${chunkLabel}Stage 3/3: Writing db/ pages...` })
+
+    const generation = buildFileBlocksFromAssignments(assignments, fileName)
+    invoke("app_debug", { message: `[ingest:stage3] ${chunkLabel}file=${fileName} blocks=${assignments.length} chars=${generation.length}` }).catch(() => {})
+
+    // ── Write files ───────────────────────────────────────────────────
     activity.updateItem(activityId, { detail: `${chunkLabel}Writing files...` })
     const { writtenPaths, warnings: writeWarnings, hardFailures, proposals } = await writeFileBlocks(pp, generation, fileName)
 
@@ -736,7 +758,7 @@ function walk(nodes: FileNode[], prefix: string, out: string[]): void {
  * detectLanguage on the remainder, and returns whether the content is in
  * a language family compatible with the target. This catches cases where
  * the LLM follows the format spec but writes a single page in a wrong
- * language (observed ~once in 5 real-LLM runs on MiniMax-M2.7-highspeed).
+ * language (observed ~once in 5 real-LLM runs on mid-size models).
  */
 function contentMatchesTargetLanguage(content: string, target: string): boolean {
   // Strip frontmatter
@@ -978,12 +1000,181 @@ function parseReviewBlocks(
   return items
 }
 
+/** Stage 1 output: a single meaningful section from the source document. */
+export interface Stage1Section {
+  source_range: string
+  source_text: string
+}
+
+/** Stage 2 output: one assignment mapping a concept to a graph. */
+export interface Stage2Assignment {
+  concept: string
+  page_path: string
+  graph: string
+  relations: Array<{ target: string; type: string }>
+  new_graph: boolean
+  graph_relation_types?: string[]
+  isolated?: boolean
+  source_range?: string
+  source_text?: string
+}
+
+/** Stage 2 validation failure with reason string. */
+interface Stage2Failure {
+  concept: string
+  reason: string
+}
+
 /**
- * Step 1 prompt (Stage 3 rewrite). Decomposition planner.
- *
- * Reads the raw source and proposes a per-section decomposition: which
- * paths under `db/...` does this raw file fan out to, what's the meaning
- * of each piece, and what range in the raw file does it correspond to.
+ * Validate Stage 2 assignments against the current graph policy.
+ * Returns an array of failures (empty = all good).
+ */
+export function validateStage2(assignments: Stage2Assignment[], policy: GraphPolicy): Stage2Failure[] {
+  const failures: Stage2Failure[] = []
+  const seen = new Map<string, Set<string>>() // concept → set of graphs
+
+  for (const item of assignments) {
+    if (!item.concept || !item.page_path || !item.graph) {
+      failures.push({ concept: item.concept ?? "(unknown)", reason: "Missing required field: concept, page_path, or graph" })
+      continue
+    }
+
+    // Duplicate (concept, graph) pair check
+    const graphs = seen.get(item.concept) ?? new Set()
+    if (graphs.has(item.graph)) {
+      failures.push({ concept: item.concept, reason: `Duplicate assignment to graph "${item.graph}"` })
+    }
+    graphs.add(item.graph)
+    seen.set(item.concept, graphs)
+
+    if (item.new_graph) continue // new graphs pass policy checks (they just got registered)
+
+    // Graph must be in managedGraphs
+    if (!policy.managedGraphs.includes(item.graph)) {
+      failures.push({ concept: item.concept, reason: `Graph "${item.graph}" is not in managedGraphs and new_graph is false` })
+      continue
+    }
+
+    // Relation types must be allowed for this graph
+    const allowed = policy.graphRelationTypes[item.graph] ?? policy.relationTypes
+    for (const rel of item.relations ?? []) {
+      if (rel.type && allowed.length > 0 && !allowed.includes(rel.type)) {
+        failures.push({ concept: item.concept, reason: `Relation type "${rel.type}" is not allowed in graph "${item.graph}" (allowed: ${allowed.join(", ")})` })
+      }
+    }
+  }
+
+  return failures
+}
+
+/**
+ * Stage 1 prompt — document decomposition.
+ * Extracts concepts and their raw relations without graph assignment.
+ * Output is JSON: Stage1Concept[].
+ */
+export function buildDecompositionPrompt(
+  dbIndex: string,
+  sourceContent: string = "",
+  dismissalContext: string = "",
+): string {
+  return [
+    "You are a document decomposer. Read the source document and split it into",
+    "meaningful sections — one entry per distinct concept or topic.",
+    "Do NOT extract relations, assign graphs, or decide relation types — that is Stage 2's job.",
+    "",
+    languageRule(sourceContent),
+    "",
+    "## Output format (JSON object — no other text)",
+    "",
+    'Output ONLY a JSON object with a `sections` array (no markdown fences, no prose):',
+    '{',
+    '  "sections": [',
+    '    {',
+    '      "source_range": "## 고블린 전사",',
+    '      "source_text": "<verbatim section text from the document>"',
+    '    }',
+    '  ]',
+    '}',
+    "",
+    "Rules:",
+    "- `source_range`: heading path, sheet+range, or timestamp that locates this section in the source.",
+    "- `source_text`: the verbatim text of that section from the source document. Do NOT summarize or paraphrase.",
+    "- One entry per distinct concept or topic. If a concept spans multiple sections, merge them into one entry.",
+    "- If a section is too thin to be meaningful (e.g. a single line), omit it.",
+    "",
+    dbIndex ? `## Current db/ index\n\n${dbIndex}` : "## Current db/ index\n\n(empty)",
+    "",
+    dismissalContext,
+  ].filter(Boolean).join("\n")
+}
+
+/**
+ * Stage 2 prompt — graph assignment.
+ * Takes Stage 1 concepts and assigns each relation cluster to a graph.
+ * May split one concept across multiple graphs if relation types differ.
+ * Output is JSON: Stage2Assignment[].
+ */
+export function buildGraphAssignmentPrompt(graphPolicyPrompt: string): string {
+  return [
+    "You are a graph assignment engine. You receive a list of concepts with their",
+    "sections (Stage 1 output) and must produce one or more graph assignments per section.",
+    "Each section has `source_range` and `source_text` — read `source_text` to understand",
+    "the concept and its relationships, then decide the graph and relation types.",
+    "",
+    "## Rules",
+    "",
+    "1. From each section's `source_text`, identify the concept and any relationships to other concepts.",
+    "2. A single section may produce multiple assignments if its relationships belong to different domains.",
+    "   Each split gets a different `page_path` suffix (e.g. `goblin-warrior-weakness.md`, `goblin-warrior-tactic.md`).",
+    "3. For each relationship, decide in this order:",
+    "   a. Which existing graph's allowed relation types can express it?",
+    "   b. Assign to that graph and pick the most fitting allowed type.",
+    "   c. If no existing graph fits, set `new_graph: true` and define `graph_relation_types` (max 4 types).",
+    "4. Relation types must ONLY come from the assigned graph's allowed types (or `graph_relation_types` for new graphs).",
+    "5. If a section has no meaningful relationships, set `isolated: true`.",
+    "",
+    "## Output format (JSON object — no other text)",
+    "",
+    'Output ONLY a JSON object with an `assignments` array, no prose:',
+    '{',
+    '  "assignments": [',
+    '    {',
+    '      "concept": "고블린 전사",',
+    '      "page_path": "db/enemies/goblin-warrior-weakness.md",',
+    '      "graph": "combat_weakness_graph",',
+    '      "relations": [{ "target": "불", "type": "WEAK_AGAINST" }],',
+    '      "new_graph": false,',
+    '      "source_range": "## 고블린 전사",',
+    '      "source_text": "<copy the source_text from the input section verbatim>"',
+    '    }',
+    '  ]',
+    '}',
+    "",
+    "For a new graph, add `graph_relation_types` to the assignment object:",
+    '{',
+    '  "assignments": [',
+    '    {',
+    '      "concept": "...",',
+    '      "page_path": "db/...",',
+    '      "graph": "new_graph_name",',
+    '      "relations": [...],',
+    '      "new_graph": true,',
+    '      "graph_relation_types": ["TYPE_A", "TYPE_B", "TYPE_C", "TYPE_D"],',
+    '      "source_range": "...",',
+    '      "source_text": "<copy the source_text from the input section verbatim>"',
+    '    }',
+    '  ]',
+    '}',
+    "",
+    "IMPORTANT: Always copy `source_text` verbatim from the input section into every output assignment object.",
+    "",
+    graphPolicyPrompt,
+  ].filter(Boolean).join("\n")
+}
+
+/**
+ * @deprecated Use buildDecompositionPrompt + buildGraphAssignmentPrompt (Stage 1 + Stage 2).
+ * Kept for backward compatibility with existing tests.
  */
 export function buildAnalysisPrompt(
   dbIndex: string,
@@ -992,82 +1183,35 @@ export function buildAnalysisPrompt(
   graphPolicyPrompt: string = "",
   existingGraphSummary: string = "",
 ): string {
-  const graphSummarySection = existingGraphSummary
-    ? [
-        "## Existing Knowledge Graphs",
-        "",
-        "The following graphs already exist in this project. Each entry shows the graph",
-        "name and its current node labels.",
-        "",
-        existingGraphSummary,
-        "",
-        "When decomposing the source document:",
-        "1. If a proposed page's concept is related to nodes in an existing graph, assign",
-        "   it to that graph (set `graph: <name>` in frontmatter) and link it to the",
-        "   relevant existing nodes using [[ExistingNode|RELATION_TYPE]].",
-        "2. Only create a new graph name when the concept belongs to a domain not covered",
-        "   by any existing graph. Choose a concise, descriptive name in English.",
-        "3. A page may belong to at most one graph (one `graph:` field). If a concept",
-        "   spans multiple graphs, prefer the most closely related one.",
-      ].join("\n")
-    : ""
-
-  return [
-    "You are a knowledge-base decomposer. Read the raw source document and",
-    "decide how to split it into logical pages under `db/`.",
-    "",
-    languageRule(sourceContent),
-    "",
-    "## What to produce",
-    "",
-    "A list of proposed pages. For each proposed page:",
-    "",
-    "- **path** — the project-relative path under `db/` that this page should",
-    "  live at. Use clear, descriptive kebab-case paths that reflect the",
-    "  source's structure and topic (e.g. `db/systems/combat/damage-formula.md`).",
-    "- **summary** — one or two sentences describing what this page is about.",
-    "- **range** — a pointer back into the raw file: a heading path",
-    "  (`## 3. 던전 A — 보상`), a sheet+range (`DungeonA!B12:E18`), a",
-    "  timestamp, or whatever marker fits the source format. This is what",
-    "  ends up in the page's frontmatter `sources[].range`, so it must be",
-    "  precise enough that a human can re-find the exact section in the raw.",
-    "- **existing?** — if a page at `path` already exists in the current db",
-    "  index below, say so. Stage 2 will still emit a FILE block for it; the",
-    "  modification flow (Stage 4) will handle conflicts later.",
-    "",
-    "Multiple sections of the same raw file may collapse to the same page",
-    "(e.g. two passages about the same topic). Do not invent content that",
-    "isn't in the source. If a section is too thin or irrelevant, skip it",
-    "and note it briefly under '## Skipped sections' at the end.",
-    "",
-    "Be concrete: 'the source has a section on dungeon A entry rules → it",
-    "decomposes to db/world/dungeons/dungeon_a/entry_rules.md' beats vague",
-    "categorical hand-waving.",
-    "",
-    graphSummarySection,
-    "",
-    dbIndex ? `## Current db/ index (pages that already exist)\n\n${dbIndex}` : "## Current db/ index\n\n(empty — this is the first ingest into this project)",
-    "",
-    graphPolicyPrompt,
-    "",
-    dismissalContext,
-  ].filter(Boolean).join("\n")
+  return buildDecompositionPrompt(dbIndex, sourceContent, dismissalContext)
 }
 
 /**
- * Step 2 prompt (Stage 3 rewrite). Generation: emit one FILE block per
- * proposed page, with object-form `sources` carrying file + range.
+ * Stage 3 prompt. Generation: emit one FILE block per assigned page.
+ * existingGraphSummary is injected here (not in Stage 1/2) so the LLM
+ * can link to existing nodes when writing wikilinks.
  */
 export function buildGenerationPrompt(
   dbIndex: string,
   sourceFileName: string,
   sourceContent: string = "",
   graphPolicyPrompt: string = "",
+  existingGraphSummary: string = "",
 ): string {
+  const graphSummarySection = existingGraphSummary
+    ? [
+        "## Existing Knowledge Graph Nodes",
+        "",
+        "Use these nodes as link targets when writing wikilinks:",
+        "",
+        existingGraphSummary,
+      ].join("\n")
+    : ""
+
   return [
-    "You are a wiki maintainer. The Stage 1 analysis has proposed a set of",
-    "pages under `db/` that this raw file decomposes into. Now emit one",
-    "FILE block per proposed page, with the actual page content.",
+    "You are a wiki maintainer. The Stage 1 decomposition and Stage 2 graph",
+    "assignment have been completed. Now emit one FILE block per assigned page,",
+    "with the actual page content.",
     "",
     languageRule(sourceContent),
     "",
@@ -1108,6 +1252,9 @@ export function buildGenerationPrompt(
     "- RELATION_TYPE must be an uppercase snake_case verb (e.g. REQUIRES, PART_OF).",
     "- Within each graph, use at most 4 distinct relation types total.",
     "  Reuse the same type across FILE blocks rather than inventing new ones.",
+    "- Typed wikilinks are REQUIRED whenever a meaningful directional relationship",
+    "  exists — even if the target page is being created in this same ingest batch.",
+    "  Do NOT wait for the target to already exist in the graph.",
     "- Plain `[[TargetPage]]` (no type) is allowed only for weak associative links",
     "  that carry no meaningful directional semantics.",
     "- You may link to nodes in other existing graphs using their page id.",
@@ -1130,6 +1277,8 @@ export function buildGenerationPrompt(
     "Allowed OPTIONS values: `Create Page | Skip` (do not invent others).",
     "",
     dbIndex ? `## Current db/ index (preserve existing — emit FILE blocks for them only when this source legitimately contributes)\n\n${dbIndex}` : "",
+    "",
+    graphSummarySection,
     "",
     // ── OUTPUT FORMAT MUST BE THE LAST SECTION — models weight recent instructions highest ──
     "## Output Format (MUST FOLLOW EXACTLY — this is how the parser reads your response)",
@@ -1175,20 +1324,90 @@ export function buildGenerationPrompt(
   ].filter(Boolean).join("\n")
 }
 
-function buildExistingGraphSummary(nodes: GraphNode[]): string {
-  const byGraph = new Map<string, string[]>()
-  for (const n of nodes) {
-    const g = n.graph || "main"
-    const list = byGraph.get(g) ?? []
-    list.push(n.label)
-    byGraph.set(g, list)
+
+/**
+ * Extract the section of sourceText that corresponds to the given source_range heading.
+ * Returns text from the heading line until the next same-or-higher-level heading.
+ * Falls back to empty string if the heading isn't found.
+ */
+function extractSection(sourceText: string, sourceRange: string): string {
+  if (!sourceRange) return ""
+  // Strip leading #'s to find the heading text, then search case-insensitively
+  const headingText = sourceRange.replace(/^#+\s*/, "").trim()
+  if (!headingText) return ""
+
+  const lines = sourceText.split("\n")
+  let startIdx = -1
+  let headingLevel = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s+(.+)$/)
+    if (m && m[2].trim().toLowerCase() === headingText.toLowerCase()) {
+      startIdx = i
+      headingLevel = m[1].length
+      break
+    }
   }
-  if (byGraph.size === 0) return ""
-  return Array.from(byGraph.entries())
-    .map(([g, labels]) =>
-      `- ${g}: ${labels.slice(0, 10).join(", ")}${labels.length > 10 ? ` … (+${labels.length - 10} more)` : ""}`,
-    )
-    .join("\n")
+
+  if (startIdx === -1) return ""
+
+  const sectionLines: string[] = [lines[startIdx]]
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s/)
+    if (m && m[1].length <= headingLevel) break
+    sectionLines.push(lines[i])
+  }
+
+  return sectionLines.join("\n").trim()
+}
+
+/**
+ * Stage 3 (code): build FILE block text from Stage 2 assignments without an LLM call.
+ * Each assignment becomes one FILE block: frontmatter derived from Stage 2 data,
+ * body from source_text carried in the assignment, wikilinks from relations.
+ */
+export function buildFileBlocksFromAssignments(
+  assignments: Stage2Assignment[],
+  fileName: string,
+): string {
+  const blocks: string[] = []
+
+  for (const item of assignments) {
+    if (!item.page_path || !isSafeIngestPath(item.page_path)) continue
+
+    const sourceRange = item.source_range ?? ""
+    const section = item.source_text ?? ""
+
+    const sourcesYaml = [
+      `sources:`,
+      `  - file: ${fileName}`,
+      sourceRange ? `    range: "${sourceRange.replace(/"/g, '\\"')}"` : null,
+    ].filter(Boolean).join("\n")
+
+    const frontmatter = [
+      "---",
+      `title: ${item.concept}`,
+      `status: draft`,
+      sourcesYaml,
+      `graph: ${item.graph}`,
+      "---",
+    ].join("\n")
+
+    const relatedLines = (item.relations ?? [])
+      .filter((r) => r.target && r.type)
+      .map((r) => `[[${r.target}|${r.type}]]`)
+
+    const bodyParts: string[] = []
+    if (section) bodyParts.push(section)
+    if (relatedLines.length > 0) {
+      bodyParts.push(`## Related\n\n${relatedLines.join("\n")}`)
+    }
+
+    const content = [frontmatter, ...bodyParts].join("\n\n")
+    blocks.push(`---FILE: ${item.page_path}---\n${content}\n---END FILE---`)
+  }
+
+  return blocks.join("\n\n")
 }
 
 function getStore() {

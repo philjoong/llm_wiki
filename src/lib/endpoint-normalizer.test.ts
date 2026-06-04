@@ -96,9 +96,9 @@ describe("normalizeEndpoint — chat_completions mode", () => {
 })
 
 describe("normalizeEndpoint — anthropic_messages mode", () => {
-  it("keeps a bare /anthropic base as-is (dispatch appends /v1/messages)", () => {
-    const r = normalizeEndpoint("https://api.minimax.io/anthropic", "anthropic_messages")
-    expect(r.normalized).toBe("https://api.minimax.io/anthropic")
+  it("keeps a bare Anthropic base as-is (dispatch appends /v1/messages)", () => {
+    const r = normalizeEndpoint("https://api.anthropic.com", "anthropic_messages")
+    expect(r.normalized).toBe("https://api.anthropic.com")
     expect(r.changed).toBe(false)
   })
 
@@ -112,8 +112,8 @@ describe("normalizeEndpoint — anthropic_messages mode", () => {
   })
 
   it("strips trailing slash on an anthropic base", () => {
-    const r = normalizeEndpoint("https://api.minimax.io/anthropic/", "anthropic_messages")
-    expect(r.normalized).toBe("https://api.minimax.io/anthropic")
+    const r = normalizeEndpoint("https://api.anthropic.com/", "anthropic_messages")
+    expect(r.normalized).toBe("https://api.anthropic.com")
     expect(r.changed).toBe(true)
   })
 

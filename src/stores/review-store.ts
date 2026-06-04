@@ -120,10 +120,14 @@ export const useReviewStore = create<ReviewState>((set) => ({
       const result = [...state.items]
       const keyFor = (t: string, title: string) => `${t}::${normalizeReviewTitle(title)}`
 
-      // Build index of existing pending items for fast lookup
+      // Build index of existing items for fast lookup.
+      // schema items: dedupe against ALL (resolved or not) so re-sync doesn't
+      // re-surface proposals the user already approved/rejected.
+      // Other non-modification types: dedupe against pending only.
       const pendingIndex = new Map<string, number>()
       result.forEach((it, idx) => {
-        if (!it.resolved && it.type !== "modification") {
+        if (it.type === "modification") return
+        if (it.type === "schema" || !it.resolved) {
           pendingIndex.set(keyFor(it.type, it.title), idx)
         }
       })

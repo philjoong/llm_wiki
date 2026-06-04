@@ -8,10 +8,9 @@ import { normalizePath } from "@/lib/path-utils"
  * Lightweight post-save enrichment: ask LLM to add [[wikilinks]] to a saved wiki page.
  *
  * DESIGN NOTE (v2): previously we asked the LLM to return the complete page
- * with [[ ]] inserted, but many models (confirmed on MiniMax-M2.7-highspeed)
- * treat this as an invitation to rewrite / expand the page, destroying
- * user content. No prompt-level instruction reliably prevents this for
- * mid-size models.
+ * with [[ ]] inserted, but many models treat this as an invitation to rewrite
+ * / expand the page, destroying user content. No prompt-level instruction
+ * reliably prevents this for mid-size models.
  *
  * New design: LLM only returns a list of `(term → target)` substitutions as
  * JSON. The code then does the actual string replacement (first occurrence

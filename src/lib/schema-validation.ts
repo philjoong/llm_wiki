@@ -63,22 +63,9 @@ export async function detectSchemaDrift(
     }
   }
 
-  // 4. Compare with incoming edges — check against union of all per-graph + global allowed types
-  const allAllowedRelTypes = new Set<string>([
-    ...policy.relationTypes.map(t => t.toLowerCase()),
-    ...Object.values(policy.graphRelationTypes).flat().map(t => t.toLowerCase()),
-  ])
-  const forbiddenSet = new Set(policy.forbiddenTypes.map(t => t.toLowerCase()))
-  const incomingRelTypes = new Set(edges.map(e => (e.type || "LINKS_TO").toLowerCase()))
-  for (const relType of incomingRelTypes) {
-    if (relType === "links_to") continue
-    if (!existingRelTypes.has(relType) && !forbiddenSet.has(relType) && !allAllowedRelTypes.has(relType)) {
-      proposals.push({
-        type: "relation_type",
-        name: relType,
-      })
-    }
-  }
+  // Relation types are managed by graph-policy (registered during ingest Stage 2).
+  // We don't propose schema drift for relation types here — doing so would
+  // cause every edge to be filtered out pending approval, leaving graphs empty.
 
   return proposals
 }

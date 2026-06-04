@@ -30,12 +30,8 @@ import { useActivityStore } from "@/stores/activity-store"
 import { useChatStore } from "@/stores/chat-store"
 import { materializeRealContent } from "@/test-helpers/real-content"
 
-const LLM_PROVIDER = (process.env.LLM_PROVIDER ?? "ollama") as "ollama" | "minimax"
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://192.168.1.50:8080"
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY ?? ""
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-M2.7-highspeed"
-const MINIMAX_ENDPOINT = process.env.MINIMAX_ENDPOINT ?? "https://api.minimaxi.com/v1"
 const ENABLED = process.env.RUN_LLM_TESTS === "1"
 
 const REAL_CONTENT_ROOT = path.join(process.cwd(), "tests", "fixtures", "real-content")
@@ -61,9 +57,6 @@ const EN_SEED_WIKI: Record<string, string> = {
 
 beforeAll(async () => {
   if (!ENABLED) return
-  if (LLM_PROVIDER === "minimax" && !MINIMAX_API_KEY) {
-    throw new Error("MINIMAX_API_KEY env var is required when LLM_PROVIDER=minimax")
-  }
   await materializeRealContent(REAL_CONTENT_ROOT)
 })
 
@@ -105,25 +98,14 @@ async function setup(): Promise<Ctx> {
       fileTree: [],
     } as unknown as ReturnType<typeof useWikiStore.getState>["project"],
   })
-  useWikiStore.getState().setLlmConfig(
-    LLM_PROVIDER === "minimax"
-      ? {
-          provider: "custom",
-          apiKey: MINIMAX_API_KEY,
-          model: MINIMAX_MODEL,
-          ollamaUrl: "",
-          customEndpoint: MINIMAX_ENDPOINT,
-          maxContextSize: 110000,
-        }
-      : {
-          provider: "ollama",
-          apiKey: "",
-          model: OLLAMA_MODEL,
-          ollamaUrl: OLLAMA_URL,
-          customEndpoint: "",
-          maxContextSize: 110000,
-        },
-  )
+  useWikiStore.getState().setLlmConfig({
+    provider: "ollama",
+    apiKey: "",
+    model: OLLAMA_MODEL,
+    ollamaUrl: OLLAMA_URL,
+    customEndpoint: "",
+    maxContextSize: 110000,
+  })
   useWikiStore.getState().setOutputLanguage("English")
 
   return { tmp }

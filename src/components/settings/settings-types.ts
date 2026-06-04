@@ -8,7 +8,7 @@ import type { CustomApiMode } from "./llm-presets"
  */
 export interface SettingsDraft {
   // LLM provider
-  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "minimax" | "claude-code" | "codex-cli" | "gemini-cli"
+  provider: "openai" | "anthropic" | "google" | "ollama" | "custom" | "claude-code" | "codex-cli" | "gemini-cli"
   apiKey: string
   model: string
   ollamaUrl: string

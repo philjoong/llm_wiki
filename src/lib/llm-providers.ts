@@ -20,16 +20,10 @@ export interface RequestOverrides {
   top_k?: number
   max_tokens?: number
   stop?: string | string[]
+  response_format?: { type: "json_object" }
 }
 
-/**
- * Local-CLI providers that talk to a coding-agent subprocess (claude,
- * codex, gemini) instead of an HTTP chat completions endpoint. These
- * have no flag equivalents for sampling knobs (temperature, top_p,
- * max_tokens, stop), so callers shouldn't bother passing them — they'd
- * be silently ignored. `streamChat` uses this to strip overrides at the
- * dispatch boundary, and UI can use it to grey out sampling controls.
- */
+
 export function isCliProvider(provider: LlmConfig["provider"]): boolean {
   return provider === "claude-code" || provider === "codex-cli" || provider === "gemini-cli"
 }
@@ -148,10 +142,10 @@ function buildOpenAiBody(
   messages: ChatMessage[],
   overrides?: RequestOverrides,
 ): Record<string, unknown> {
-  // OpenAI (and every /v1/chat/completions clone — DeepSeek, Groq,
-  // Ollama, Zhipu, Kimi, xAI, MiniMax OpenAI-compat, ...) accepts these
-  // knobs at the top level using the names clients already send.
-  return { messages, stream: true, ...(overrides ?? {}) }
+  const { response_format, ...rest } = overrides ?? {}
+  const body: Record<string, unknown> = { messages, stream: true, ...rest }
+  if (response_format) body.response_format = response_format
+  return body
 }
 
 function buildAnthropicBody(
@@ -165,7 +159,7 @@ function buildAnthropicBody(
   // Anthropic Messages uses top_p / top_k (Python-style snake_case), a
   // mandatory `max_tokens`, and `stop_sequences` instead of `stop`.
   // Overrides may still set max_tokens to stretch long outputs.
-  return {
+  const body: Record<string, unknown> = {
     messages: conversationMessages,
     ...(system !== undefined ? { system } : {}),
     stream: true,
@@ -177,31 +171,14 @@ function buildAnthropicBody(
       ? { stop_sequences: Array.isArray(overrides.stop) ? overrides.stop : [overrides.stop] }
       : {}),
   }
+  if (overrides?.response_format?.type === "json_object") {
+    // Anthropic structured outputs (beta): requires header anthropic-beta: structured-outputs-2025-11-13
+    // The header is added at the call site via getProviderConfig headers override when response_format is set.
+    body.output_config = { format: "json" }
+  }
+  return body
 }
 
-/**
- * Some Anthropic-compatible third-party endpoints (MiniMax global + CN)
- * serve the Messages API but authenticate with `Authorization: Bearer`
- * instead of Anthropic-native `x-api-key`. See hermes-agent
- * `agent/anthropic_adapter.py:_requires_bearer_auth` for reference.
- *
- * This also matters for CORS: MiniMax's preflight lists `Authorization`
- * in `Access-Control-Allow-Headers` but NOT `x-api-key`, so sending the
- * Anthropic-native header gets blocked by the browser before the request
- * even leaves.
- */
-function requiresBearerAuth(url: string): boolean {
-  const normalized = url.toLowerCase().replace(/\/+$/, "")
-  return (
-    // MiniMax — CORS allow-headers doesn't include x-api-key
-    normalized.startsWith("https://api.minimax.io/anthropic") ||
-    normalized.startsWith("https://api.minimaxi.com/anthropic") ||
-    // Alibaba Bailian Coding Plan — issues sk-xxx bearer-style tokens
-    // on its /apps/anthropic gateway; behavior matches the other
-    // Chinese Anthropic-wire proxies above.
-    normalized.startsWith("https://coding.dashscope.aliyuncs.com/apps/anthropic")
-  )
-}
 
 /**
  * Build the final POST URL for an Anthropic-wire endpoint given whatever
@@ -210,7 +187,6 @@ function requiresBearerAuth(url: string): boolean {
  *   .../v1/messages    → as-is (user pasted the full path)
  *   .../v1             → append /messages (don't double the /v1)
  *   .../api/paas/v4    → append /messages (arbitrary version segment)
- *   .../anthropic      → append /v1/messages (MiniMax-style proxy base)
  *   .../               → append /v1/messages (bare host)
  *
  * A bug where this naively appended "/v1/messages" caused requests to
@@ -223,18 +199,14 @@ export function buildAnthropicUrl(base: string): string {
   return `${trimmed}/v1/messages`
 }
 
-function buildAnthropicHeaders(apiKey: string, url: string): Record<string, string> {
-  const base: Record<string, string> = {
+function buildAnthropicHeaders(apiKey: string): Record<string, string> {
+  return {
     "Content-Type": JSON_CONTENT_TYPE,
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+    "anthropic-beta": "structured-outputs-2025-11-13",
   }
-  if (requiresBearerAuth(url)) {
-    base.Authorization = `Bearer ${apiKey}`
-  } else {
-    base["x-api-key"] = apiKey
-    base["anthropic-version"] = "2023-06-01"
-    base["anthropic-dangerous-direct-browser-access"] = "true"
-  }
-  return base
 }
 
 function buildGoogleBody(
@@ -273,6 +245,9 @@ function buildGoogleBody(
   if (overrides?.stop !== undefined) {
     generationConfig.stopSequences = Array.isArray(overrides.stop) ? overrides.stop : [overrides.stop]
   }
+  if (overrides?.response_format?.type === "json_object") {
+    generationConfig.responseMimeType = "application/json"
+  }
 
   return {
     contents,
@@ -303,7 +278,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
       const url = buildAnthropicUrl("https://api.anthropic.com")
       return {
         url,
-        headers: buildAnthropicHeaders(apiKey, url),
+        headers: buildAnthropicHeaders(apiKey),
         buildBody: (messages, overrides) => ({
           ...buildAnthropicBody(messages, overrides),
           model,
@@ -359,27 +334,13 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
           if (/qwen[-_]?3/i.test(model)) {
             body.chat_template_kwargs = { enable_thinking: false }
           }
+          // Ollama JSON mode: uses native `format: "json"` parameter
+          if (overrides?.response_format?.type === "json_object") {
+            body.format = "json"
+          }
           return body
         },
         parseStream: parseOpenAiLine,
-      }
-    }
-
-    case "minimax": {
-      // MiniMax's real API is Anthropic Messages at /anthropic, not
-      // OpenAI chat completions. customEndpoint can point at either the
-      // global (.io) or China (.minimaxi.com) regional endpoint; default
-      // to the global one when unset. Auth uses Bearer (see
-      // buildAnthropicHeaders / requiresBearerAuth above).
-      const url = buildAnthropicUrl(customEndpoint || "https://api.minimax.io/anthropic")
-      return {
-        url,
-        headers: buildAnthropicHeaders(apiKey, url),
-        buildBody: (messages, overrides) => ({
-          ...buildAnthropicBody(messages, overrides),
-          model,
-        }),
-        parseStream: parseAnthropicLine,
       }
     }
 
@@ -412,7 +373,7 @@ export function getProviderConfig(config: LlmConfig): ProviderConfig {
         const url = buildAnthropicUrl(customEndpoint)
         return {
           url,
-          headers: buildAnthropicHeaders(apiKey, url),
+          headers: buildAnthropicHeaders(apiKey),
           buildBody: (messages, overrides) => ({
             ...buildAnthropicBody(messages, overrides),
             model,

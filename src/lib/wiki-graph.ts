@@ -352,17 +352,24 @@ export async function buildWikiGraph(
 
 function resolveTarget(
   raw: string,
-  nodeMap: Map<string, { id: string }>,
+  nodeMap: Map<string, { id: string; label: string }>,
 ): string | null {
-  // Direct match
   if (nodeMap.has(raw)) return raw
 
-  // Normalize: lowercase, replace spaces with hyphens and vice versa
-  const normalized = raw.toLowerCase().replace(/\s+/g, "-")
-  for (const id of nodeMap.keys()) {
-    if (id.toLowerCase() === normalized) return id
-    if (id.toLowerCase() === raw.toLowerCase()) return id
-    if (id.toLowerCase().replace(/\s+/g, "-") === normalized) return id
+  const hyphenized = raw.toLowerCase().replace(/\s+/g, "-")
+  const underscored = raw.toLowerCase().replace(/\s+/g, "_")
+  const crossNorm = (s: string) => s.toLowerCase().replace(/[-_\s]+/g, "_")
+  const rawNorm = crossNorm(raw)
+
+  for (const [id, node] of nodeMap) {
+    const idLower = id.toLowerCase()
+    if (idLower === hyphenized) return id
+    if (idLower === underscored) return id
+    if (idLower === raw.toLowerCase()) return id
+    if (crossNorm(id) === rawNorm) return id
+    // label 매칭: [[고블린 전사|REQUIRES]] → label이 "고블린 전사"인 노드
+    if (node.label.toLowerCase() === raw.toLowerCase()) return id
+    if (crossNorm(node.label) === rawNorm) return id
   }
 
   return null

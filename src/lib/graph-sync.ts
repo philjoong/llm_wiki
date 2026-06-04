@@ -46,19 +46,22 @@ export async function syncGraphToFalkorDb(
     useReviewStore.getState().addItems(reviewItems)
   }
 
-  // Filter out elements that use unapproved schema types
-  const pendingTypeNames = new Set(proposals.map(p => p.name.toLowerCase()))
-  
+  // Filter out nodes whose node_type is pending approval or explicitly forbidden.
+  // Edges are not filtered by pending types — relation types are managed by
+  // graph-policy (registered at ingest time) and don't require a separate
+  // approval gate. Filtering edges by pending names caused 0-edge graphs.
+  const pendingNodeTypes = new Set(proposals.filter(p => p.type === "node_type").map(p => p.name.toLowerCase()))
+
   const policy = await (await import("./graph-policy")).loadGraphPolicy(projectPath)
   const forbiddenTypeNames = new Set(policy.forbiddenTypes.map(t => t.toLowerCase()))
 
-  const filteredNodes = nodes.filter(n => 
-    !pendingTypeNames.has(n.type.toLowerCase()) && 
+  const filteredNodes = nodes.filter(n =>
+    !pendingNodeTypes.has(n.type.toLowerCase()) &&
     !forbiddenTypeNames.has(n.type.toLowerCase())
   )
   const filteredEdges = edges.filter(e => {
     const type = (e.type || "LINKS_TO").toLowerCase()
-    return !pendingTypeNames.has(type) && !forbiddenTypeNames.has(type)
+    return !forbiddenTypeNames.has(type)
   })
 
   debug(`after schema filter: ${filteredNodes.length} nodes, ${filteredEdges.length} edges`)

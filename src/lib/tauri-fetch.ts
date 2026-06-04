@@ -6,10 +6,8 @@
  * here rather than call `fetch` directly.
  *
  * Why it matters:
- *  - MiniMax's /anthropic endpoint: CORS allow-headers omits x-api-key
- *  - Volcengine Ark /api/coding/v3: CORS omits Authorization entirely
- *  - Any enterprise / on-prem gateway that doesn't anticipate browser
- *    origins — a common shape across domestic Chinese clouds
+ *  - Some self-hosted or third-party gateways don't set browser-friendly
+ *    CORS headers (e.g. omitting Authorization or x-api-key from allow-headers)
  *
  * In unit tests (vitest / node), the plugin's browser-only globals
  * aren't available; `getHttpFetch` lazily imports and falls back to

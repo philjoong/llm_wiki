@@ -7,7 +7,7 @@ export async function detectSchemaDrift(
   projectPath: string,
   projectName: string,
   nodes: GraphNode[],
-  edges: GraphEdge[]
+  _edges: GraphEdge[]
 ): Promise<SchemaProposal[]> {
   const policy = await loadGraphPolicy(projectPath)
   const proposals: SchemaProposal[] = []

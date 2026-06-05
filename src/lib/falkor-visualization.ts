@@ -60,33 +60,42 @@ export function parseFalkorQueryResult(result: any): CanvasData {
   for (const row of result) {
     if (!Array.isArray(row)) continue
     
-    for (const cell of row) {
-      if (!cell || typeof cell !== "object") continue
+    for (const rawCell of row) {
+      if (!rawCell || typeof rawCell !== "object") continue
 
-      // Detect Node
-      if ("labels" in cell && "properties" in cell && "id" in cell) {
-        const node = cell as any
-        if (!nodesMap.has(node.id)) {
-          nodesMap.set(node.id, {
-            id: node.id,
-            labels: node.labels,
-            visible: true,
-            data: node.properties,
-          })
+      // Rust backend may wrap each cell as {"n": {...}} or {"r": {...}} — unwrap all values
+      const candidates: any[] = Object.keys(rawCell).some((k) => k === "labels" || k === "relationshipType")
+        ? [rawCell]
+        : Object.values(rawCell).filter((v) => v && typeof v === "object")
+
+      for (const cell of candidates) {
+        if (!cell || typeof cell !== "object") continue
+
+        // Detect Node
+        if ("labels" in cell && "properties" in cell && "id" in cell) {
+          const node = cell as any
+          if (!nodesMap.has(node.id)) {
+            nodesMap.set(node.id, {
+              id: node.id,
+              labels: node.labels,
+              visible: true,
+              data: node.properties,
+            })
+          }
         }
-      } 
-      // Detect Edge
-      else if ("relationshipType" in cell && "properties" in cell && "id" in cell && "sourceId" in cell) {
-        const edge = cell as any
-        if (!edgesMap.has(edge.id)) {
-          edgesMap.set(edge.id, {
-            id: edge.id,
-            relationship: edge.relationshipType,
-            source: edge.sourceId,
-            target: edge.destinationId,
-            visible: true,
-            data: edge.properties,
-          })
+        // Detect Edge
+        else if ("relationshipType" in cell && "properties" in cell && "id" in cell && "sourceId" in cell) {
+          const edge = cell as any
+          if (!edgesMap.has(edge.id)) {
+            edgesMap.set(edge.id, {
+              id: edge.id,
+              relationship: edge.relationshipType,
+              source: edge.sourceId,
+              target: edge.destinationId,
+              visible: true,
+              data: edge.properties,
+            })
+          }
         }
       }
     }

@@ -117,6 +117,18 @@ export async function loadOutputLanguage(): Promise<OutputLanguage | null> {
   return (await store.get<OutputLanguage>(OUTPUT_LANGUAGE_KEY)) ?? null
 }
 
+const GIT_REMOTE_URL_KEY = "gitRemoteUrl"
+
+export async function saveGitRemoteUrl(url: string): Promise<void> {
+  const store = await getStore()
+  await store.set(GIT_REMOTE_URL_KEY, url)
+}
+
+export async function loadGitRemoteUrl(): Promise<string | null> {
+  const store = await getStore()
+  return (await store.get<string>(GIT_REMOTE_URL_KEY)) ?? null
+}
+
 const SELECTED_BRANCH_KEY = "selectedBranch"
 
 export async function saveSelectedBranch(branch: string | null): Promise<void> {

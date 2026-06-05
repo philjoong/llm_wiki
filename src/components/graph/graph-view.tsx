@@ -130,7 +130,7 @@ export function GraphView() {
   const refreshLiveGraphs = useCallback(async (forceAll = false) => {
     if (!project) return
     try {
-      const allGraphs = await listGraphDb(project.name, false)
+      const allGraphs = await listGraphDb(project.name)
       const cached = forceAll ? [] : loadCachedGraphs(project.name)
       const cachedSet = new Set(cached)
 

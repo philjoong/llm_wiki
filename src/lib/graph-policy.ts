@@ -235,13 +235,17 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
     parts.push(
       "## Managed Graphs (project-defined)",
       "For each generated db/ page, add a `graph:` field in the frontmatter to assign it to one of the graphs below.",
-      "Choose the graph whose domain best matches the page content. If no graph fits, omit the field.",
+      "Choose the graph whose domain best matches the page content. If no graph fits, create a new graph assignment.",
       `Available graphs: ${policy.managedGraphs.join(", ")}`,
       "",
       "## Per-Graph Relation Types (project-defined)",
-      "When writing wikilinks in a page assigned to a graph, use ONLY the relation types listed for that graph.",
+      "Each graph may have at most 4 relation types.",
+      "Prefer an existing graph when its domain matches the source relationship.",
+      "If the matching graph already has the needed relation type, use it.",
+      "If the matching graph has fewer than 4 relation types and needs a new type, you may extend that graph by returning the full expanded `graph_relation_types` list.",
+      "If the matching graph already has 4 relation types and a new type is required, do not force the relationship into that graph; create a new graph instead.",
       "Format: [[TargetPage|RELATION_TYPE]]",
-      "If a relationship does not fit any listed type, omit the relation type and write [[TargetPage]] instead.",
+      "Do not omit meaningful relation types from Stage 2 assignments; typed relationships are required for meaningful node/edge/node facts.",
     )
 
     for (const g of policy.managedGraphs) {
@@ -255,8 +259,9 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
     if (policy.relationTypes.length > 0) {
       parts.push(
         "## Graph Relation Policy (project-defined)",
-        "When proposing/generated knowledge links or relationships, use ONLY the relation types below.",
-        "If a relationship does not fit one of them, do not invent a new relation type; rewrite or omit it.",
+        "Use these relation types when they fit the relationship.",
+        "If the target graph has fewer than 4 relation types, Stage 2 may propose a new relation type by returning an expanded `graph_relation_types` list.",
+        "If a graph already has 4 relation types and a new type is required, create a new graph instead of omitting the relationship.",
         `Allowed relation types: ${policy.relationTypes.join(", ")}`,
         "Format relations in wikilinks as [[TargetPage|RELATION_TYPE]].",
       )

@@ -6,7 +6,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, loadSelectedBranch, saveSelectedBranch } from "@/lib/project-store"
+import { getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
@@ -207,16 +207,6 @@ function App() {
         if (savedOutputLang) {
           useWikiStore.getState().setOutputLanguage(savedOutputLang)
         }
-        debug("init: before loadSelectedBranch")
-        const savedBranch = await loadSelectedBranch()
-        debug("init: after loadSelectedBranch", { savedBranch })
-        if (savedBranch) {
-          useWikiStore.getState().setSelectedBranch(savedBranch)
-        } else if (!import.meta.env.VITE_GIT_REPO_URL) {
-          debug("init: no saved branch and no repo url, defaulting to main")
-          useWikiStore.getState().setSelectedBranch("main")
-          await saveSelectedBranch("main")
-        }
         debug("init: before loadLanguage")
         const savedLang = await loadLanguage()
         debug("init: after loadLanguage", { savedLang })
@@ -224,23 +214,6 @@ function App() {
           debug("init: before i18n.changeLanguage", { savedLang })
           await i18n.changeLanguage(savedLang)
           debug("init: after i18n.changeLanguage")
-        }
-        debug("init: before getLastProject")
-        const lastProject = await getLastProject()
-        debug("init: after getLastProject", lastProject)
-        if (lastProject) {
-          try {
-            debug("init: before openProject(lastProject)", {
-              path: lastProject.path,
-            })
-            const proj = await openProject(lastProject.path)
-            debug("init: after openProject(lastProject)", proj)
-            await handleProjectOpened(proj)
-            debug("init: after handleProjectOpened(lastProject)")
-          } catch (e) {
-            console.error("[App.init] openProject failed:", e)
-            debug("init: openProject(lastProject) failed", e)
-          }
         }
         debug("init: finished, loading=false", {
           selectedBranch: useWikiStore.getState().selectedBranch,

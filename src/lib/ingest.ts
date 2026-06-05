@@ -242,11 +242,11 @@ export function languageRule(sourceContent: string = ""): string {
  * truncated mid-block ("FILE … not closed before end of stream") and the
  * parser dropped the entire trailing block — leading to autoIngest
  * returning zero files and the queue runner throwing "Ingest produced no
- * output files". 30000 chars ≈ 7–12k tokens depending on script, leaving
+ * output files". 20000 chars ≈ 5–8k tokens depending on script, leaving
  * room for the system prompts (dbIndex + dismissals) and the
  * FILE-block output.
  */
-const MAX_CHUNK_CHARS = 30000
+const MAX_CHUNK_CHARS = 20000
 
 /**
  * Recursively split content into chunks ≤ maxChars, preferring to break
@@ -448,7 +448,7 @@ async function autoIngestImpl(
         },
       },
       signal,
-      { temperature: 0.1, response_format: { type: "json_object" } },
+      { temperature: 0.1, response_format: { type: "json_object" }, max_tokens: 16000 },
     )
 
     const stage1Activity = useActivityStore.getState().items.find((i) => i.id === activityId)
@@ -460,93 +460,95 @@ async function autoIngestImpl(
 
     let stage1Sections: Stage1Section[] = []
     try {
-      const parsed = JSON.parse(stage1Raw)
+      const cleaned = stage1Raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
+      const parsed = JSON.parse(cleaned)
       stage1Sections = Array.isArray(parsed) ? parsed : (parsed.sections ?? [])
     } catch {
-      invoke("app_debug", { message: `[ingest:stage1] JSON parse failed — falling back to empty sections` }).catch(() => {})
+      invoke("app_debug", { message: `[ingest:stage1] JSON parse failed — raw:\n${stage1Raw}` }).catch(() => {})
+    }
+
+    if (stage1Sections.length === 0) {
+      const errMsg = `Stage 1 produced no sections. LLM raw output (${stage1Raw.length} chars): ${stage1Raw.slice(0, 2000)}`
+      invoke("app_debug", { message: `[ingest:stage1:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
+      activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Stage 1 failed: no sections produced` })
+      throw new Error(`Ingest Stage 1 failed for "${fileName}": ${errMsg}`)
     }
 
     // ── Stage 2: Graph Assignment — assign concepts to graphs ────────
     activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2/3: Assigning to graphs...` })
 
-    const MAX_RETRIES = 3
-    let assignments: Stage2Assignment[] = []
-    let retryCount = 0
-    let sectionsToAssign = stage1Sections
+    let stage2Raw = ""
 
-    while (retryCount <= MAX_RETRIES) {
-      const currentPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
-      let stage2Raw = ""
+    const stage2Scaffold = buildStage2Scaffold(stage1Sections)
 
-      await streamChat(
-        llmConfig,
-        [
-          { role: "system", content: buildGraphAssignmentPrompt(currentPolicyPrompt) },
-          {
-            role: "user",
-            content: retryCount === 0
-              ? `Assign each section below to a graph.\n\n${JSON.stringify(sectionsToAssign, null, 2)}`
-              : `Some assignments failed validation. Re-assign only the sections below.\n\n${JSON.stringify(sectionsToAssign, null, 2)}`,
-          },
-        ],
-        {
-          onToken: (token) => { stage2Raw += token },
-          onDone: () => {},
-          onError: () => {},
-        },
-        signal,
-        { temperature: 0.1, response_format: { type: "json_object" } },
+    await streamChat(
+      llmConfig,
+      [
+        { role: "system", content: buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy)) },
+        { role: "user", content: `Read the sections, then fill in the empty fields of each seed assignment below. Do not add or rename any keys inside assignment objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into assignments. You may add additional assignment objects using the same schema when one source_text needs multiple graph assignments.\n\n${stage2Scaffold}` },
+      ],
+      {
+        onToken: (token) => { stage2Raw += token },
+        onDone: () => {},
+        onError: () => {},
+      },
+      signal,
+      { temperature: 0.1, response_format: { type: "json_object" } },
+    )
+
+    let parsed: Stage2Assignment[] = []
+    try {
+      const obj = JSON.parse(stage2Raw)
+      parsed = hydrateStage2Assignments(
+        Array.isArray(obj) ? obj : (obj.assignments ?? []),
+        stage1Sections,
       )
+    } catch {
+      // parse failure — treat as empty
+    }
 
-      let parsed: Stage2Assignment[] = []
+    if (parsed.length === 0) {
+      const errMsg = `Stage 2 produced no assignments from ${stage1Sections.length} section(s). LLM raw output (${stage2Raw.length} chars): ${stage2Raw.slice(0, 2000)}`
+      invoke("app_debug", { message: `[ingest:stage2:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
+      activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Stage 2 failed: no graph assignments produced` })
+      throw new Error(`Ingest Stage 2 failed for "${fileName}": ${errMsg}`)
+    }
+
+    // Register new graphs and relation-type expansions immediately so
+    // subsequent validation uses the updated policy.
+    const policyUpdate = applyStage2GraphPolicyUpdates(parsed, graphPolicy)
+    graphPolicy = policyUpdate.policy
+    if (policyUpdate.changed) {
       try {
-        const obj = JSON.parse(stage2Raw)
-        parsed = Array.isArray(obj) ? obj : (obj.assignments ?? [])
+        await saveGraphPolicy(pp, graphPolicy)
       } catch {
-        // parse failure — all sections retry
+        // non-fatal
       }
+    }
 
-      // Register new graphs immediately so subsequent validation uses updated policy
-      for (const item of parsed) {
-        if (item.new_graph && item.graph && !graphPolicy.managedGraphs.includes(item.graph)) {
-          const newTypes = Array.isArray(item.graph_relation_types) ? item.graph_relation_types.slice(0, 4) : []
-          graphPolicy = {
-            ...graphPolicy,
-            managedGraphs: [...graphPolicy.managedGraphs, item.graph],
-            graphRelationTypes: { ...graphPolicy.graphRelationTypes, [item.graph]: newTypes },
-          }
-          try {
-            await saveGraphPolicy(pp, graphPolicy)
-          } catch {
-            // non-fatal
-          }
-        }
-      }
+    // Validate — pass valid assignments through, log failures as review items
+    const failures = validateStage2(parsed, graphPolicy)
+    const failedIndexes = new Set(failures.map((f) => f.assignmentIndex))
+    const assignments: Stage2Assignment[] = parsed.filter((_, index) => !failedIndexes.has(index))
 
-      // Merge new assignments (replace previous entry for same concept+graph if retrying)
-      for (const item of parsed) {
-        const idx = assignments.findIndex((a) => a.concept === item.concept && a.graph === item.graph)
-        if (idx >= 0) assignments[idx] = item
-        else assignments.push(item)
-      }
-
-      // Validate — collect failing source_ranges for retry
-      const failures = validateStage2(assignments, graphPolicy)
-      if (failures.length === 0 || retryCount >= MAX_RETRIES) break
-
-      const failingConcepts = new Set(failures.map((f) => f.concept))
-      sectionsToAssign = stage1Sections.filter((s) => {
-        // Match sections whose assigned concepts failed
-        return assignments.some((a) => failingConcepts.has(a.concept) && a.source_range === s.source_range)
+    if (failures.length > 0) {
+      const failureDetail = failures.map((f) => `${f.page_path || f.concept} [${f.graph || "no graph"}]: ${f.reason}`).join("; ")
+      invoke("app_debug", { message: `[ingest:stage2:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length} failures=[${failureDetail}] raw_sample=${stage2Raw.slice(0, 500)}` }).catch(() => {})
+      allReviewItems.push({
+        type: "suggestion",
+        stage: "primary",
+        title: `Stage 2 skipped ${failures.length} concept(s): ${fileName}${chunks.length > 1 ? ` (chunk ${chunkIdx + 1}/${chunks.length})` : ""}`,
+        description: failures.map((f) => `- **${f.page_path || f.concept}** (${f.graph || "no graph"}): ${f.reason}`).join("\n"),
+        sourcePath: sp,
+        affectedPages: [],
+        options: [{ label: "Dismiss", action: "Dismiss" }],
       })
-      if (sectionsToAssign.length === 0) break
-      retryCount++
-      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2/3: Retrying ${failingConcepts.size} concept(s) (attempt ${retryCount}/${MAX_RETRIES})...` })
     }
 
     const totalRelations = assignments.reduce((sum, a) => sum + (a.relations?.length ?? 0), 0)
     const assignmentsWithRelations = assignments.filter(a => (a.relations?.length ?? 0) > 0).length
-    invoke("app_debug", { message: `[ingest:stage2] ${chunkLabel}file=${fileName} assignments=${assignments.length} withRelations=${assignmentsWithRelations} totalRelations=${totalRelations} retries=${retryCount} sample=${JSON.stringify(assignments.slice(0, 2))}` }).catch(() => {})
+    invoke("app_debug", { message: `[ingest:stage2] ${chunkLabel}file=${fileName} assignments=${assignments.length} skipped=${failures.length} withRelations=${assignmentsWithRelations} totalRelations=${totalRelations} sample=${JSON.stringify(assignments.slice(0, 2))}` }).catch(() => {})
+
 
     // ── Stage 3: Generate FILE blocks from Stage 2 assignments (code, no LLM) ──
     activity.updateItem(activityId, { detail: `${chunkLabel}Stage 3/3: Writing db/ pages...` })
@@ -567,6 +569,25 @@ async function autoIngestImpl(
     allWarnings.push(...writeWarnings)
     allProposals.push(...proposals)
     allReviewItems.push(...parseReviewBlocks(generation, sp))
+
+    if (writtenPaths.length > 0) {
+      const projectName = useWikiStore.getState().project?.name || "default"
+      activity.updateItem(activityId, { detail: `${chunkLabel}Syncing knowledge graph...` })
+      try {
+        const graphSummary = await syncGraphToFalkorDb(pp, projectName, (msg) => {
+          activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
+        })
+        const graphDebug = `[ingest:graph] ${chunkLabel}${graphSummary}`
+        console.log(graphDebug)
+        invoke("app_debug", { message: graphDebug }).catch(() => {})
+      } catch (err) {
+        const graphErrMsg = `Knowledge graph sync failed: ${err instanceof Error ? err.message : String(err)}`
+        console.warn(`[ingest] ${graphErrMsg}`)
+        invoke("app_debug", { message: `[ingest:graph:ERROR] ${chunkLabel}${graphErrMsg}` }).catch(() => {})
+        activity.updateItem(activityId, { detail: `${chunkLabel}${graphErrMsg}`, status: "error" })
+        return allWrittenPaths
+      }
+    }
 
     // Refresh dbIndex for the next chunk so it sees what this chunk
     // just wrote. Skip on the final chunk — no consumer.
@@ -685,26 +706,6 @@ async function autoIngestImpl(
       }
     } catch {
       // embedding module not available
-    }
-  }
-
-  // ── Step 8: Sync to FalkorDB Knowledge Graph ────────────────
-  if (allWrittenPaths.length > 0) {
-    const projectName = useWikiStore.getState().project?.name || "default"
-    activity.updateItem(activityId, { detail: "Syncing knowledge graph..." })
-    try {
-      const graphSummary = await syncGraphToFalkorDb(pp, projectName, (msg) => {
-        activity.updateItem(activityId, { detail: msg })
-      })
-      const graphDebug = `[ingest:graph] ${graphSummary}`
-      console.log(graphDebug)
-      invoke("app_debug", { message: graphDebug }).catch(() => {})
-    } catch (err) {
-      const graphErrMsg = `Knowledge graph sync failed: ${err instanceof Error ? err.message : String(err)}`
-      console.warn(`[ingest] ${graphErrMsg}`)
-      invoke("app_debug", { message: `[ingest:graph:ERROR] ${graphErrMsg}` }).catch(() => {})
-      activity.updateItem(activityId, { detail: graphErrMsg, status: "error" })
-      return allWrittenPaths
     }
   }
 
@@ -1008,6 +1009,7 @@ export interface Stage1Section {
 
 /** Stage 2 output: one assignment mapping a concept to a graph. */
 export interface Stage2Assignment {
+  source_id?: string
   concept: string
   page_path: string
   graph: string
@@ -1020,9 +1022,137 @@ export interface Stage2Assignment {
 }
 
 /** Stage 2 validation failure with reason string. */
-interface Stage2Failure {
+export interface Stage2Failure {
+  assignmentIndex: number
   concept: string
+  page_path?: string
+  graph?: string
+  source_range?: string
   reason: string
+}
+
+export function mergeRelationTypes(existing: string[], used: string[]): {
+  merged: string[]
+  added: string[]
+  overflow: string[]
+} {
+  const merged: string[] = []
+  const added: string[] = []
+  const seen = new Set<string>()
+
+  for (const raw of existing) {
+    const value = String(raw ?? "").trim()
+    if (!value) continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(value)
+  }
+
+  const overflow: string[] = []
+  for (const raw of used) {
+    const value = String(raw ?? "").trim()
+    if (!value) continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    if (merged.length < 4) {
+      seen.add(key)
+      merged.push(value)
+      added.push(value)
+    } else {
+      overflow.push(value)
+    }
+  }
+
+  return { merged, added, overflow }
+}
+
+function relationTypesUsedBy(item: Stage2Assignment): string[] {
+  const relationTypes = (item.relations ?? [])
+    .map((rel) => rel.type)
+    .filter((type): type is string => typeof type === "string" && type.trim().length > 0)
+  const proposedTypes = Array.isArray(item.graph_relation_types) ? item.graph_relation_types : []
+  return [...proposedTypes, ...relationTypes]
+}
+
+function failureFor(item: Stage2Assignment, assignmentIndex: number, reason: string): Stage2Failure {
+  return {
+    assignmentIndex,
+    concept: item.concept || "(unknown)",
+    page_path: item.page_path,
+    graph: item.graph,
+    source_range: item.source_range,
+    reason,
+  }
+}
+
+export function hydrateStage2Assignments(
+  assignments: Stage2Assignment[],
+  sections: Stage1Section[],
+): Stage2Assignment[] {
+  const byId = new Map<string, Stage1Section>()
+  const byRange = new Map<string, Stage1Section>()
+
+  sections.forEach((section, index) => {
+    byId.set(`s${index + 1}`, section)
+    if (section.source_range) byRange.set(section.source_range, section)
+  })
+
+  return assignments.map((assignment) => {
+    const source =
+      (assignment.source_id ? byId.get(assignment.source_id) : undefined) ??
+      (assignment.source_range ? byRange.get(assignment.source_range) : undefined)
+
+    if (!source) return assignment
+
+    return {
+      ...assignment,
+      source_id: assignment.source_id,
+      source_range: assignment.source_range || source.source_range,
+      source_text: assignment.source_text || source.source_text,
+    }
+  })
+}
+
+export function applyStage2GraphPolicyUpdates(
+  assignments: Stage2Assignment[],
+  policy: GraphPolicy,
+): { policy: GraphPolicy; changed: boolean } {
+  let nextPolicy = policy
+  let changed = false
+
+  for (const item of assignments) {
+    if (!item.concept || !item.page_path || !item.graph) continue
+
+    const usedTypes = relationTypesUsedBy(item)
+
+    if (item.new_graph) {
+      if (nextPolicy.managedGraphs.includes(item.graph)) continue
+      const { merged, overflow } = mergeRelationTypes([], usedTypes)
+      if (overflow.length > 0) continue
+      nextPolicy = {
+        ...nextPolicy,
+        managedGraphs: [...nextPolicy.managedGraphs, item.graph],
+        graphRelationTypes: { ...nextPolicy.graphRelationTypes, [item.graph]: merged },
+      }
+      changed = true
+      continue
+    }
+
+    if (!nextPolicy.managedGraphs.includes(item.graph)) continue
+
+    const existingTypes = nextPolicy.graphRelationTypes[item.graph] ?? nextPolicy.relationTypes
+    const { merged, added, overflow } = mergeRelationTypes(existingTypes, usedTypes)
+    if (added.length === 0 || overflow.length > 0) continue
+
+    nextPolicy = {
+      ...nextPolicy,
+      graphRelationTypes: { ...nextPolicy.graphRelationTypes, [item.graph]: merged },
+    }
+    changed = true
+  }
+
+  return { policy: nextPolicy, changed }
 }
 
 /**
@@ -1031,36 +1161,34 @@ interface Stage2Failure {
  */
 export function validateStage2(assignments: Stage2Assignment[], policy: GraphPolicy): Stage2Failure[] {
   const failures: Stage2Failure[] = []
-  const seen = new Map<string, Set<string>>() // concept → set of graphs
 
-  for (const item of assignments) {
+  for (const [assignmentIndex, item] of assignments.entries()) {
     if (!item.concept || !item.page_path || !item.graph) {
-      failures.push({ concept: item.concept ?? "(unknown)", reason: "Missing required field: concept, page_path, or graph" })
+      failures.push(failureFor(item, assignmentIndex, "Missing required field: concept, page_path, or graph"))
       continue
     }
 
-    // Duplicate (concept, graph) pair check
-    const graphs = seen.get(item.concept) ?? new Set()
-    if (graphs.has(item.graph)) {
-      failures.push({ concept: item.concept, reason: `Duplicate assignment to graph "${item.graph}"` })
-    }
-    graphs.add(item.graph)
-    seen.set(item.concept, graphs)
+    const usedTypes = relationTypesUsedBy(item)
 
-    if (item.new_graph) continue // new graphs pass policy checks (they just got registered)
+    if (item.new_graph) {
+      const { overflow } = mergeRelationTypes([], usedTypes)
+      if (overflow.length > 0) {
+        failures.push(failureFor(item, assignmentIndex, `New graph "${item.graph}" exceeds 4 relation types (overflow: ${overflow.join(", ")})`))
+      }
+      continue
+    }
 
     // Graph must be in managedGraphs
     if (!policy.managedGraphs.includes(item.graph)) {
-      failures.push({ concept: item.concept, reason: `Graph "${item.graph}" is not in managedGraphs and new_graph is false` })
+      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" is not in managedGraphs and new_graph is false`))
       continue
     }
 
-    // Relation types must be allowed for this graph
-    const allowed = policy.graphRelationTypes[item.graph] ?? policy.relationTypes
-    for (const rel of item.relations ?? []) {
-      if (rel.type && allowed.length > 0 && !allowed.includes(rel.type)) {
-        failures.push({ concept: item.concept, reason: `Relation type "${rel.type}" is not allowed in graph "${item.graph}" (allowed: ${allowed.join(", ")})` })
-      }
+    // Relation types may extend this graph only while the graph stays within 4 types.
+    const existingTypes = policy.graphRelationTypes[item.graph] ?? policy.relationTypes
+    const { overflow } = mergeRelationTypes(existingTypes, usedTypes)
+    if (overflow.length > 0) {
+      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" already has 4 relation types; new graph required for: ${overflow.join(", ")}`))
     }
   }
 
@@ -1118,20 +1246,20 @@ export function buildGraphAssignmentPrompt(graphPolicyPrompt: string): string {
   return [
     "You are a graph assignment engine. You receive a list of concepts with their",
     "sections (Stage 1 output) and must produce one or more graph assignments per section.",
-    "Each section has `source_range` and `source_text` — read `source_text` to understand",
-    "the concept and its relationships, then decide the graph and relation types.",
+    "Each section has a `source_id`, `source_range`, and `source_text` — read the section's",
+    "`source_text` to understand the concept and its relationships, then assign by `source_id`.",
     "",
     "## Rules",
     "",
-    "1. From each section's `source_text`, identify the concept and any relationships to other concepts.",
-    "2. A single section may produce multiple assignments if its relationships belong to different domains.",
+    "1. Read each section's `source_text` directly and extract one or more node/edge/node relationships.",
+    "2. Group those relationships into one or more assignments. A single source_text may target multiple graphs.",
     "   Each split gets a different `page_path` suffix (e.g. `goblin-warrior-weakness.md`, `goblin-warrior-tactic.md`).",
-    "3. For each relationship, decide in this order:",
-    "   a. Which existing graph's allowed relation types can express it?",
-    "   b. Assign to that graph and pick the most fitting allowed type.",
-    "   c. If no existing graph fits, set `new_graph: true` and define `graph_relation_types` (max 4 types).",
-    "4. Relation types must ONLY come from the assigned graph's allowed types (or `graph_relation_types` for new graphs).",
-    "5. If a section has no meaningful relationships, set `isolated: true`.",
+    "3. For each assignment, pick the existing graph whose domain best matches the node/edge meaning.",
+    "4. If all edge relation types already exist in that graph, use it with `new_graph: false`.",
+    "5. If some edge relation types are new and the graph has fewer than 4 relation types, keep that graph with `new_graph: false` and include `graph_relation_types` as the full expanded relation type list for that graph.",
+    "6. If the best matching existing graph already has 4 relation types and a new relation type is required, create a new graph with `new_graph: true` and define up to 4 `graph_relation_types`.",
+    "7. If no existing graph domain fits, create a new graph with `new_graph: true` and define up to 4 `graph_relation_types`.",
+    "8. If a section has no meaningful relationships, set `isolated: true`.",
     "",
     "## Output format (JSON object — no other text)",
     "",
@@ -1139,34 +1267,40 @@ export function buildGraphAssignmentPrompt(graphPolicyPrompt: string): string {
     '{',
     '  "assignments": [',
     '    {',
+    '      "source_id": "s1",',
     '      "concept": "고블린 전사",',
     '      "page_path": "db/enemies/goblin-warrior-weakness.md",',
     '      "graph": "combat_weakness_graph",',
     '      "relations": [{ "target": "불", "type": "WEAK_AGAINST" }],',
-    '      "new_graph": false,',
-    '      "source_range": "## 고블린 전사",',
-    '      "source_text": "<copy the source_text from the input section verbatim>"',
+    '      "new_graph": false',
     '    }',
     '  ]',
     '}',
     "",
-    "For a new graph, add `graph_relation_types` to the assignment object:",
+    "`graph_relation_types` meaning:",
+    "- `new_graph: true`: the full relation type list for the new graph.",
+    "- `new_graph: false`: optional; include it only when extending an existing graph, as the full relation type list after expansion.",
+    "- If no graph type expansion is needed, omit it or return an empty array.",
+    "",
+    "For a new graph or an existing graph expansion, add `graph_relation_types` to the assignment object:",
     '{',
     '  "assignments": [',
     '    {',
+    '      "source_id": "s1",',
     '      "concept": "...",',
     '      "page_path": "db/...",',
     '      "graph": "new_graph_name",',
     '      "relations": [...],',
     '      "new_graph": true,',
-    '      "graph_relation_types": ["TYPE_A", "TYPE_B", "TYPE_C", "TYPE_D"],',
-    '      "source_range": "...",',
-    '      "source_text": "<copy the source_text from the input section verbatim>"',
+    '      "graph_relation_types": ["TYPE_A", "TYPE_B", "TYPE_C", "TYPE_D"]',
     '    }',
     '  ]',
     '}',
     "",
-    "IMPORTANT: Always copy `source_text` verbatim from the input section into every output assignment object.",
+    "The scaffold below contains `sections` plus one seed assignment per source section.",
+    "Keep `source_text` only in `sections`; do not copy it into assignment objects.",
+    "Each assignment must reference its source with `source_id`. You may add additional assignment objects using the same schema when one source_text needs multiple graph assignments.",
+    "Do not add or rename keys inside assignment objects.",
     "",
     graphPolicyPrompt,
   ].filter(Boolean).join("\n")
@@ -1183,6 +1317,8 @@ export function buildAnalysisPrompt(
   graphPolicyPrompt: string = "",
   existingGraphSummary: string = "",
 ): string {
+  void graphPolicyPrompt
+  void existingGraphSummary
   return buildDecompositionPrompt(dbIndex, sourceContent, dismissalContext)
 }
 
@@ -1326,39 +1462,30 @@ export function buildGenerationPrompt(
 
 
 /**
- * Extract the section of sourceText that corresponds to the given source_range heading.
- * Returns text from the heading line until the next same-or-higher-level heading.
- * Falls back to empty string if the heading isn't found.
+ * Build a scaffold JSON for Stage 2: one skeleton entry per Stage 1 section,
+ * with source_range and source_text pre-filled and all output fields empty.
+ * LLM fills in concept, page_path, graph, relations, new_graph, isolated.
+ * Keys are fixed — LLM cannot invent new field names.
  */
-function extractSection(sourceText: string, sourceRange: string): string {
-  if (!sourceRange) return ""
-  // Strip leading #'s to find the heading text, then search case-insensitively
-  const headingText = sourceRange.replace(/^#+\s*/, "").trim()
-  if (!headingText) return ""
-
-  const lines = sourceText.split("\n")
-  let startIdx = -1
-  let headingLevel = 0
-
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(#{1,6})\s+(.+)$/)
-    if (m && m[2].trim().toLowerCase() === headingText.toLowerCase()) {
-      startIdx = i
-      headingLevel = m[1].length
-      break
-    }
+export function buildStage2Scaffold(sections: Stage1Section[]): string {
+  const scaffold = {
+    sections: sections.map((s, index) => ({
+      source_id: `s${index + 1}`,
+      source_range: s.source_range,
+      source_text: s.source_text,
+    })),
+    assignments: sections.map((_s, index) => ({
+      source_id: `s${index + 1}`,
+      concept: "",
+      page_path: "",
+      graph: "",
+      new_graph: false,
+      graph_relation_types: [] as string[],
+      isolated: false,
+      relations: [] as Array<{ target: string; type: string }>,
+    })),
   }
-
-  if (startIdx === -1) return ""
-
-  const sectionLines: string[] = [lines[startIdx]]
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    const m = lines[i].match(/^(#{1,6})\s/)
-    if (m && m[1].length <= headingLevel) break
-    sectionLines.push(lines[i])
-  }
-
-  return sectionLines.join("\n").trim()
+  return JSON.stringify(scaffold, null, 2)
 }
 
 /**
@@ -1374,6 +1501,9 @@ export function buildFileBlocksFromAssignments(
 
   for (const item of assignments) {
     if (!item.page_path || !isSafeIngestPath(item.page_path)) continue
+    // Skip assignments with no relations — they produce edge-less nodes that
+    // clutter the graph and contradict the "no graph, no file" design intent.
+    if (!item.relations || item.relations.length === 0) continue
 
     const sourceRange = item.source_range ?? ""
     const section = item.source_text ?? ""

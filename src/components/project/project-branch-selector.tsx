@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from "react"
 import { gitLsRemote } from "@/commands/git"
 import { useWikiStore } from "@/stores/wiki-store"
-import { getRecentProjects, saveSelectedBranch } from "@/lib/project-store"
+import { getRecentProjects, saveSelectedBranch, saveGitRemoteUrl, loadGitRemoteUrl } from "@/lib/project-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2, GitBranch, HardDrive } from "lucide-react"
+import { Loader2, GitBranch, HardDrive, RefreshCw } from "lucide-react"
 
-const GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
-const REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
+const ENV_GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
+const ENV_REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
 
-const getRepoUrl = () => {
-  if (GIT_TOKEN) {
-    return `https://oauth2:${encodeURIComponent(GIT_TOKEN)}@${REPO_BASE_URL}`
+function buildRepoUrl(baseUrl: string): string {
+  const cleaned = baseUrl.replace(/^https?:\/\//, "")
+  if (!cleaned) return ""
+  if (ENV_GIT_TOKEN) {
+    return `https://oauth2:${encodeURIComponent(ENV_GIT_TOKEN)}@${cleaned}`
   }
-  return `https://${REPO_BASE_URL}`
+  return `https://${cleaned}`
 }
 
 interface BranchItem {
@@ -22,6 +24,7 @@ interface BranchItem {
 }
 
 export function ProjectBranchSelector() {
+  const [remoteUrlInput, setRemoteUrlInput] = useState("")
   const [items, setItems] = useState<BranchItem[]>([])
   const [loading, setLoading] = useState(true)
   const [remoteError, setRemoteError] = useState<string | null>(null)
@@ -29,20 +32,30 @@ export function ProjectBranchSelector() {
   const inputRef = useRef<HTMLInputElement>(null)
   const setSelectedBranch = useWikiStore((s) => s.setSelectedBranch)
 
+  // Load cached remote URL on mount, then fetch branch list
   useEffect(() => {
-    fetchAll()
+    async function init() {
+      const cached = await loadGitRemoteUrl()
+      const initial = cached ?? ENV_REPO_BASE_URL
+      setRemoteUrlInput(initial)
+      await fetchAll(initial)
+    }
+    void init()
   }, [])
 
-  async function fetchAll() {
+  async function fetchAll(baseUrl: string) {
     setLoading(true)
     setRemoteError(null)
 
-    // Fetch remote branches and local recent projects in parallel
+    const repoUrl = buildRepoUrl(baseUrl)
+
     const [remoteResult, localProjects] = await Promise.all([
-      gitLsRemote(getRepoUrl()).then(
-        (list) => ({ ok: true as const, list }),
-        (err) => ({ ok: false as const, error: String(err) }),
-      ),
+      repoUrl
+        ? gitLsRemote(repoUrl).then(
+            (list) => ({ ok: true as const, list }),
+            (err) => ({ ok: false as const, error: String(err) }),
+          )
+        : Promise.resolve({ ok: true as const, list: [] as string[] }),
       getRecentProjects(),
     ])
 
@@ -53,16 +66,18 @@ export function ProjectBranchSelector() {
     }
 
     const remoteSet = new Set(remoteBranches)
-
-    // Local-only: recent projects whose name isn't already in remote branches
     const localOnlyItems: BranchItem[] = localProjects
       .filter((p) => !remoteSet.has(p.name))
       .map((p) => ({ name: p.name, localOnly: true }))
-
     const remoteItems: BranchItem[] = remoteBranches.map((b) => ({ name: b, localOnly: false }))
 
     setItems([...remoteItems, ...localOnlyItems])
     setLoading(false)
+  }
+
+  async function handleRefresh() {
+    await saveGitRemoteUrl(remoteUrlInput.trim())
+    await fetchAll(remoteUrlInput.trim())
   }
 
   async function handleSelectBranch(branch: string) {
@@ -76,15 +91,6 @@ export function ProjectBranchSelector() {
     await handleSelectBranch(name)
   }
 
-  if (loading) {
-    return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="text-muted-foreground">Fetching projects...</p>
-      </div>
-    )
-  }
-
   return (
     <div className="flex h-screen items-center justify-center bg-background">
       <div className="flex w-full max-w-md flex-col gap-6 px-4">
@@ -95,13 +101,45 @@ export function ProjectBranchSelector() {
           </p>
         </div>
 
-        {remoteError && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive break-all">
-            Remote unavailable: {remoteError}
+        {/* Remote URL input */}
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium">Remote Git URL</p>
+          <div className="flex gap-2">
+            <Input
+              placeholder="gitlab.example.com/group/repo.git"
+              value={remoteUrlInput}
+              onChange={(e) => setRemoteUrlInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleRefresh()}
+              className="font-mono text-xs"
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={handleRefresh}
+              disabled={loading}
+              title="Refresh branch list"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+            </Button>
           </div>
-        )}
+          {remoteError && (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive break-all">
+              Remote unavailable: {remoteError}
+            </p>
+          )}
+        </div>
 
-        {items.length > 0 && (
+        {/* Branch list */}
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-4 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="text-sm">Fetching projects...</span>
+          </div>
+        ) : items.length > 0 ? (
           <div className="rounded-lg border bg-card">
             <div className="max-h-[300px] overflow-y-auto">
               {items.map((item) => (
@@ -123,8 +161,11 @@ export function ProjectBranchSelector() {
               ))}
             </div>
           </div>
+        ) : (
+          <p className="text-center text-sm text-muted-foreground">No projects found</p>
         )}
 
+        {/* Create new project */}
         <div className="flex flex-col gap-2">
           <p className="text-sm font-medium">Or create a new project</p>
           <div className="flex gap-2">
@@ -139,11 +180,6 @@ export function ProjectBranchSelector() {
               Create
             </Button>
           </div>
-          {remoteError && (
-            <Button variant="outline" size="sm" onClick={fetchAll}>
-              Retry connection
-            </Button>
-          )}
         </div>
       </div>
     </div>

@@ -441,3 +441,209 @@ window.__TAURI__.core.invoke("graph_db_query", {
 검증 결과:
 
 - `npm run typecheck` 통과.
+
+---
+
+## Fix 24: 청크 Stage 1 JSON 파싱 실패로 인한 ingest 전체 중단 & CLI/HTTP ingest 경로 통합
+
+### 현상
+
+claude/gemini CLI로 ingest 시 일부 청크에서 다음 로그를 남기며 ingest가 중단됐다.
+
+```
+[ingest:stage1] Chunk 2/3 · file=namu-wiki-...md chars=24060
+[ingest:stage1] JSON parse failed — raw:
+```
+
+- chunk 1은 그래프까지 정상 동기화(예: 63 nodes, 9 edges)됐으나 chunk 2 Stage 1에서 throw → 문서 전체 ingest가 중단됐다.
+- 그 결과 markdown 문서는 일부 생성됐지만 그래프 생성이 끝까지 진행되지 않았다.
+- 추가로 Graph 탭 > Knowledge 드롭다운과 Files 탭의 그래프 목록이 비어 보였다(데이터는 FalkorDB에 있으나 UI가 갱신되지 않음).
+
+### 원인 분석
+
+#### 1. CLI 프로바이더는 `response_format`/`max_tokens`를 강제할 수 없음
+
+`src/lib/llm-client.ts`의 `streamChat`은 CLI 프로바이더(`claude-code`/`gemini-cli`/`codex-cli`)면 `getProviderConfig`/`requestOverrides` 적용 이전에 early-return 한다(`isCliProvider`). 즉 `response_format: { type: "json_object" }`와 `max_tokens`가 모두 무시된다.
+
+- JSON 출력은 프롬프트로만 유도되고 강제되지 않는다.
+- 출력 토큰 예산을 키울 수 없어 CLI 기본 한도에 의존한다.
+
+Stage 1 출력 JSON은 입력 청크의 `source_text`를 그대로 담으므로 청크가 크면 출력도 커진다. `MAX_CHUNK_CHARS = 20000` 기준 24060자 출력이 나오면 잘림(불완전 JSON) 또는 산문 혼입으로 `JSON.parse`가 실패한다.
+
+#### 2. 청크 실패가 문서 전체를 중단시킴
+
+청크 루프 본문에서 Stage 1/2 실패 시 `throw`로 처리되어, 한 청크만 깨져도 나머지 청크와 후처리가 전부 중단됐다.
+
+#### 3. UI 그래프 목록이 갱신되지 않음
+
+`src/components/graph/graph-view.tsx`의 그래프 목록은 `dataVersion`이 바뀔 때만 FalkorDB를 재쿼리한다. `bumpDataVersion()`은 청크 루프가 **전부 끝난 뒤** 호출되는데, 중간 throw로 거기에 도달하지 못해 UI가 stale 상태로 남았다.
+
+#### 4. CLI/HTTP ingest 경로가 오케스트레이션을 통째로 중복 구현함
+
+`src/lib/agent-ingest.ts`(CLI 경로)와 `src/lib/ingest.ts`의 `autoIngestImpl`(HTTP 경로)이 청크 루프·Stage1/2/3·write·graph-sync를 거의 동일하게 두 벌 구현하고 있었다. 실제로 필요한 분기는 transport(서브프로세스 vs HTTP)와 JSON 강제 방식(`response_format` vs 프롬프트)뿐이었다. 이 중복 때문에 청크 실패 격리 같은 로직을 양쪽에 따로 넣어야 했고 드리프트 위험이 컸다. 또한 CLI 경로는 캐시·dbIndex 갱신·수정 제안(Stage 4)·auto-commit·임베딩 등 HTTP 경로의 기능을 누락한 축소 구현이었다.
+
+### 수정 방향
+
+| 파일 | 수정 방향 |
+|------|---------|
+| `src/lib/ingest.ts` | `MAX_CHUNK_CHARS`를 20000 → 8000으로 축소해 Stage 1 출력 JSON이 잘림 한도 안에 들도록 한다. |
+| `src/lib/ingest.ts` | 청크 실패 격리: Stage 1/2 실패 지점의 `throw`를 "실패 기록 후 다음 청크로 `continue`"로 변경하고, 실패 청크를 review item으로 묶어 표시한다. |
+| `src/lib/ingest.ts` | 프로바이더 분기를 단일 `callModel()` 헬퍼로 격리하고, `autoIngestImpl`을 모든 프로바이더의 단일 경로로 통합한다. |
+| `src/lib/agent-ingest.ts` | 통합으로 불필요해지므로 삭제한다. |
+
+### 개발 반영 현황
+
+구현 완료:
+
+- `src/lib/ingest.ts`
+  - `MAX_CHUNK_CHARS`를 8000으로 축소했다(CLI/HTTP 양쪽이 공유하는 `chunkSourceContent`에 적용).
+  - `callModel()` 헬퍼를 추가해 프로바이더 분기를 한 곳으로 모았다. HTTP는 `streamChat` + `response_format: json_object`, CLI 코딩 에이전트는 transport 직접 호출 + `disableTools: true` + 프롬프트의 `JSON_ONLY_INSTRUCTION`을 사용한다. 전송 오류는 throw 해 청크 격리 catch가 처리한다.
+  - 디스패치(`autoIngest`)를 `isCliProvider` 분기 없이 항상 `autoIngestImpl`을 타도록 단일화했다.
+  - Stage 1/2를 `callModel` 기반으로 재작성하고, 4개 실패 지점(Stage 1 모델 호출/섹션 0개, Stage 2 모델 호출/배정 0개)을 `failedChunks` 기록 후 `continue`로 변경했다.
+  - 실패 청크를 한 문서당 하나의 review item으로 묶고, activity detail에 `(N/M chunk(s) skipped)`를 표기한다. 한 청크라도 성공하면 `bumpDataVersion()`까지 도달해 UI 그래프 목록이 자동 갱신된다.
+  - 부분 실패(`failedChunks.length > 0`) 시 `saveIngestCache`를 건너뛰어 재실행 시 실패 청크를 다시 시도하도록 했다.
+  - Stage 1 user prompt 문구를 시스템 프롬프트(sections 출력)에 맞춰 정리하고, Stage 2 파싱에 코드펜스 제거를 추가했다.
+
+- `src/lib/agent-ingest.ts`
+  - 삭제했다. CLI 경로는 이제 `autoIngestImpl` + `callModel`을 통해 처리된다. CLI 프로바이더도 캐시·dbIndex 갱신·수정 제안·auto-commit·임베딩을 HTTP 경로와 동일하게 사용하게 됐다.
+
+- `src/lib/claude-cli-transport.ts`
+  - 삭제된 파일을 가리키던 문서 주석을 `ingest.ts`의 `callModel()`로 갱신했다.
+
+- `src/lib/__tests__/agent-ingest.test.ts`
+  - 통합된 `autoIngestImpl`을 대상으로 재배선하고, CLI 경로가 새로 타는 cache/git/commit 모듈에 mock을 추가했다.
+  - Stage 1/2 실패가 throw가 아니라 해당 청크 skip + review item으로 처리됨을 검증하도록 기존 테스트를 갱신했다.
+
+검증 결과:
+
+- `npm exec vitest run "src/lib/__tests__/agent-ingest.test.ts" "src/lib/ingest-chunk.test.ts"` 통과(17/17).
+- `npm run typecheck` 통과.
+- 전체 테스트 스위트 실패 수가 baseline 21 → 19로 감소(신규 실패 0건). 남은 실패는 본 변경과 무관한 기존 실패(embedding, classify-question, question-types, ingest.scenarios 5건 등)임을 stash 비교로 확인했다.
+
+---
+
+## Fix 25: Stage 1 verbatim `source_text`의 마크다운 이스케이프로 인한 JSON 파싱 실패 — Stage 1을 구분자(SECTION) 포맷으로 전환
+
+### 현상
+
+namuwiki 소스를 ingest할 때 일부 청크가 다음 로그를 남기며 스킵됐다.
+
+```
+[ingest:stage1] file=namu-wiki-...2M.md chars=4373
+[ingest:stage1] JSON parse failed — raw:
+[ingest:stage1:ERROR] Stage 1 produced no sections. LLM raw output (4373 chars): ...
+```
+
+- 출력은 4373자로 `MAX_CHUNK_CHARS`(8000) 한도 안이고 **잘리지 않았다**.
+- raw 출력은 ```json 펜스로 감싼 **구조적으로 완전한 JSON**이었고 펜스 제거도 정상이었다.
+- 즉 Fix 24가 가정한 두 원인(잘림 / 산문 혼입)에 **모두 해당하지 않는** 새 케이스다.
+
+### 원인 분석
+
+Stage 1은 `source_text`를 **원문 그대로(verbatim)** JSON 문자열에 담도록 지시받는다. namuwiki 원문에는 마크다운 백슬래시 이스케이프가 들어 있는데, LLM이 이를 그대로 JSON 문자열 값 안에 복사했다.
+
+- `[\[8\]](#fn-8 ...)` → `\[`, `\]`
+- `리니지\(게임\)` (링크 URL 안) → `\(`, `\)`
+
+JSON에서 합법적인 이스케이프는 `\" \\ \/ \b \f \n \r \t \uXXXX` 뿐이다. `\[`, `\(` 등은 **불법 이스케이프**라서 `JSON.parse`가 즉시 throw하고, `catch`가 이를 삼켜 `stage1Sections`가 비고 청크가 "no sections"로 스킵됐다. Stage 2 파싱도 동일 구조였다.
+
+이는 청크 크기와 무관하다. 원문에 백슬래시가 있는 한 길이를 줄여도 재발한다. 근본 원인은 **거대한 verbatim 텍스트를 손수 만든 JSON 계약에 실어 왕복**시키는 설계 자체다(Fix 24가 이미 "verbatim 텍스트가 JSON에 부적합한 문자를 자주 포함한다"는 문제를 시사했다).
+
+> 참고: Stage 2 출력은 `source_id`로 섹션을 참조할 뿐 verbatim `source_text`를 담지 않으므로(Fix 22) 이미 구조적으로 안전하다. 따라서 이 Fix의 구조 변경 범위는 **Stage 1로 한정**한다.
+
+### 수정 방향 — 구조적 수정(JSON 제거)
+
+표면적 escape 보정 대신, Stage 1이 verbatim 텍스트를 JSON 문자열에 싣지 않도록 **구분자 기반 SECTION 포맷**으로 바꾼다. 이는 Stage 3의 `---FILE: ...---` 규약과 동일한 철학이며, 본문에 어떤 바이트(백슬래시·따옴표·중괄호)가 와도 이스케이프가 필요 없다.
+
+```text
+---SECTION: ## 고블린 전사---
+<원문 그대로의 섹션 텍스트>
+---END SECTION---
+```
+
+| 파일 | 수정 방향 |
+|------|---------|
+| `src/lib/ingest.ts` | `buildDecompositionPrompt()`의 출력 형식을 JSON `{sections:[...]}`에서 SECTION 블록 규약으로 변경. "백슬래시/따옴표/괄호를 이스케이프하지 말고 verbatim 복사"를 명시. |
+| `src/lib/ingest.ts` | `parseStage1Sections()` 파서 추가. 줄 단위·대소문자/공백 허용 마커로 SECTION 블록을 파싱. 본문은 verbatim(코드펜스 인식 안 함 — 원문의 불균형 ``` 펜스가 closer를 삼키는 것을 방지). 미닫힌 trailing 블록도 본문을 살려 truncation에 관대. |
+| `src/lib/ingest.ts` | Stage 1 파싱부의 `JSON.parse` + 펜스 제거 로직을 `parseStage1Sections()` 호출로 교체. `[ingest:stage1] JSON parse failed` 디버그 제거. |
+| `src/lib/ingest.ts` | `callModel()`에 `jsonMode` 인자 추가. `false`면 HTTP 프로바이더에 `response_format: json_object`를 강제하지 않음(SECTION 포맷이 JSON으로 감싸지지 않도록). Stage 1 호출은 `jsonMode=false`. Stage 2는 변경 없음(JSON 유지). |
+| `src/lib/ingest.ts` | Stage 1 user prompt를 `JSON_ONLY_INSTRUCTION`에서 신규 `SECTION_ONLY_INSTRUCTION`으로 교체. |
+
+> 의도적 선택: JSON 폴백을 두지 않는다. 모델이 포맷을 어기면 기존대로 "no sections"로 청크가 스킵되고 디버그 로그가 남는다(표면 escape 보정 로직을 되살리지 않기 위함).
+
+### 개발 반영 현황
+
+구현 완료:
+
+- `src/lib/ingest.ts`
+  - `parseStage1Sections()` + `SECTION_OPENER_LINE`/`SECTION_CLOSER_LINE` 마커를 추가했다.
+  - `buildDecompositionPrompt()`를 SECTION 블록 출력 규약으로 변경하고 verbatim 복사(이스케이프 금지)를 명시했다.
+  - `callModel()`에 `jsonMode` 인자(기본 `true`)를 추가하고 `response_format` 강제를 조건부로 바꿨다. Stage 1 호출을 `jsonMode=false` + `SECTION_ONLY_INSTRUCTION`으로 전환했다.
+  - Stage 1 파싱부의 JSON 파싱/펜스 제거 블록을 `parseStage1Sections()` 호출로 교체했다.
+
+- `src/lib/ingest-parse.test.ts`
+  - `parseStage1Sections` 단위 테스트를 추가했다: 단일/다중 블록, 멀티라인 본문, **마크다운 이스케이프(`\[ \(`) 보존**, 마커 공백·대소문자·CRLF 허용, 빈 본문/비-SECTION 입력 시 `[]`, truncation 관대성.
+
+- `src/lib/__tests__/agent-ingest.test.ts`
+  - Stage 1 mock 응답을 JSON에서 SECTION 포맷으로 갱신했다.
+  - 회귀 테스트 추가: `source_text`에 `\(`, `\[` 가 있어도 섹션이 유실되지 않고 백슬래시까지 본문에 보존됨을 검증한다.
+
+검증 결과:
+
+- `npx vitest run src/lib/__tests__/agent-ingest.test.ts src/lib/ingest-parse.test.ts src/lib/ingest.prompt.test.ts src/lib/ingest-chunk.test.ts` 통과(69/69, 신규 8건 포함).
+- `npm run typecheck` 통과.
+- `ingest.scenarios.test.ts`의 실패 5건은 본 변경 이전부터 있던 baseline 실패(legacy analysis→generation fixture)로 개수 변동 없음.
+
+---
+
+## Fix 26: `parseFalkorQueryResult`가 실제 GRAPH.QUERY 응답 형태를 파싱 못함 — Knowledge 드롭박스/그래프 캔버스 빈 상태 (Fix 23 미완)
+
+### 현상
+
+ingest 후 로그에 `86 nodes, 9 edges synced to [...18개 그래프...]`가 출력되고 FalkorDB에도 정상 생성됐는데, Graph 탭 > Knowledge 탭 드롭박스에 그래프가 하나도 안 나온다.
+
+### 원인 분석 (Fix 23이 못 고친 진짜 원인)
+
+`src/components/graph/graph-view.tsx`의 `refreshLiveGraphs`는 각 그래프에 `MATCH (n) RETURN n LIMIT 1`을 쿼리한 뒤 `parseFalkorQueryResult(res).nodes.length > 0`인 그래프만 드롭박스에 넣는다. 그런데 `parseFalkorQueryResult`가 실제 응답을 한 건도 파싱하지 못해 **항상 0 nodes**를 반환 → 18개 그래프 전부 필터에서 탈락.
+
+핵심은 Rust 백엔드의 `redis_value_to_json`(`src-tauri/src/commands/graph_db.rs`)이다. 이 함수의 match에는 **map/object 분기가 없다**(Nil/Int/BulkString/Array/SimpleString/Okay/그 외→디버그 문자열). 즉 이 백엔드는 `{labels,...}`나 `{"n":{...}}` 같은 **객체를 절대 만들 수 없고**, 모든 중첩 구조를 JSON 배열로만 내보낸다. 그런데 `parseFalkorQueryResult`(및 Fix 23이 추가한 `{"n":{...}}` unwrap)는 객체 키(`labels`/`relationshipType`)를 찾으므로 영원히 매치되지 않는다. Fix 23은 존재할 수 없는 형태를 가정했고 검증도 `typecheck`만 해서(실제 FalkorDB read 미검증) 무효였다.
+
+실제 응답 형태(라이브 FalkorDB raw RESP로 캡처, verbose/non-compact):
+
+```
+전체: [ header, rows, stats ]
+  header = ["n"] / ["n","r","m"]
+  rows   = [ [ cell, ... ], ... ]
+  stats  = ["Cached execution: 1", "Query internal execution time: ... ms"]
+노드 cell: [["id",0],["labels",["Page"]],["properties",[["id","..."],["label","리니지(게임)"],["path","..."],...]]]
+엣지 cell: [["id",0],["type","BRANCHES_INTO"],["src_node",0],["dest_node",1],["properties",[...]]]
+```
+
+즉 노드/엣지는 객체가 아니라 **`[key, value]` 쌍의 배열**이고, `properties`도 그 안의 또 다른 쌍 배열이다.
+
+> 참고: sync 로그의 `done — 26 nodes`는 read 결과가 아니라 write를 시도한 로컬 개수(`nodesInGraph.length`)라서 read 파싱이 된다는 증거가 아니다.
+
+### 수정 방향
+
+| 파일 | 수정 방향 |
+|------|---------|
+| `src/lib/falkor-visualization.ts` | `parseFalkorQueryResult()`를 실제 "쌍 배열" 구조로 재작성. 응답 전체를 deep-walk하며 노드/엣지 시그니처를 가진 배열(`labels`+`id` → 노드, `src_node`+`dest_node` → 엣지)만 디코딩. header/stats는 문자열 배열이라 자동 무시되므로 인덱스 가정 불필요. RESP3 map 대비 객체-형태 폴백도 유지. |
+| `src/lib/falkor-visualization.test.ts` | 라이브 FalkorDB에서 캡처한 노드/엣지 응답을 픽스처로 박은 단위 테스트 신규 추가(파서 자체를 런타임 검증). |
+
+### 개발 반영 현황
+
+구현 완료:
+
+- `src/lib/falkor-visualization.ts`
+  - `parseFalkorQueryResult()`를 deep-walk + `[key,value]` 쌍 배열 디코딩으로 재작성했다. `isPairArray()`/`pairsToObject()` 헬퍼를 추가했다.
+  - 노드는 `labels`+`id` 시그니처, 엣지는 `src_node`+`dest_node` 시그니처로 감지한다. `properties` 쌍 배열은 객체로 변환해 `node.data.path` 등이 정상 동작한다.
+  - 엣지 키 변형(`type`/`relationshipType`, `src_node`/`sourceId`, `dest_node`/`destinationId`)과 미래의 RESP3 객체 형태를 모두 방어적으로 허용한다.
+
+- `src/lib/falkor-visualization.test.ts`
+  - 라이브 캡처 기반 픽스처로 노드 디코딩(header/stats 무시), n,r,m 행에서 노드+typed 엣지 디코딩, 빈 결과/비배열/null, 중복 노드 dedupe, 객체-형태 폴백을 검증한다.
+
+검증 결과:
+
+- `npx vitest run src/lib/falkor-visualization.test.ts` 통과(6/6).
+- `npm run typecheck` 통과.
+- 라이브 FalkorDB(`Mydev___event_chain_graph`) 실제 응답을 신규 파서 로직에 통과시켜 노드 2개 + 엣지 1개(`BRANCHES_INTO`, 0→1)가 정상 추출됨을 end-to-end로 확인했다.

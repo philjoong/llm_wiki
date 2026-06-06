@@ -116,8 +116,8 @@ type SpawnPayload = Record<string, unknown> & {
 
 /**
  * Ingest-only spawn options. Chat callers omit these and get the
- * existing behavior; the agent-ingest path (src/lib/agent-ingest.ts)
- * sets all three:
+ * existing behavior; the ingest pipeline's callModel() (src/lib/ingest.ts)
+ * sets all three for the claude-code provider:
  *   - disableTools: true     — `--tools ""` so the model can't use Read/Write/Edit
  *   - systemPrompt: <prompt> — replaces default system prompt; also blocks cwd CLAUDE.md leakage
  *   - cwd: <project root>    — pin the child's working dir to the wiki project

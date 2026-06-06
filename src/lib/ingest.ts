@@ -1,7 +1,10 @@
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { invoke } from "@tauri-apps/api/core"
 import { streamChat, isCliProvider } from "@/lib/llm-client"
-import { autoIngestViaAgent } from "@/lib/agent-ingest"
+import { streamClaudeCodeCli } from "@/lib/claude-cli-transport"
+import { streamGeminiCli } from "@/lib/gemini-cli-transport"
+import { streamCodexCli } from "@/lib/codex-cli-transport"
+import type { ChatMessage } from "@/lib/llm-providers"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useChatStore } from "@/stores/chat-store"
@@ -227,6 +230,66 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
   return { blocks, warnings }
 }
 
+// Stage 1 SECTION markers. Mirror the FILE-block markers above:
+// line-anchored, case-insensitive, tolerant of interior whitespace. The
+// `source_range` rides on the opener line (it's a single-line locator —
+// heading path / sheet+range / timestamp); the body between the markers
+// is VERBATIM source text. Verbatim text is exactly why Stage 1 left JSON
+// behind (Fix 25): markdown escapes like `\[`, `\]`, `\(`, `\)` are invalid
+// JSON escape sequences and made JSON.parse throw, silently dropping the
+// whole chunk. A delimiter format carries any bytes without escaping.
+const SECTION_OPENER_LINE = /^---\s*SECTION:\s*(.*?)\s*---\s*$/i
+const SECTION_CLOSER_LINE = /^---\s*END\s+SECTION\s*---\s*$/i
+
+/**
+ * Parse a Stage 1 decomposition response into sections.
+ *
+ * Deliberately NOT code-fence-aware (unlike parseFileBlocks): the body is
+ * arbitrary verbatim source markdown that may contain unbalanced ``` fences,
+ * and a fence tracker would then swallow the `---END SECTION---` closer and
+ * drop the block. A literal `---END SECTION---` line appearing inside real
+ * source text is vanishingly unlikely, so "close on the first closer line"
+ * is the safer trade for verbatim content.
+ *
+ * Truncation-tolerant: an unclosed trailing block still yields its body —
+ * a stream cut mid-section just produces a shorter (still usable) source_text
+ * rather than dropping the section entirely.
+ *
+ * Exported for tests.
+ */
+export function parseStage1Sections(text: string): Stage1Section[] {
+  const normalized = text.replace(/\r\n/g, "\n")
+  const lines = normalized.split("\n")
+  const sections: Stage1Section[] = []
+
+  let i = 0
+  while (i < lines.length) {
+    const opener = SECTION_OPENER_LINE.exec(lines[i])
+    if (!opener) {
+      i++
+      continue
+    }
+    const sourceRange = opener[1].trim()
+    i++ // consume opener
+
+    const bodyLines: string[] = []
+    while (i < lines.length) {
+      if (SECTION_CLOSER_LINE.test(lines[i])) {
+        i++ // consume closer
+        break
+      }
+      bodyLines.push(lines[i])
+      i++
+    }
+
+    const sourceText = bodyLines.join("\n").trim()
+    if (sourceText.length === 0) continue // too thin to be meaningful
+    sections.push({ source_range: sourceRange, source_text: sourceText })
+  }
+
+  return sections
+}
+
 /**
  * Build the language rule for ingest prompts.
  * Uses the user's configured output language, falling back to source content detection.
@@ -246,7 +309,7 @@ export function languageRule(sourceContent: string = ""): string {
  * room for the system prompts (dbIndex + dismissals) and the
  * FILE-block output.
  */
-const MAX_CHUNK_CHARS = 20000
+const MAX_CHUNK_CHARS = 8000
 
 /**
  * Recursively split content into chunks ≤ maxChars, preferring to break
@@ -339,19 +402,106 @@ export async function autoIngest(
   signal?: AbortSignal,
   folderContext?: string,
 ): Promise<string[]> {
-  // Local-CLI providers (Claude Code today; Codex/Gemini eventually)
-  // bypass the FILE-block pipeline because their coding-agent training
-  // makes them invoke Read/Write/Edit instead of producing parseable
-  // text. See [agent-ingest.ts](./agent-ingest.ts) for the reasoning
-  // and Stage A verification record in claude-cli-ingest-plan.md.
+  // Single pipeline for all providers. The only provider-specific
+  // divergence — how the model is asked to emit JSON — is isolated in
+  // callModel(): HTTP providers use response_format, local-CLI coding
+  // agents disable tools and rely on a "JSON only" prompt instruction.
   return withProjectLock(normalizePath(projectPath), () =>
-    isCliProvider(llmConfig.provider)
-      ? autoIngestViaAgent(projectPath, sourcePath, llmConfig, signal, folderContext)
-      : autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext),
+    autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext),
   )
 }
 
-async function autoIngestImpl(
+/**
+ * Single model-call entry point for the ingest pipeline. Returns the
+ * model's raw text and throws on transport error so the per-chunk
+ * isolation in autoIngestImpl can catch it and skip just that chunk.
+ *
+ * Provider divergence lives here and nowhere else:
+ *  - HTTP providers enforce JSON via `response_format: json_object`.
+ *  - Local-CLI coding agents (claude-code/gemini-cli/codex-cli) can't set
+ *    response_format and will invoke Read/Write/Edit tools if left to
+ *    their own devices, so we spawn them with tools disabled and lean on
+ *    the prompt's explicit "JSON only" instruction instead.
+ */
+async function callModel(
+  llmConfig: LlmConfig,
+  systemPrompt: string,
+  userContent: string,
+  signal: AbortSignal | undefined,
+  projectPath: string,
+  maxTokens?: number,
+  // Stage 1 emits a delimiter-based SECTION format (not JSON) so verbatim
+  // source_text never has to round-trip through a JSON string. When false,
+  // we must NOT force `response_format: json_object` on HTTP providers — that
+  // would make the model wrap the SECTION blocks in JSON. CLI providers
+  // ignore response_format either way.
+  jsonMode: boolean = true,
+): Promise<string> {
+  if (isCliProvider(llmConfig.provider)) {
+    let buffer = ""
+    await new Promise<void>((resolve, reject) => {
+      const cb = {
+        onToken: (token: string) => { buffer += token },
+        onDone: () => resolve(),
+        onError: (err: Error) => reject(err),
+      }
+      // CLI transports have no system role; prepend it to the user turn.
+      const combined: ChatMessage[] = [{ role: "user", content: `${systemPrompt}\n\n${userContent}` }]
+      let transport: Promise<void>
+      if (llmConfig.provider === "gemini-cli") {
+        transport = streamGeminiCli(llmConfig, combined, cb, signal)
+      } else if (llmConfig.provider === "codex-cli") {
+        transport = streamCodexCli(llmConfig, combined, cb, signal)
+      } else {
+        // claude-code: keep the system prompt separate so we can also pass
+        // disableTools + cwd as spawn options.
+        transport = streamClaudeCodeCli(
+          llmConfig,
+          [{ role: "user", content: userContent }],
+          cb,
+          signal,
+          { disableTools: true, systemPrompt, cwd: projectPath },
+        )
+      }
+      transport.catch(reject)
+    })
+    return buffer
+  }
+
+  let buffer = ""
+  const errors: Error[] = []
+  await streamChat(
+    llmConfig,
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userContent },
+    ],
+    {
+      onToken: (token) => { buffer += token },
+      onDone: () => {},
+      onError: (err) => { errors.push(err) },
+    },
+    signal,
+    { temperature: 0.1, ...(jsonMode ? { response_format: { type: "json_object" as const } } : {}), ...(maxTokens ? { max_tokens: maxTokens } : {}) },
+  )
+  if (errors.length > 0) throw errors[0]
+  return buffer
+}
+
+/** Instruction appended to every stage's user turn so CLI coding agents
+ * emit a bare JSON object instead of prose or tool calls. Harmless for
+ * HTTP providers, which already get response_format. */
+const JSON_ONLY_INSTRUCTION =
+  "Output ONLY a JSON object — no prose, no code fences. First character must be `{`."
+
+/** Stage 1 counterpart to JSON_ONLY_INSTRUCTION. Stage 1 emits a
+ * delimiter-based SECTION format instead of JSON so verbatim source_text
+ * (which routinely contains JSON-hostile markdown escapes like `\[` and
+ * `\(`) never has to be escaped or round-tripped through a JSON string. */
+const SECTION_ONLY_INSTRUCTION =
+  "Output ONLY `---SECTION: ...---` / `---END SECTION---` blocks — no JSON, no prose, no outer code fence. The first characters of your response must be `---SECTION:`."
+
+export async function autoIngestImpl(
   projectPath: string,
   sourcePath: string,
   llmConfig: LlmConfig,
@@ -416,6 +566,10 @@ async function autoIngestImpl(
   const allWarnings: string[] = []
   const allProposals: ModificationProposal[] = []
   const allReviewItems: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = []
+  // Chunk-level failures are isolated: a chunk that fails Stage 1/2 is
+  // recorded here and skipped so the remaining chunks still ingest. The
+  // whole document no longer aborts on the first bad chunk.
+  const failedChunks: Array<{ chunk: number; stage: string; error: string }> = []
   // dbIndex is refreshed between chunks so later chunks see what earlier
   // chunks wrote — this lets the LLM align paths with what already exists
   // and routes real overwrite conflicts through Stage 4's proposal flow
@@ -433,72 +587,60 @@ async function autoIngestImpl(
     activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1/3: Decomposing document...` })
 
     let stage1Raw = ""
-
-    await streamChat(
-      llmConfig,
-      [
-        { role: "system", content: buildDecompositionPrompt(currentDbIndex, chunk, dismissalContext) },
-        { role: "user", content: `Decompose this source document into concepts with their relationships.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n---\n\n${chunk}` },
-      ],
-      {
-        onToken: (token) => { stage1Raw += token },
-        onDone: () => {},
-        onError: (err) => {
-          activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Stage 1 failed: ${err.message}` })
-        },
-      },
-      signal,
-      { temperature: 0.1, response_format: { type: "json_object" }, max_tokens: 16000 },
-    )
-
-    const stage1Activity = useActivityStore.getState().items.find((i) => i.id === activityId)
-    invoke("app_debug", { message: `[ingest:stage1] ${chunkLabel}file=${fileName} chars=${stage1Raw.length}` }).catch(() => {})
-    if (stage1Activity?.status === "error") {
-      const errMsg = stage1Activity.detail || `${chunkLabel}Stage 1 stream failed`
-      throw new Error(errMsg)
-    }
-
-    let stage1Sections: Stage1Section[] = []
     try {
-      const cleaned = stage1Raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
-      const parsed = JSON.parse(cleaned)
-      stage1Sections = Array.isArray(parsed) ? parsed : (parsed.sections ?? [])
-    } catch {
-      invoke("app_debug", { message: `[ingest:stage1] JSON parse failed — raw:\n${stage1Raw}` }).catch(() => {})
+      stage1Raw = await callModel(
+        llmConfig,
+        buildDecompositionPrompt(currentDbIndex, chunk, dismissalContext),
+        `Decompose this source document into SECTION blocks with their verbatim text.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${chunk}`,
+        signal,
+        pp,
+        16000,
+        false, // Stage 1 uses the SECTION delimiter format, not JSON.
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 failed: ${msg} — skipping chunk` })
+      failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (model call)", error: msg })
+      continue
     }
+
+    invoke("app_debug", { message: `[ingest:stage1] ${chunkLabel}file=${fileName} chars=${stage1Raw.length}` }).catch(() => {})
+
+    const stage1Sections = parseStage1Sections(stage1Raw)
 
     if (stage1Sections.length === 0) {
       const errMsg = `Stage 1 produced no sections. LLM raw output (${stage1Raw.length} chars): ${stage1Raw.slice(0, 2000)}`
       invoke("app_debug", { message: `[ingest:stage1:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
-      activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Stage 1 failed: no sections produced` })
-      throw new Error(`Ingest Stage 1 failed for "${fileName}": ${errMsg}`)
+      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 failed: no sections produced — skipping chunk` })
+      failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (no sections)", error: `no parseable sections from ${stage1Raw.length} chars of output` })
+      continue
     }
 
     // ── Stage 2: Graph Assignment — assign concepts to graphs ────────
     activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2/3: Assigning to graphs...` })
 
-    let stage2Raw = ""
-
     const stage2Scaffold = buildStage2Scaffold(stage1Sections)
 
-    await streamChat(
-      llmConfig,
-      [
-        { role: "system", content: buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy)) },
-        { role: "user", content: `Read the sections, then fill in the empty fields of each seed assignment below. Do not add or rename any keys inside assignment objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into assignments. You may add additional assignment objects using the same schema when one source_text needs multiple graph assignments.\n\n${stage2Scaffold}` },
-      ],
-      {
-        onToken: (token) => { stage2Raw += token },
-        onDone: () => {},
-        onError: () => {},
-      },
-      signal,
-      { temperature: 0.1, response_format: { type: "json_object" } },
-    )
+    let stage2Raw = ""
+    try {
+      stage2Raw = await callModel(
+        llmConfig,
+        buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy)),
+        `Read the sections, then fill in the empty fields of each seed assignment below. Do not add or rename any keys inside assignment objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into assignments. You may add additional assignment objects using the same schema when one source_text needs multiple graph assignments.\n\n${JSON_ONLY_INSTRUCTION}\n\n${stage2Scaffold}`,
+        signal,
+        pp,
+      )
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2 failed: ${msg} — skipping chunk` })
+      failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 2 (model call)", error: msg })
+      continue
+    }
 
     let parsed: Stage2Assignment[] = []
     try {
-      const obj = JSON.parse(stage2Raw)
+      const cleaned = stage2Raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
+      const obj = JSON.parse(cleaned)
       parsed = hydrateStage2Assignments(
         Array.isArray(obj) ? obj : (obj.assignments ?? []),
         stage1Sections,
@@ -510,8 +652,9 @@ async function autoIngestImpl(
     if (parsed.length === 0) {
       const errMsg = `Stage 2 produced no assignments from ${stage1Sections.length} section(s). LLM raw output (${stage2Raw.length} chars): ${stage2Raw.slice(0, 2000)}`
       invoke("app_debug", { message: `[ingest:stage2:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
-      activity.updateItem(activityId, { status: "error", detail: `${chunkLabel}Stage 2 failed: no graph assignments produced` })
-      throw new Error(`Ingest Stage 2 failed for "${fileName}": ${errMsg}`)
+      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2 failed: no graph assignments produced — skipping chunk` })
+      failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 2 (no assignments)", error: `no assignments from ${stage1Sections.length} section(s)` })
+      continue
     }
 
     // Register new graphs and relation-type expansions immediately so
@@ -619,6 +762,23 @@ async function autoIngestImpl(
     }
   }
 
+  // ── Failed chunks → review item ──────────────────────────────
+  // Surface skipped chunks so a partial ingest is visible and the user
+  // can re-run. One card per document covering every skipped chunk.
+  if (failedChunks.length > 0) {
+    allReviewItems.push({
+      type: "suggestion",
+      stage: "primary",
+      title: `Ingest skipped ${failedChunks.length}/${chunks.length} chunk(s): ${fileName}`,
+      description: failedChunks
+        .map((f) => `- **Chunk ${f.chunk}/${chunks.length}** (${f.stage}): ${f.error}`)
+        .join("\n"),
+      sourcePath: sp,
+      affectedPages: [],
+      options: [{ label: "Dismiss", action: "Dismiss" }],
+    })
+  }
+
   // ── Step 4: Append modification cards ────────────────────────
   // Stage 4 — append a modification card for every proposal the writer
   // parked. These items always run in their own card (the store skips
@@ -652,11 +812,19 @@ async function autoIngestImpl(
   // mismatch, path-traversal rejection, empty-path) are NOT failures
   // — they represent deterministic decisions and caching them is
   // safe.
-  if (allWrittenPaths.length > 0 && allHardFailures.length === 0) {
+  //
+  // Skipped chunks (failedChunks) also block caching: a partial ingest
+  // must stay re-runnable so the skipped chunks get another attempt
+  // instead of being frozen out by a content-hash cache hit.
+  if (allWrittenPaths.length > 0 && allHardFailures.length === 0 && failedChunks.length === 0) {
     await saveIngestCache(pp, fileName, sourceContent, allWrittenPaths)
   } else if (allHardFailures.length > 0) {
     console.warn(
       `[ingest] Skipping cache save for "${fileName}" — ${allHardFailures.length} block(s) failed to write: ${allHardFailures.join(", ")}`,
+    )
+  } else if (failedChunks.length > 0) {
+    console.warn(
+      `[ingest] Skipping cache save for "${fileName}" — ${failedChunks.length}/${chunks.length} chunk(s) skipped; re-run to retry them.`,
     )
   }
 
@@ -709,9 +877,12 @@ async function autoIngestImpl(
     }
   }
 
+  const skippedSuffix = failedChunks.length > 0
+    ? ` (${failedChunks.length}/${chunks.length} chunk(s) skipped)`
+    : ""
   const detail = allWrittenPaths.length > 0
-    ? `${allWrittenPaths.length} files written${allReviewItems.length > 0 ? `, ${allReviewItems.length} review item(s)` : ""}`
-    : "No files generated"
+    ? `${allWrittenPaths.length} files written${allReviewItems.length > 0 ? `, ${allReviewItems.length} review item(s)` : ""}${skippedSuffix}`
+    : `No files generated${skippedSuffix}`
 
   activity.updateItem(activityId, {
     status: allWrittenPaths.length > 0 ? "done" : "error",
@@ -1212,23 +1383,20 @@ export function buildDecompositionPrompt(
     "",
     languageRule(sourceContent),
     "",
-    "## Output format (JSON object — no other text)",
+    "## Output format (SECTION blocks — no JSON, no other text)",
     "",
-    'Output ONLY a JSON object with a `sections` array (no markdown fences, no prose):',
-    '{',
-    '  "sections": [',
-    '    {',
-    '      "source_range": "## 고블린 전사",',
-    '      "source_text": "<verbatim section text from the document>"',
-    '    }',
-    '  ]',
-    '}',
+    "Emit one SECTION block per distinct concept or topic, in this exact shape:",
+    "",
+    "---SECTION: ## 고블린 전사---",
+    "<verbatim section text from the document>",
+    "---END SECTION---",
     "",
     "Rules:",
-    "- `source_range`: heading path, sheet+range, or timestamp that locates this section in the source.",
-    "- `source_text`: the verbatim text of that section from the source document. Do NOT summarize or paraphrase.",
-    "- One entry per distinct concept or topic. If a concept spans multiple sections, merge them into one entry.",
+    "- The text after `SECTION:` on the opener line is the `source_range`: a single-line heading path, sheet+range, or timestamp that locates this section in the source.",
+    "- The body between the markers is the VERBATIM text of that section. Copy it exactly — do NOT summarize, paraphrase, or escape anything. Backslashes, quotes, brackets, parentheses, and braces must be copied as-is; there is no JSON here, so nothing needs escaping.",
+    "- One block per distinct concept or topic. If a concept spans multiple sections, merge them into one block.",
     "- If a section is too thin to be meaningful (e.g. a single line), omit it.",
+    "- Do NOT wrap the response in a code fence. Do NOT emit JSON. The first characters of your response must be `---SECTION:`.",
     "",
     dbIndex ? `## Current db/ index\n\n${dbIndex}` : "## Current db/ index\n\n(empty)",
     "",

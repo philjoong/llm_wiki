@@ -277,7 +277,9 @@
     "openInExplorer": "Open in Explorer",
     "inject": "Extract Knowledge",
     "injecting": "Extracting...",
-    "injectDialogTitle": "Select files to extract knowledge from"
+    "injectDialogTitle": "Select files to extract knowledge from",
+    "injectUrl": "Extract Knowledge from URL",
+    "injectUrlPrompt": "Enter a web page URL to extract knowledge from:"
   },
   "time": {
     "justNow": "just now",

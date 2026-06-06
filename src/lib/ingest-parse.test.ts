@@ -18,7 +18,7 @@
  * to dropping pages without telling anyone.
  */
 import { describe, it, expect } from "vitest"
-import { parseFileBlocks, isSafeIngestPath } from "./ingest"
+import { parseFileBlocks, isSafeIngestPath, parseStage1Sections } from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
 
@@ -446,5 +446,82 @@ describe("parseFileBlocks — path-traversal guard end-to-end", () => {
       "db/entities/topic-b.md",
     ])
     expect(warnings.some((w) => w.includes("../config.json"))).toBe(true)
+  })
+})
+
+describe("parseStage1Sections — delimiter format (Fix 25)", () => {
+  it("parses one SECTION block into a section", () => {
+    const text = [
+      "---SECTION: ## 고블린 전사---",
+      "고블린 전사는 불에 약하다.",
+      "---END SECTION---",
+    ].join("\n")
+    const sections = parseStage1Sections(text)
+    expect(sections).toEqual([
+      { source_range: "## 고블린 전사", source_text: "고블린 전사는 불에 약하다." },
+    ])
+  })
+
+  it("parses multiple SECTION blocks separated by blank lines", () => {
+    const text = [
+      "---SECTION: ## A---",
+      "alpha",
+      "---END SECTION---",
+      "",
+      "---SECTION: ## B---",
+      "beta",
+      "---END SECTION---",
+    ].join("\n")
+    const sections = parseStage1Sections(text)
+    expect(sections.map((s) => s.source_range)).toEqual(["## A", "## B"])
+    expect(sections.map((s) => s.source_text)).toEqual(["alpha", "beta"])
+  })
+
+  it("preserves verbatim markdown escapes that used to crash JSON.parse", () => {
+    // The exact class of input that broke the old JSON Stage 1: backslash
+    // escapes (`\[`, `\]`, `\(`, `\)`) are invalid JSON escapes. The
+    // delimiter format carries them through untouched.
+    const body = "리니지\\(게임\\)는 흥행했다.[\\[8\\]](#fn-8 \"각주\")"
+    const text = ["---SECTION: ## 리니지---", body, "---END SECTION---"].join("\n")
+    const sections = parseStage1Sections(text)
+    expect(sections).toHaveLength(1)
+    expect(sections[0].source_text).toBe(body)
+  })
+
+  it("keeps multi-line bodies (including blank lines) intact", () => {
+    const text = [
+      "---SECTION: ## Multi---",
+      "line one",
+      "",
+      "line three",
+      "---END SECTION---",
+    ].join("\n")
+    const sections = parseStage1Sections(text)
+    expect(sections[0].source_text).toBe("line one\n\nline three")
+  })
+
+  it("tolerates marker whitespace/case variants and CRLF", () => {
+    const text = [
+      "--- section:  ## Range ---\r",
+      "body\r",
+      "--- END  SECTION ---\r",
+    ].join("\n")
+    const sections = parseStage1Sections(text)
+    expect(sections).toEqual([{ source_range: "## Range", source_text: "body" }])
+  })
+
+  it("skips empty-body sections and returns [] for non-SECTION text", () => {
+    expect(parseStage1Sections("just some prose, no markers")).toEqual([])
+    expect(parseStage1Sections('{"sections":[]}')).toEqual([])
+    const emptyBody = ["---SECTION: ## X---", "   ", "---END SECTION---"].join("\n")
+    expect(parseStage1Sections(emptyBody)).toEqual([])
+  })
+
+  it("truncation-tolerant: an unclosed trailing block still yields its body", () => {
+    const text = ["---SECTION: ## Cut---", "partial body before stream ended"].join("\n")
+    const sections = parseStage1Sections(text)
+    expect(sections).toEqual([
+      { source_range: "## Cut", source_text: "partial body before stream ended" },
+    ])
   })
 })

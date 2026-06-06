@@ -1,8 +1,12 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History, Network, TrendingUp, DatabaseZap,
+  FileText, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History, Network, TrendingUp, DatabaseZap, Link2,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
@@ -11,7 +15,10 @@ import logoImg from "@/assets/logo.jpg"
 import type { WikiState } from "@/stores/wiki-store"
 import { open } from "@tauri-apps/plugin-dialog"
 import { enqueueIngest } from "@/lib/ingest-queue"
-import { normalizePath } from "@/lib/path-utils"
+import { normalizePath, getFileName } from "@/lib/path-utils"
+import { writeFile, fileExists } from "@/commands/fs"
+import { gitCommit } from "@/commands/git"
+import { fetchUrlAsMarkdown } from "@/lib/url-import"
 
 type NavView = WikiState["activeView"]
 
@@ -36,6 +43,9 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const updateBannerVisible = useUpdateStore((s) => shouldShowUpdateBanner(s))
   const project = useWikiStore((s) => s.project)
   const [injecting, setInjecting] = useState(false)
+  const [injectingUrl, setInjectingUrl] = useState(false)
+  const [urlDialogOpen, setUrlDialogOpen] = useState(false)
+  const [urlValue, setUrlValue] = useState("")
 
   async function handleInject() {
     if (!project || injecting) return
@@ -60,6 +70,38 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
       console.error("Failed to enqueue ingest:", err)
     } finally {
       setInjecting(false)
+    }
+  }
+
+  // URL injection == file injection minus the file picker. We fetch the
+  // static page, convert it to markdown (same Readability + Turndown
+  // path as imported .html files), write it under raw/sources/, then
+  // enqueue it for ingest exactly like a picked file.
+  async function handleInjectUrl() {
+    if (!project || injectingUrl) return
+    const url = urlValue.trim()
+    if (!url) return
+    setInjectingUrl(true)
+    try {
+      const pp = normalizePath(project.path)
+      const { markdown, baseName } = await fetchUrlAsMarkdown(url)
+      const rel = await uniqueSourceRel(pp, baseName)
+      const destPath = `${pp}/${rel}`
+      await writeFile(destPath, markdown)
+      try {
+        await gitCommit(pp, `ingest: add ${getFileName(destPath)} (url)`, [rel])
+      } catch (gitErr) {
+        console.error("Failed to auto-commit:", gitErr)
+      }
+      await enqueueIngest(project.id, rel)
+      setUrlDialogOpen(false)
+      setUrlValue("")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error("Failed to inject URL:", err)
+      window.alert(`Failed to inject URL:\n\n${msg}`)
+    } finally {
+      setInjectingUrl(false)
     }
   }
 
@@ -117,8 +159,19 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             </Tooltip>
           ))}
         </div>
-        {/* Bottom: inject + daemon status + settings + switch project */}
+        {/* Bottom: inject from URL + inject + daemon status + settings + switch project */}
         <div className="flex flex-col items-center gap-1 pb-1">
+          {project && (
+            <Tooltip>
+              <TooltipTrigger
+                onClick={() => setUrlDialogOpen(true)}
+                className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground ${injectingUrl ? "animate-pulse" : ""}`}
+              >
+                <Link2 className="h-5 w-5" />
+              </TooltipTrigger>
+              <TooltipContent side="right">{t("fileTree.injectUrl")}</TooltipContent>
+            </Tooltip>
+          )}
           {project && (
             <Tooltip>
               <TooltipTrigger
@@ -185,6 +238,62 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           </Tooltip>
         </div>
       </div>
+
+      <Dialog
+        open={urlDialogOpen}
+        onOpenChange={(o) => {
+          setUrlDialogOpen(o)
+          if (!o) setUrlValue("")
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("fileTree.injectUrl")}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="inject-url">{t("fileTree.injectUrlPrompt")}</Label>
+            <Input
+              id="inject-url"
+              autoFocus
+              type="url"
+              value={urlValue}
+              onChange={(e) => setUrlValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleInjectUrl()
+              }}
+              placeholder="https://example.com/article"
+              disabled={injectingUrl}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUrlDialogOpen(false)} disabled={injectingUrl}>
+              {t("project.cancel")}
+            </Button>
+            <Button onClick={handleInjectUrl} disabled={injectingUrl || !urlValue.trim()}>
+              {injectingUrl ? t("fileTree.injecting") : t("fileTree.inject")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   )
+}
+
+/**
+ * Pick a project-relative `raw/sources/<name>.md` path that isn't already
+ * taken, appending a date (then a counter) on collision — same convention
+ * as the file-import flow's getUniqueDestPath, so re-injecting a URL whose
+ * slug already exists doesn't clobber the earlier capture.
+ */
+async function uniqueSourceRel(projectPath: string, baseName: string): Promise<string> {
+  const base = `raw/sources/${baseName}.md`
+  if (!(await fileExists(`${projectPath}/${base}`))) return base
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "")
+  const dated = `raw/sources/${baseName}-${date}.md`
+  if (!(await fileExists(`${projectPath}/${dated}`))) return dated
+  for (let i = 2; i <= 99; i++) {
+    const numbered = `raw/sources/${baseName}-${date}-${i}.md`
+    if (!(await fileExists(`${projectPath}/${numbered}`))) return numbered
+  }
+  return dated
 }

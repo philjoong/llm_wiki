@@ -7,9 +7,9 @@
  *
  * Test cases:
  *  1. Clean Stage 1 + Stage 2 response → writes FILE blocks with graph + relations
- *  2. Stage 2 returns no assignments → throws with error detail
+ *  2. Stage 2 returns no assignments → chunk skipped, review item created (no throw)
  *  3. Stage 2 assignments with invalid relation types → skipped, review item created, valid ones written
- *  4. CLI transport error on Stage 1 → throws
+ *  4. CLI transport error on Stage 1 → chunk skipped (no throw)
  */
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
@@ -48,6 +48,21 @@ vi.mock("@/lib/counterexample-index", () => ({
   formatDismissalContext: vi.fn().mockReturnValue(""),
 }))
 
+// The unified pipeline runs caching + auto-commit for every provider.
+// Stub the IO-heavy steps so the CLI unit test stays hermetic.
+vi.mock("@/lib/ingest-cache", () => ({
+  checkIngestCache: vi.fn().mockResolvedValue(null),
+  saveIngestCache: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock("@/commands/git", () => ({
+  gitCommit: vi.fn().mockResolvedValue({}),
+}))
+
+vi.mock("@/lib/auto-commit", () => ({
+  formatIngestMessage: vi.fn().mockReturnValue("ingest commit"),
+}))
+
 vi.mock("@/stores/review-store", () => ({
   useReviewStore: {
     getState: vi.fn().mockReturnValue({ addItems: vi.fn() }),
@@ -56,7 +71,7 @@ vi.mock("@/stores/review-store", () => ({
 
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { streamClaudeCodeCli } from "../claude-cli-transport"
-import { autoIngestViaAgent } from "../agent-ingest"
+import { autoIngestImpl } from "../ingest"
 import { buildStage2Scaffold } from "../ingest"
 import { loadGraphPolicy, saveGraphPolicy } from "../graph-policy"
 import { useActivityStore } from "@/stores/activity-store"
@@ -96,14 +111,13 @@ const cliConfig: LlmConfig = {
   maxContextSize: 200000,
 }
 
-const STAGE1_RESPONSE = JSON.stringify({
-  sections: [
-    {
-      source_range: "## 고블린 전사",
-      source_text: "고블린 전사는 불에 약하고 독침을 사용한다.",
-    },
-  ],
-})
+// Stage 1 now emits the delimiter-based SECTION format (not JSON), so
+// verbatim source_text never round-trips through a JSON string. See Fix 25.
+const STAGE1_RESPONSE = [
+  "---SECTION: ## 고블린 전사---",
+  "고블린 전사는 불에 약하고 독침을 사용한다.",
+  "---END SECTION---",
+].join("\n")
 
 const STAGE2_RESPONSE = JSON.stringify({
   assignments: [
@@ -158,7 +172,7 @@ beforeEach(() => {
   mockListDirectory.mockImplementation(async (_p: string) => [] as FileNode[])
 })
 
-describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
+describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
   it("Stage 2 scaffold는 source_text를 sections에만 싣고 assignment는 source_id로 참조함", () => {
     const scaffold = JSON.parse(buildStage2Scaffold([
       {
@@ -182,7 +196,7 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
   it("Stage 1+2 성공 시 graph frontmatter와 wikilink가 포함된 파일을 씀", async () => {
     mockSequentialResponses(STAGE1_RESPONSE, STAGE2_RESPONSE)
 
-    const written = await autoIngestViaAgent(PROJECT, SOURCE, cliConfig)
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
     expect(written).toContain("db/enemies/goblin-warrior.md")
     expect(mockWriteFile).toHaveBeenCalled()
@@ -193,16 +207,52 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
     expect(last.status).toBe("done")
   })
 
-  it("Stage 2가 assignments를 하나도 반환하지 않으면 에러를 던짐", async () => {
+  it("Fix 25: source_text에 마크다운 이스케이프(\\[ \\( 등)가 있어도 섹션이 유실되지 않음", async () => {
+    // 회귀: 이전 JSON Stage 1에서는 verbatim source_text 안의 `\[8\]`,
+    // `리니지\(게임\)` 같은 마크다운 백슬래시 이스케이프가 invalid JSON
+    // escape라서 JSON.parse가 throw → 청크 전체가 "no sections"로 스킵됐다.
+    // SECTION 구분자 포맷에서는 그대로 통과해야 한다.
+    const hostileText = "리니지\\(게임\\)는 흥행했다.[\\[8\\]](#fn-8) 인용."
+    mockSequentialResponses(
+      ["---SECTION: ## 리니지---", hostileText, "---END SECTION---"].join("\n"),
+      JSON.stringify({
+        assignments: [
+          {
+            source_id: "s1",
+            concept: "리니지",
+            page_path: "db/games/lineage.md",
+            graph: "combat_graph",
+            relations: [{ target: "흥행", type: "WEAK_AGAINST" }],
+            new_graph: false,
+          },
+        ],
+      }),
+    )
+
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
+
+    expect(written).toContain("db/games/lineage.md")
+    const [, content] = mockWriteFile.mock.calls[0]
+    // 원문이 백슬래시까지 그대로 보존되어 페이지 본문에 들어가야 한다.
+    expect(content).toContain(hostileText)
+  })
+
+  it("Stage 2가 assignments를 하나도 반환하지 않으면 해당 청크를 건너뜀 (단일 청크면 파일 없음 + error)", async () => {
+    const addItemsMock = vi.fn()
+    vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
     mockSequentialResponses(
       STAGE1_RESPONSE,
       JSON.stringify({ assignments: [] }),
     )
 
-    await expect(autoIngestViaAgent(PROJECT, SOURCE, cliConfig)).rejects.toThrow(
-      /Stage 2.*no assignments/,
-    )
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
+    expect(written).toEqual([])
     expect(mockWriteFile).not.toHaveBeenCalled()
+    expect(addItemsMock).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ title: expect.stringContaining("Ingest skipped") }),
+      ]),
+    )
     const last = useActivityStore.getState().items[0]
     expect(last.status).toBe("error")
   })
@@ -233,7 +283,7 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
       }),
     )
 
-    const written = await autoIngestViaAgent(PROJECT, SOURCE, cliConfig)
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
     // 실패한 concept은 파일 쓰기 없음
     expect(written).toHaveLength(0)
@@ -273,7 +323,7 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
       }),
     )
 
-    const written = await autoIngestViaAgent(PROJECT, SOURCE, cliConfig)
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
     expect(written).toContain("db/enemies/goblin-warrior.md")
     expect(mockSaveGraphPolicy).toHaveBeenCalledWith(
@@ -322,7 +372,7 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
       }),
     )
 
-    const written = await autoIngestViaAgent(PROJECT, SOURCE, cliConfig)
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
     expect(written).toEqual(["db/enemies/goblin-warrior-weakness.md"])
     expect(mockWriteFile).toHaveBeenCalledTimes(1)
@@ -336,32 +386,28 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
     )
   })
 
-  it("CLI transport가 Stage 1에서 에러를 던지면 그대로 전파됨", async () => {
+  it("CLI transport가 Stage 1에서 에러를 던지면 해당 청크를 건너뜀 (단일 청크면 파일 없음 + error)", async () => {
     mockStream.mockImplementation(async (_cfg, _msgs, callbacks) => {
       callbacks.onError(new Error("claude CLI exited with code 1"))
     })
 
-    await expect(autoIngestViaAgent(PROJECT, SOURCE, cliConfig)).rejects.toThrow(
-      /Stage 1 failed/,
-    )
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
+    expect(written).toEqual([])
     const last = useActivityStore.getState().items[0]
     expect(last.status).toBe("error")
   })
 
   it("같은 graph에 여러 assignment를 추가해도 duplicate 실패로 처리하지 않음", async () => {
     mockSequentialResponses(
-      JSON.stringify({
-        sections: [
-          {
-            source_range: "## 고블린 전사",
-            source_text: "고블린 전사는 불에 약하다.",
-          },
-          {
-            source_range: "## 오크 전사",
-            source_text: "오크 전사는 불에 약하다.",
-          },
-        ],
-      }),
+      [
+        "---SECTION: ## 고블린 전사---",
+        "고블린 전사는 불에 약하다.",
+        "---END SECTION---",
+        "",
+        "---SECTION: ## 오크 전사---",
+        "오크 전사는 불에 약하다.",
+        "---END SECTION---",
+      ].join("\n"),
       JSON.stringify({
         assignments: [
           {
@@ -384,7 +430,7 @@ describe("autoIngestViaAgent — Stage 1/2 pipeline", () => {
       }),
     )
 
-    const written = await autoIngestViaAgent(PROJECT, SOURCE, cliConfig)
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
     expect(written).toEqual([
       "db/enemies/goblin-warrior.md",

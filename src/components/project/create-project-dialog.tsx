@@ -34,6 +34,7 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   const { t } = useTranslation()
   const [name, setName] = useState("")
   const [path, setPath] = useState("")
+  const [localOnly, setLocalOnly] = useState(false)
   const [error, setError] = useState("")
   const [creating, setCreating] = useState(false)
 
@@ -64,13 +65,15 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
       // 2. Initialize local Git repo and seed files
       await initProject({ projectPath: project.path })
 
-      // 3. Authenticated Git Setup
-      const authenticatedUrl = getRepoUrl()
-      await gitRemoteAdd(project.path, "origin", authenticatedUrl)
-      
-      // 4. Create and push project-specific branch
-      await gitCreateBranch(project.path, projectName)
-      await gitPush(project.path, "origin", projectName)
+      if (!localOnly) {
+        // 3. Authenticated Git Setup
+        const authenticatedUrl = getRepoUrl()
+        await gitRemoteAdd(project.path, "origin", authenticatedUrl)
+
+        // 4. Create and push project-specific branch
+        await gitCreateBranch(project.path, projectName)
+        await gitPush(project.path, "origin", projectName)
+      }
 
       // 5. FalkorDB Initialization (isolated via prefix)
       await createGraphDb(projectName, "main")
@@ -79,6 +82,7 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
       onOpenChange(false)
       setName("")
       setPath("")
+      setLocalOnly(false)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -108,6 +112,15 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
               </Button>
             </div>
           </div>
+          <label className="flex cursor-pointer items-center gap-2">
+            <input
+              type="checkbox"
+              checked={localOnly}
+              onChange={(e) => setLocalOnly(e.target.checked)}
+              className="h-4 w-4 rounded border border-input accent-primary"
+            />
+            <span className="text-sm">{t("project.localOnly")}</span>
+          </label>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>

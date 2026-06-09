@@ -626,7 +626,7 @@ export async function autoIngestImpl(
       stage2Raw = await callModel(
         llmConfig,
         buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy)),
-        `Read the sections, then fill in the empty fields of each seed assignment below. Do not add or rename any keys inside assignment objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into assignments. You may add additional assignment objects using the same schema when one source_text needs multiple graph assignments.\n\n${JSON_ONLY_INSTRUCTION}\n\n${stage2Scaffold}`,
+        `Read the sections, then fill in the empty fields of each seed triple below. Do not add or rename any keys inside triple objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into triples. You may add additional triple objects using the same schema when one source_text contains multiple facts.\n\n${JSON_ONLY_INSTRUCTION}\n\n${stage2Scaffold}`,
         signal,
         pp,
       )
@@ -637,12 +637,12 @@ export async function autoIngestImpl(
       continue
     }
 
-    let parsed: Stage2Assignment[] = []
+    let parsed: Stage2Triple[] = []
     try {
       const cleaned = stage2Raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
       const obj = JSON.parse(cleaned)
       parsed = hydrateStage2Assignments(
-        Array.isArray(obj) ? obj : (obj.assignments ?? []),
+        Array.isArray(obj) ? obj : (obj.triples ?? []),
         stage1Sections,
       )
     } catch {
@@ -650,7 +650,7 @@ export async function autoIngestImpl(
     }
 
     if (parsed.length === 0) {
-      const errMsg = `Stage 2 produced no assignments from ${stage1Sections.length} section(s). LLM raw output (${stage2Raw.length} chars): ${stage2Raw.slice(0, 2000)}`
+      const errMsg = `Stage 2 produced no triples from ${stage1Sections.length} section(s). LLM raw output (${stage2Raw.length} chars): ${stage2Raw.slice(0, 2000)}`
       invoke("app_debug", { message: `[ingest:stage2:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
       activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2 failed: no graph assignments produced — skipping chunk` })
       failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 2 (no assignments)", error: `no assignments from ${stage1Sections.length} section(s)` })
@@ -669,10 +669,10 @@ export async function autoIngestImpl(
       }
     }
 
-    // Validate — pass valid assignments through, log failures as review items
+    // Validate — pass valid triples through, log failures as review items
     const failures = validateStage2(parsed, graphPolicy)
     const failedIndexes = new Set(failures.map((f) => f.assignmentIndex))
-    const assignments: Stage2Assignment[] = parsed.filter((_, index) => !failedIndexes.has(index))
+    const assignments: Stage2Triple[] = parsed.filter((_, index) => !failedIndexes.has(index))
 
     if (failures.length > 0) {
       const failureDetail = failures.map((f) => `${f.page_path || f.concept} [${f.graph || "no graph"}]: ${f.reason}`).join("; ")
@@ -688,9 +688,7 @@ export async function autoIngestImpl(
       })
     }
 
-    const totalRelations = assignments.reduce((sum, a) => sum + (a.relations?.length ?? 0), 0)
-    const assignmentsWithRelations = assignments.filter(a => (a.relations?.length ?? 0) > 0).length
-    invoke("app_debug", { message: `[ingest:stage2] ${chunkLabel}file=${fileName} assignments=${assignments.length} skipped=${failures.length} withRelations=${assignmentsWithRelations} totalRelations=${totalRelations} sample=${JSON.stringify(assignments.slice(0, 2))}` }).catch(() => {})
+    invoke("app_debug", { message: `[ingest:stage2] ${chunkLabel}file=${fileName} triples=${assignments.length} skipped=${failures.length} sample=${JSON.stringify(assignments.slice(0, 2))}` }).catch(() => {})
 
 
     // ── Stage 3: Generate FILE blocks from Stage 2 assignments (code, no LLM) ──
@@ -717,7 +715,7 @@ export async function autoIngestImpl(
       const projectName = useWikiStore.getState().project?.name || "default"
       activity.updateItem(activityId, { detail: `${chunkLabel}Syncing knowledge graph...` })
       try {
-        const graphSummary = await syncGraphToFalkorDb(pp, projectName, (msg) => {
+        const graphSummary = await syncGraphToFalkorDb(pp, projectName, assignments, (msg) => {
           activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
         })
         const graphDebug = `[ingest:graph] ${chunkLabel}${graphSummary}`
@@ -1178,16 +1176,16 @@ export interface Stage1Section {
   source_text: string
 }
 
-/** Stage 2 output: one assignment mapping a concept to a graph. */
-export interface Stage2Assignment {
+/** Stage 2 output: one node/edge/node triple assigned to a graph. */
+export interface Stage2Triple {
   source_id?: string
-  concept: string
-  page_path: string
+  subject: string
+  predicate: string
+  object: string
   graph: string
-  relations: Array<{ target: string; type: string }>
+  page_path: string
   new_graph: boolean
   graph_relation_types?: string[]
-  isolated?: boolean
   source_range?: string
   source_text?: string
 }
@@ -1238,18 +1236,16 @@ export function mergeRelationTypes(existing: string[], used: string[]): {
   return { merged, added, overflow }
 }
 
-function relationTypesUsedBy(item: Stage2Assignment): string[] {
-  const relationTypes = (item.relations ?? [])
-    .map((rel) => rel.type)
-    .filter((type): type is string => typeof type === "string" && type.trim().length > 0)
+function relationTypesUsedBy(item: Stage2Triple): string[] {
+  const predicateType = typeof item.predicate === "string" && item.predicate.trim() ? [item.predicate.trim()] : []
   const proposedTypes = Array.isArray(item.graph_relation_types) ? item.graph_relation_types : []
-  return [...proposedTypes, ...relationTypes]
+  return [...proposedTypes, ...predicateType]
 }
 
-function failureFor(item: Stage2Assignment, assignmentIndex: number, reason: string): Stage2Failure {
+function failureFor(item: Stage2Triple, assignmentIndex: number, reason: string): Stage2Failure {
   return {
     assignmentIndex,
-    concept: item.concept || "(unknown)",
+    concept: item.subject || "(unknown)",
     page_path: item.page_path,
     graph: item.graph,
     source_range: item.source_range,
@@ -1258,9 +1254,9 @@ function failureFor(item: Stage2Assignment, assignmentIndex: number, reason: str
 }
 
 export function hydrateStage2Assignments(
-  assignments: Stage2Assignment[],
+  triples: Stage2Triple[],
   sections: Stage1Section[],
-): Stage2Assignment[] {
+): Stage2Triple[] {
   const byId = new Map<string, Stage1Section>()
   const byRange = new Map<string, Stage1Section>()
 
@@ -1269,31 +1265,30 @@ export function hydrateStage2Assignments(
     if (section.source_range) byRange.set(section.source_range, section)
   })
 
-  return assignments.map((assignment) => {
+  return triples.map((triple) => {
     const source =
-      (assignment.source_id ? byId.get(assignment.source_id) : undefined) ??
-      (assignment.source_range ? byRange.get(assignment.source_range) : undefined)
+      (triple.source_id ? byId.get(triple.source_id) : undefined) ??
+      (triple.source_range ? byRange.get(triple.source_range) : undefined)
 
-    if (!source) return assignment
+    if (!source) return triple
 
     return {
-      ...assignment,
-      source_id: assignment.source_id,
-      source_range: assignment.source_range || source.source_range,
-      source_text: assignment.source_text || source.source_text,
+      ...triple,
+      source_range: triple.source_range || source.source_range,
+      source_text: triple.source_text || source.source_text,
     }
   })
 }
 
 export function applyStage2GraphPolicyUpdates(
-  assignments: Stage2Assignment[],
+  triples: Stage2Triple[],
   policy: GraphPolicy,
 ): { policy: GraphPolicy; changed: boolean } {
   let nextPolicy = policy
   let changed = false
 
-  for (const item of assignments) {
-    if (!item.concept || !item.page_path || !item.graph) continue
+  for (const item of triples) {
+    if (!item.subject || !item.predicate || !item.graph) continue
 
     const usedTypes = relationTypesUsedBy(item)
 
@@ -1327,15 +1322,15 @@ export function applyStage2GraphPolicyUpdates(
 }
 
 /**
- * Validate Stage 2 assignments against the current graph policy.
+ * Validate Stage 2 triples against the current graph policy.
  * Returns an array of failures (empty = all good).
  */
-export function validateStage2(assignments: Stage2Assignment[], policy: GraphPolicy): Stage2Failure[] {
+export function validateStage2(triples: Stage2Triple[], policy: GraphPolicy): Stage2Failure[] {
   const failures: Stage2Failure[] = []
 
-  for (const [assignmentIndex, item] of assignments.entries()) {
-    if (!item.concept || !item.page_path || !item.graph) {
-      failures.push(failureFor(item, assignmentIndex, "Missing required field: concept, page_path, or graph"))
+  for (const [assignmentIndex, item] of triples.entries()) {
+    if (!item.subject || !item.predicate || !item.object || !item.graph || !item.page_path) {
+      failures.push(failureFor(item, assignmentIndex, "Missing required field: subject, predicate, object, graph, or page_path"))
       continue
     }
 
@@ -1344,7 +1339,7 @@ export function validateStage2(assignments: Stage2Assignment[], policy: GraphPol
     if (item.new_graph) {
       const { overflow } = mergeRelationTypes([], usedTypes)
       if (overflow.length > 0) {
-        failures.push(failureFor(item, assignmentIndex, `New graph "${item.graph}" exceeds 4 relation types (overflow: ${overflow.join(", ")})`))
+        failures.push(failureFor(item, assignmentIndex, `New graph "${item.graph}" exceeds 4 relation types (overflow: ${[...new Set(overflow)].join(", ")})`))
       }
       continue
     }
@@ -1355,11 +1350,11 @@ export function validateStage2(assignments: Stage2Assignment[], policy: GraphPol
       continue
     }
 
-    // Relation types may extend this graph only while the graph stays within 4 types.
+    // Predicate type may extend this graph only while the graph stays within 4 types.
     const existingTypes = policy.graphRelationTypes[item.graph] ?? policy.relationTypes
     const { overflow } = mergeRelationTypes(existingTypes, usedTypes)
     if (overflow.length > 0) {
-      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" already has 4 relation types; new graph required for: ${overflow.join(", ")}`))
+      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" already has 4 relation types; new graph required for: ${[...new Set(overflow)].join(", ")}`))
     }
   }
 
@@ -1406,69 +1401,76 @@ export function buildDecompositionPrompt(
 
 /**
  * Stage 2 prompt — graph assignment.
- * Takes Stage 1 concepts and assigns each relation cluster to a graph.
- * May split one concept across multiple graphs if relation types differ.
- * Output is JSON: Stage2Assignment[].
+ * Each section is decomposed into node/edge/node triples; each triple is
+ * independently assigned to the best-fit graph.
+ * Output: JSON { triples: Stage2Triple[] }.
  */
 export function buildGraphAssignmentPrompt(graphPolicyPrompt: string): string {
   return [
-    "You are a graph assignment engine. You receive a list of concepts with their",
-    "sections (Stage 1 output) and must produce one or more graph assignments per section.",
-    "Each section has a `source_id`, `source_range`, and `source_text` — read the section's",
-    "`source_text` to understand the concept and its relationships, then assign by `source_id`.",
+    "You are a graph assignment engine. You receive a list of source sections (Stage 1 output)",
+    "and must decompose each section into one or more node/edge/node triples, then assign",
+    "each triple independently to the best-fit graph.",
+    "",
+    "Each section has a `source_id`, `source_range`, and `source_text`.",
+    "Read the `source_text`, extract every factual relationship as a triple, and assign",
+    "each triple to the graph whose domain best fits its meaning.",
     "",
     "## Rules",
     "",
-    "1. Read each section's `source_text` directly and extract one or more node/edge/node relationships.",
-    "2. Group those relationships into one or more assignments. A single source_text may target multiple graphs.",
-    "   Each split gets a different `page_path` suffix (e.g. `goblin-warrior-weakness.md`, `goblin-warrior-tactic.md`).",
-    "3. For each assignment, pick the existing graph whose domain best matches the node/edge meaning.",
-    "4. If all edge relation types already exist in that graph, use it with `new_graph: false`.",
-    "5. If some edge relation types are new and the graph has fewer than 4 relation types, keep that graph with `new_graph: false` and include `graph_relation_types` as the full expanded relation type list for that graph.",
-    "6. If the best matching existing graph already has 4 relation types and a new relation type is required, create a new graph with `new_graph: true` and define up to 4 `graph_relation_types`.",
-    "7. If no existing graph domain fits, create a new graph with `new_graph: true` and define up to 4 `graph_relation_types`.",
-    "8. If a section has no meaningful relationships, set `isolated: true`.",
+    "1. Extract every meaningful fact from `source_text` as a `subject → predicate → object` triple.",
+    "   One section typically produces multiple triples.",
+    "2. Assign each triple to a graph independently — different triples from the same section",
+    "   may go to different graphs.",
+    "3. For each triple, pick the existing graph whose domain best matches the triple's meaning.",
+    "4. If the predicate already exists as a relation type in that graph → use it with `new_graph: false`.",
+    "5. If the predicate is new and the graph has fewer than 4 relation types → use it with `new_graph: false`,",
+    "   and include `graph_relation_types` as the full expanded list.",
+    "6. If the best-fit graph already has 4 relation types and the predicate is new → create a new graph",
+    "   with `new_graph: true` and up to 4 `graph_relation_types`.",
+    "7. If no existing graph domain fits → create a new graph with `new_graph: true`.",
+    "8. Each `page_path` represents one source section container. Triples from the same source section",
+    "   (`source_id`) may share a `page_path` — they will be merged into one file. Triples from",
+    "   different source sections should use different `page_path` values. There is no constraint that",
+    "   triples sharing a `page_path` must have the same subject — a single source section can produce",
+    "   triples with different subjects, and all may share the same `page_path`.",
     "",
     "## Output format (JSON object — no other text)",
     "",
-    'Output ONLY a JSON object with an `assignments` array, no prose:',
+    'Output ONLY a JSON object with a `triples` array, no prose:',
     '{',
-    '  "assignments": [',
+    '  "triples": [',
     '    {',
     '      "source_id": "s1",',
-    '      "concept": "고블린 전사",',
-    '      "page_path": "db/enemies/goblin-warrior-weakness.md",',
+    '      "subject": "고블린 전사",',
+    '      "predicate": "WEAK_AGAINST",',
+    '      "object": "불",',
     '      "graph": "combat_weakness_graph",',
-    '      "relations": [{ "target": "불", "type": "WEAK_AGAINST" }],',
+    '      "page_path": "db/enemies/goblin-warrior-weakness.md",',
     '      "new_graph": false',
+    '    },',
+    '    {',
+    '      "source_id": "s1",',
+    '      "subject": "고블린 전사",',
+    '      "predicate": "DROPS_ITEM",',
+    '      "object": "고블린 이빨",',
+    '      "graph": "enemy_loot_graph",',
+    '      "page_path": "db/enemies/goblin-warrior-loot.md",',
+    '      "new_graph": true,',
+    '      "graph_relation_types": ["DROPS_ITEM"]',
     '    }',
     '  ]',
     '}',
     "",
     "`graph_relation_types` meaning:",
-    "- `new_graph: true`: the full relation type list for the new graph.",
-    "- `new_graph: false`: optional; include it only when extending an existing graph, as the full relation type list after expansion.",
-    "- If no graph type expansion is needed, omit it or return an empty array.",
+    "- `new_graph: true`: the full relation type list for the new graph (up to 4).",
+    "- `new_graph: false`: include only when extending an existing graph — the full list after expansion.",
+    "- If no expansion is needed, omit it or use an empty array.",
     "",
-    "For a new graph or an existing graph expansion, add `graph_relation_types` to the assignment object:",
-    '{',
-    '  "assignments": [',
-    '    {',
-    '      "source_id": "s1",',
-    '      "concept": "...",',
-    '      "page_path": "db/...",',
-    '      "graph": "new_graph_name",',
-    '      "relations": [...],',
-    '      "new_graph": true,',
-    '      "graph_relation_types": ["TYPE_A", "TYPE_B", "TYPE_C", "TYPE_D"]',
-    '    }',
-    '  ]',
-    '}',
-    "",
-    "The scaffold below contains `sections` plus one seed assignment per source section.",
-    "Keep `source_text` only in `sections`; do not copy it into assignment objects.",
-    "Each assignment must reference its source with `source_id`. You may add additional assignment objects using the same schema when one source_text needs multiple graph assignments.",
-    "Do not add or rename keys inside assignment objects.",
+    "The scaffold below contains `sections` plus one seed triple per source section.",
+    "Keep `source_text` only in `sections`; do not copy it into triple objects.",
+    "Each triple must reference its source with `source_id`.",
+    "You may add additional triple objects with the same `source_id` when one section has multiple facts.",
+    "Do not add or rename keys inside triple objects.",
     "",
     graphPolicyPrompt,
   ].filter(Boolean).join("\n")
@@ -1490,150 +1492,13 @@ export function buildAnalysisPrompt(
   return buildDecompositionPrompt(dbIndex, sourceContent, dismissalContext)
 }
 
-/**
- * Stage 3 prompt. Generation: emit one FILE block per assigned page.
- * existingGraphSummary is injected here (not in Stage 1/2) so the LLM
- * can link to existing nodes when writing wikilinks.
- */
-export function buildGenerationPrompt(
-  dbIndex: string,
-  sourceFileName: string,
-  sourceContent: string = "",
-  graphPolicyPrompt: string = "",
-  existingGraphSummary: string = "",
-): string {
-  const graphSummarySection = existingGraphSummary
-    ? [
-        "## Existing Knowledge Graph Nodes",
-        "",
-        "Use these nodes as link targets when writing wikilinks:",
-        "",
-        existingGraphSummary,
-      ].join("\n")
-    : ""
-
-  return [
-    "You are a wiki maintainer. The Stage 1 decomposition and Stage 2 graph",
-    "assignment have been completed. Now emit one FILE block per assigned page,",
-    "with the actual page content.",
-    "",
-    languageRule(sourceContent),
-    "",
-    `## Source file`,
-    `The original raw file is **${sourceFileName}**. Every FILE block you`,
-    `emit MUST list this file in its frontmatter \`sources\` array, with a`,
-    `\`range:\` value that points back to the specific section / sheet /`,
-    `timestamp the page was derived from.`,
-    "",
-    "## Path rules",
-    "",
-    "- Every FILE path MUST start with `db/`.",
-    "- Use clear, descriptive kebab-case paths that match the Stage 1 analysis.",
-    "- Use the same path the Stage 1 analysis proposed unless you have a",
-    "  concrete reason to change it (and if you do, change it consistently).",
-    "",
-    "## Frontmatter shape (every page)",
-    "",
-    "```yaml",
-    "---",
-    "title: <human-readable title>",
-    "status: draft",
-    "sources:",
-    `  - file: ${sourceFileName}`,
-    "    range: <heading path | sheet!range | timestamp | url+anchor>",
-    "---",
-    "```",
-    "",
-    "Notes on `sources`:",
-    "- It MUST be the multi-line object form above (NOT `sources: [\"file.md\"]`).",
-    "- One entry per source. If multiple raw ranges contributed to the same",
-    "  page, list each range as its own entry — same `file`, different `range`.",
-    "- `range` is human-readable; pick the shortest unambiguous pointer.",
-    "  For markdown sources, the heading path (`## 3. 던전 A — 보상`) is best.",
-    "",
-    "Other content rules:",
-    "- Express relationships between concepts as `[[TargetPage|RELATION_TYPE]]`.",
-    "- RELATION_TYPE must be an uppercase snake_case verb (e.g. REQUIRES, PART_OF).",
-    "- Within each graph, use at most 4 distinct relation types total.",
-    "  Reuse the same type across FILE blocks rather than inventing new ones.",
-    "- Typed wikilinks are REQUIRED whenever a meaningful directional relationship",
-    "  exists — even if the target page is being created in this same ingest batch.",
-    "  Do NOT wait for the target to already exist in the graph.",
-    "- Plain `[[TargetPage]]` (no type) is allowed only for weak associative links",
-    "  that carry no meaningful directional semantics.",
-    "- You may link to nodes in other existing graphs using their page id.",
-    "  If no graph-policy relation types are configured, default to:",
-    "  REQUIRES, PART_OF, RELATED_TO, LEADS_TO.",
-    "- Do NOT generate index, overview, or log pages — those aren't part of",
-    "  the Stage 3 pipeline.",
-    "- Do NOT invent content that isn't in the source. If a section is too",
-    "  thin to be a useful page, skip it.",
-    "",
-    "## Review blocks (optional, rare)",
-    "",
-    "After all FILE blocks, you MAY emit REVIEW blocks for things that",
-    "genuinely need human judgment in this ingest run — e.g. a missing-page",
-    "the source assumes exists, or a suggestion for follow-up research.",
-    "Don't use REVIEW for routine decomposition decisions; that's what",
-    "Stage 4's modification flow is for.",
-    "",
-    "Allowed REVIEW types: `missing-page`, `suggestion`.",
-    "Allowed OPTIONS values: `Create Page | Skip` (do not invent others).",
-    "",
-    dbIndex ? `## Current db/ index (preserve existing — emit FILE blocks for them only when this source legitimately contributes)\n\n${dbIndex}` : "",
-    "",
-    graphSummarySection,
-    "",
-    // ── OUTPUT FORMAT MUST BE THE LAST SECTION — models weight recent instructions highest ──
-    "## Output Format (MUST FOLLOW EXACTLY — this is how the parser reads your response)",
-    "",
-    "Your ENTIRE response consists of FILE blocks followed by optional REVIEW blocks. Nothing else.",
-    "",
-    "FILE block template:",
-    "```",
-    "---FILE: db/path/to/page.md---",
-    "(complete file content with YAML frontmatter)",
-    "---END FILE---",
-    "```",
-    "",
-    "REVIEW block template (optional, after all FILE blocks):",
-    "```",
-    "---REVIEW: type | Title---",
-    "Description of what needs the user's attention.",
-    "OPTIONS: Create Page | Skip",
-    "PAGES: db/page1.md, db/page2.md",
-    "---END REVIEW---",
-    "```",
-    "",
-    "## Output Requirements (STRICT — deviations will cause parse failure)",
-    "",
-    "1. The FIRST character of your response MUST be `-` (the opening of `---FILE:`).",
-    "2. DO NOT output any preamble such as \"Here are the files:\", \"Based on the analysis...\", or any introductory prose.",
-    "3. DO NOT echo or restate the analysis — that was stage 1's job. Your job is to emit FILE blocks.",
-    "4. DO NOT output markdown tables, bullet lists, or headings outside of FILE/REVIEW blocks.",
-    "5. DO NOT output any trailing commentary after the last `---END FILE---` or `---END REVIEW---`.",
-    "6. Between blocks, use only blank lines — no prose.",
-    "7. EVERY FILE block's content (titles, body, descriptions) MUST be in the mandatory output language specified below.",
-    "",
-    "If you start with anything other than `---FILE:`, the entire response will be discarded.",
-    "",
-    // Repeat the language directive at the very end so it wins the "most
-    // recent instruction" tie-breaker. Small-to-medium models otherwise
-    // drift back to their training-data language for individual pages.
-    "---",
-    "",
-    graphPolicyPrompt,
-    "",
-    languageRule(sourceContent),
-  ].filter(Boolean).join("\n")
-}
 
 
 /**
- * Build a scaffold JSON for Stage 2: one skeleton entry per Stage 1 section,
- * with source_range and source_text pre-filled and all output fields empty.
- * LLM fills in concept, page_path, graph, relations, new_graph, isolated.
- * Keys are fixed — LLM cannot invent new field names.
+ * Build a scaffold JSON for Stage 2: one seed triple per Stage 1 section,
+ * with source_text in the sections array and all output fields empty.
+ * LLM fills in subject/predicate/object/graph/page_path/new_graph per triple.
+ * LLM may add more triples with the same source_id when a section has multiple facts.
  */
 export function buildStage2Scaffold(sections: Stage1Section[]): string {
   const scaffold = {
@@ -1642,39 +1507,53 @@ export function buildStage2Scaffold(sections: Stage1Section[]): string {
       source_range: s.source_range,
       source_text: s.source_text,
     })),
-    assignments: sections.map((_s, index) => ({
+    triples: sections.map((_s, index) => ({
       source_id: `s${index + 1}`,
-      concept: "",
-      page_path: "",
+      subject: "",
+      predicate: "",
+      object: "",
       graph: "",
+      page_path: "",
       new_graph: false,
       graph_relation_types: [] as string[],
-      isolated: false,
-      relations: [] as Array<{ target: string; type: string }>,
     })),
   }
   return JSON.stringify(scaffold, null, 2)
 }
 
 /**
- * Stage 3 (code): build FILE block text from Stage 2 assignments without an LLM call.
- * Each assignment becomes one FILE block: frontmatter derived from Stage 2 data,
- * body from source_text carried in the assignment, wikilinks from relations.
+ * Stage 3 (code): build FILE block text from Stage 2 triples without an LLM call.
+ *
+ * Triples are grouped by page_path. All triples sharing the same page_path
+ * are merged into one FILE block. The title is the source_range (section heading),
+ * and the body is the verbatim source_text. No wikilinks or graph frontmatter.
+ *
+ * A triple with no subject/predicate/object or an unsafe page_path is skipped.
  */
 export function buildFileBlocksFromAssignments(
-  assignments: Stage2Assignment[],
+  triples: Stage2Triple[],
   fileName: string,
 ): string {
+  // Group triples by page_path only, preserving first-seen order.
+  // page_path is a container for one source section; multiple triples from
+  // the same section share the same page_path and are merged into one file.
+  const groups = new Map<string, Stage2Triple[]>()
+  for (const item of triples) {
+    if (!item.page_path || !isSafeIngestPath(item.page_path)) continue
+    if (!item.subject || !item.predicate || !item.object) continue
+    const existing = groups.get(item.page_path)
+    if (existing) {
+      existing.push(item)
+    } else {
+      groups.set(item.page_path, [item])
+    }
+  }
+
   const blocks: string[] = []
 
-  for (const item of assignments) {
-    if (!item.page_path || !isSafeIngestPath(item.page_path)) continue
-    // Skip assignments with no relations — they produce edge-less nodes that
-    // clutter the graph and contradict the "no graph, no file" design intent.
-    if (!item.relations || item.relations.length === 0) continue
-
-    const sourceRange = item.source_range ?? ""
-    const section = item.source_text ?? ""
+  for (const [, group] of groups) {
+    const first = group[0]
+    const sourceRange = first.source_range ?? ""
 
     const sourcesYaml = [
       `sources:`,
@@ -1684,25 +1563,20 @@ export function buildFileBlocksFromAssignments(
 
     const frontmatter = [
       "---",
-      `title: ${item.concept}`,
+      `title: ${sourceRange || first.subject}`,
       `status: draft`,
       sourcesYaml,
-      `graph: ${item.graph}`,
       "---",
     ].join("\n")
 
-    const relatedLines = (item.relations ?? [])
-      .filter((r) => r.target && r.type)
-      .map((r) => `[[${r.target}|${r.type}]]`)
+    // Use source_text from the first triple that carries it.
+    const section = group.find((t) => t.source_text)?.source_text ?? ""
 
-    const bodyParts: string[] = []
-    if (section) bodyParts.push(section)
-    if (relatedLines.length > 0) {
-      bodyParts.push(`## Related\n\n${relatedLines.join("\n")}`)
-    }
+    const content = section
+      ? [frontmatter, section].join("\n\n")
+      : frontmatter
 
-    const content = [frontmatter, ...bodyParts].join("\n\n")
-    blocks.push(`---FILE: ${item.page_path}---\n${content}\n---END FILE---`)
+    blocks.push(`---FILE: ${first.page_path}---\n${content}\n---END FILE---`)
   }
 
   return blocks.join("\n\n")

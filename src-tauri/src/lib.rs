@@ -4,7 +4,7 @@ mod panic_guard;
 mod types;
 
 use panic_guard::run_guarded;
-use tauri::Emitter;
+use tauri::{Emitter, Window};
 
 #[tauri::command]
 fn clip_server_status() -> String {
@@ -12,6 +12,13 @@ fn clip_server_status() -> String {
         Ok(clip_server::get_daemon_status().to_string())
     })
     .unwrap_or_else(|e| format!("error: {e}"))
+}
+
+#[tauri::command]
+fn set_window_title(window: Window, title: String) -> Result<(), String> {
+    window
+        .set_title(&title)
+        .map_err(|e| format!("failed to set window title: {e}"))
 }
 
 #[tauri::command]
@@ -70,6 +77,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            set_window_title,
             commands::fs::read_file,
             commands::fs::write_file,
             commands::fs::list_directory,
@@ -96,6 +104,7 @@ pub fn run() {
             commands::vectorstore::vector_legacy_row_count,
             commands::vectorstore::vector_drop_legacy,
             commands::vectorstore::vector_drop_v2,
+            commands::vectorstore::embed_text_builtin,
             commands::claude_cli::claude_cli_detect,
             commands::claude_cli::claude_cli_spawn,
             commands::claude_cli::claude_cli_kill,
@@ -114,6 +123,7 @@ pub fn run() {
             commands::git_ops::git_checkout_path,
             commands::git_ops::git_revert,
             commands::git_ops::git_ls_remote,
+            commands::git_ops::git_setup_from_remote,
             commands::git_ops::git_create_branch,
             commands::git_ops::git_remote_add,
             commands::git_ops::git_push,

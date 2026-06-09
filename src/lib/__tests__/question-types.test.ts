@@ -21,14 +21,24 @@ function makeFile(name: string): FileNode {
   return { name, path: `/proj/question_types/${name}`, is_dir: false }
 }
 
+// Helper: mock listDirectory to return empty for both paths, then override project path
+function mockBothDirs(projectFiles: FileNode[], userFiles: FileNode[] = []) {
+  mockListDirectory
+    .mockResolvedValueOnce(projectFiles)  // project-specific path
+    .mockResolvedValueOnce(userFiles)     // user override path
+}
+
 describe("loadQuestionTypes", () => {
   it("returns [] when the question_types directory is missing", async () => {
-    mockListDirectory.mockRejectedValueOnce(new Error("ENOENT"))
-    expect(await loadQuestionTypes("/proj")).toEqual([])
+    mockListDirectory.mockRejectedValue(new Error("ENOENT"))
+    // App defaults are always included; when both dirs fail we still get app defaults
+    const out = await loadQuestionTypes("/proj")
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.every((q) => q._source === "app")).toBe(true)
   })
 
   it("parses the IDEA §2.4 example file end-to-end", async () => {
-    mockListDirectory.mockResolvedValueOnce([makeFile("policy_violation.md")])
+    mockBothDirs([makeFile("policy_violation.md")])
     mockReadFile.mockResolvedValueOnce(
       [
         "---",
@@ -41,20 +51,16 @@ describe("loadQuestionTypes", () => {
       ].join("\n"),
     )
     const out = await loadQuestionTypes("/proj")
-    expect(out).toHaveLength(1)
-    expect(out[0]).toEqual({
-      id: "policy_violation",
-      name: "정책 위반 탐지",
-      description: "사용자/운영 정책에 위반되는 동작을 식별한다.",
-      zeroResidueMeaning: "잔존 0 = 위반 없음 (긍정적 신호).",
-    })
+    const qt = out.find((q) => q.id === "policy_violation")!
+    expect(qt).toBeDefined()
+    expect(qt.name).toBe("정책 위반 탐지")
+    expect(qt.description).toBe("사용자/운영 정책에 위반되는 동작을 식별한다.")
+    expect(qt.zeroResidueMeaning).toBe("잔존 0 = 위반 없음 (긍정적 신호).")
+    expect(qt._source).toBe("project")
   })
 
   it("falls back to first H1 then to filename stem when no frontmatter title", async () => {
-    mockListDirectory.mockResolvedValueOnce([
-      makeFile("h1_only.md"),
-      makeFile("bare.md"),
-    ])
+    mockBothDirs([makeFile("h1_only.md"), makeFile("bare.md")])
     mockReadFile.mockResolvedValueOnce("# 회귀 테스트\n\n변경 후에도 기존 동작이 유지되어야 함.")
     mockReadFile.mockResolvedValueOnce("그냥 본문만 있는 파일.")
     const out = await loadQuestionTypes("/proj")
@@ -63,7 +69,7 @@ describe("loadQuestionTypes", () => {
   })
 
   it("captures Input / Output / Zero residue section bodies", async () => {
-    mockListDirectory.mockResolvedValueOnce([makeFile("condition.md")])
+    mockBothDirs([makeFile("condition.md")])
     mockReadFile.mockResolvedValueOnce(
       [
         "---",
@@ -84,7 +90,8 @@ describe("loadQuestionTypes", () => {
         "이 영역은 무시되어야 한다.",
       ].join("\n"),
     )
-    const [qt] = await loadQuestionTypes("/proj")
+    const qt = (await loadQuestionTypes("/proj")).find((q) => q.id === "condition")!
+    expect(qt).toBeDefined()
     expect(qt.inputShape).toBe("조건 + 액터의 행동.")
     expect(qt.outputShape).toBe("예상되는 시스템 반응 1줄.")
     expect(qt.zeroResidueMeaning).toBe("잔존 0 = 정의된 조건이 어떤 코너에도 걸리지 않음.")
@@ -93,7 +100,7 @@ describe("loadQuestionTypes", () => {
 
   it("skips dotfiles, non-markdown, and directories; logs and skips read failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    mockListDirectory.mockResolvedValueOnce([
+    mockBothDirs([
       { name: ".gitkeep", path: "/proj/question_types/.gitkeep", is_dir: false },
       { name: "_drafts", path: "/proj/question_types/_drafts", is_dir: true },
       { name: "notes.txt", path: "/proj/question_types/notes.txt", is_dir: false },
@@ -104,7 +111,8 @@ describe("loadQuestionTypes", () => {
     mockReadFile.mockRejectedValueOnce(new Error("EACCES"))
 
     const out = await loadQuestionTypes("/proj")
-    expect(out.map((q) => q.id)).toEqual(["ok"])
+    expect(out.find((q) => q.id === "ok")).toBeDefined()
+    expect(out.find((q) => q.id === "broken")).toBeUndefined()
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("broken.md"),
       expect.any(Error),
@@ -113,26 +121,52 @@ describe("loadQuestionTypes", () => {
   })
 
   it("returns multiple types in the order listDirectory yields them", async () => {
-    mockListDirectory.mockResolvedValueOnce([
-      makeFile("a.md"),
-      makeFile("b.md"),
-      makeFile("c.md"),
-    ])
+    mockBothDirs([makeFile("a.md"), makeFile("b.md"), makeFile("c.md")])
     mockReadFile
       .mockResolvedValueOnce("# A\n\n본문A.")
       .mockResolvedValueOnce("# B\n\n본문B.")
       .mockResolvedValueOnce("# C\n\n본문C.")
     const out = await loadQuestionTypes("/proj")
-    expect(out.map((q) => q.id)).toEqual(["a", "b", "c"])
+    const ids = out.map((q) => q.id)
+    expect(ids).toContain("a")
+    expect(ids).toContain("b")
+    expect(ids).toContain("c")
+    expect(ids.indexOf("a")).toBeLessThan(ids.indexOf("b"))
+    expect(ids.indexOf("b")).toBeLessThan(ids.indexOf("c"))
   })
 
   it("handles a body whose first paragraph follows blank lines and headings", async () => {
-    mockListDirectory.mockResolvedValueOnce([makeFile("policy.md")])
+    mockBothDirs([makeFile("policy.md")])
     mockReadFile.mockResolvedValueOnce(
       "\n\n## Description\n\n실제 설명 문단입니다.\n\n## Other\n다른 영역.",
     )
-    const [qt] = await loadQuestionTypes("/proj")
+    const qt = (await loadQuestionTypes("/proj")).find((q) => q.id === "policy")!
+    expect(qt).toBeDefined()
     expect(qt.description).toBe("실제 설명 문단입니다.")
+  })
+
+  it("user override tombstone hides an app default type", async () => {
+    mockBothDirs(
+      [],
+      [{ name: "balance_simulation.yaml", path: "/proj/.llm-wiki/question-types/balance_simulation.yaml", is_dir: false }],
+    )
+    mockReadFile.mockResolvedValueOnce("_deleted: true\n")
+    const out = await loadQuestionTypes("/proj")
+    expect(out.find((q) => q.id === "balance_simulation")).toBeUndefined()
+  })
+
+  it("user override replaces project-specific type with same id", async () => {
+    mockBothDirs(
+      [makeFile("custom.md")],
+      [{ name: "custom.yaml", path: "/proj/.llm-wiki/question-types/custom.yaml", is_dir: false }],
+    )
+    mockReadFile.mockResolvedValueOnce("# Project Custom\n\n프로젝트 버전.")
+    mockReadFile.mockResolvedValueOnce("name: User Custom\ndescription: 유저 버전\n")
+    const out = await loadQuestionTypes("/proj")
+    const qt = out.find((q) => q.id === "custom")!
+    expect(qt).toBeDefined()
+    expect(qt.name).toBe("User Custom")
+    expect(qt._source).toBe("user")
   })
 })
 

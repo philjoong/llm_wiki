@@ -81,7 +81,13 @@ export async function saveEmbeddingConfig(config: EmbeddingConfig): Promise<void
 
 export async function loadEmbeddingConfig(): Promise<EmbeddingConfig | null> {
   const store = await getStore()
-  return (await store.get<EmbeddingConfig>(EMBEDDING_KEY)) ?? null
+  const raw = await store.get<any>(EMBEDDING_KEY)
+  if (!raw) return null
+  // source 필드 없는 구버전: endpoint 있으면 external, 없으면 builtin
+  if (!raw.source) {
+    raw.source = raw.endpoint ? "external" : "builtin"
+  }
+  return raw as EmbeddingConfig
 }
 
 export async function removeFromRecentProjects(
@@ -139,6 +145,21 @@ export async function saveSelectedBranch(branch: string | null): Promise<void> {
 export async function loadSelectedBranch(): Promise<string | null> {
   const store = await getStore()
   return (await store.get<string>(SELECTED_BRANCH_KEY)) ?? null
+}
+
+const BRANCH_FOLDER_MAP_KEY = "branchFolderMap"
+
+export async function saveBranchFolderMapping(branch: string, folderPath: string): Promise<void> {
+  const store = await getStore()
+  const existing = (await store.get<Record<string, string>>(BRANCH_FOLDER_MAP_KEY)) ?? {}
+  existing[branch] = folderPath
+  await store.set(BRANCH_FOLDER_MAP_KEY, existing)
+}
+
+export async function loadBranchFolderMapping(branch: string): Promise<string | null> {
+  const store = await getStore()
+  const map = (await store.get<Record<string, string>>(BRANCH_FOLDER_MAP_KEY)) ?? {}
+  return map[branch] ?? null
 }
 
 const FALKORDB_URL_KEY = "falkordbUrl"

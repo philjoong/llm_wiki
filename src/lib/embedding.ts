@@ -82,6 +82,18 @@ export async function fetchEmbedding(
   cfg: EmbeddingConfig,
   maxRetries = 3,
 ): Promise<number[] | null> {
+  if (cfg.source === "builtin") {
+    try {
+      const result = await invoke<number[]>("embed_text_builtin", { text })
+      lastEmbeddingError = null
+      return result
+    } catch (err) {
+      lastEmbeddingError = err instanceof Error ? err.message : String(err)
+      console.warn(`[Embedding] builtin error: ${lastEmbeddingError}`)
+      return null
+    }
+  }
+
   if (!cfg.endpoint) return null
 
   const headers: Record<string, string> = { "Content-Type": "application/json" }
@@ -299,7 +311,7 @@ export async function embedPage(
   content: string,
   cfg: EmbeddingConfig,
 ): Promise<void> {
-  if (!cfg.enabled || !cfg.model) return
+  if (!cfg.enabled || (cfg.source !== "builtin" && !cfg.model)) return
 
   const t0 = performance.now()
   const chunks = chunkMarkdown(content, {
@@ -354,7 +366,7 @@ export async function embedAllPages(
   cfg: EmbeddingConfig,
   onProgress?: (done: number, total: number) => void,
 ): Promise<number> {
-  if (!cfg.enabled || !cfg.model) return 0
+  if (!cfg.enabled || (cfg.source !== "builtin" && !cfg.model)) return 0
 
   const pp = normalizePath(projectPath)
 
@@ -433,7 +445,7 @@ export async function searchByEmbedding(
   cfg: EmbeddingConfig,
   topK: number = 10,
 ): Promise<PageSearchResult[]> {
-  if (!cfg.enabled || !cfg.model) return []
+  if (!cfg.enabled || (cfg.source !== "builtin" && !cfg.model)) return []
 
   const queryEmb = await fetchEmbedding(query, cfg)
   if (!queryEmb) return []

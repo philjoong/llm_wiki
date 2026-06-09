@@ -6,13 +6,11 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId } from "@/lib/project-store"
+import { getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, saveBranchFolderMapping, loadBranchFolderMapping, loadGitRemoteUrl } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
 import { AppLayout } from "@/components/layout/app-layout"
-import { WelcomeScreen } from "@/components/project/welcome-screen"
-import { CreateProjectDialog } from "@/components/project/create-project-dialog"
 import { ProjectBranchSelector } from "@/components/project/project-branch-selector"
 import { SyncOnExitDialog } from "@/components/project/sync-on-exit-dialog"
 import type { WikiProject } from "@/types/wiki"
@@ -49,9 +47,10 @@ function App() {
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const setActiveView = useWikiStore((s) => s.setActiveView)
-  const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showSyncExitDialog, setShowSyncExitDialog] = useState(false)
+  const [isLocalOnly, setIsLocalOnly] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [branchAutoLoading, setBranchAutoLoading] = useState(false)
 
   // Set up auto-save and clip watcher once on mount
   useEffect(() => {
@@ -230,6 +229,106 @@ function App() {
     init()
   }, [])
 
+  // When a branch is selected but no project is loaded, try to auto-open
+  // the previously mapped local folder. If no mapping exists, open a folder
+  // picker dialog so the user can link one.
+  useEffect(() => {
+    if (loading || !selectedBranch || project) return
+
+    async function autoResolveFolder() {
+      setBranchAutoLoading(true)
+      try {
+        const mappedPath = await loadBranchFolderMapping(selectedBranch!)
+        if (mappedPath) {
+          debug("branch-auto-resolve: found mapped path", { branch: selectedBranch, path: mappedPath })
+          const ok = await openOrSyncFolder(mappedPath, selectedBranch!)
+          if (ok) return
+          debug("branch-auto-resolve: mapped path failed, falling back to picker")
+        }
+        // No valid mapping — open folder picker directly
+        debug("branch-auto-resolve: no mapping, opening folder picker")
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: "Select local folder for this branch",
+        })
+        if (!selected) return
+        await openOrSyncFolder(selected, selectedBranch!)
+      } finally {
+        setBranchAutoLoading(false)
+      }
+    }
+
+    void autoResolveFolder()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBranch, loading])
+
+  // Try to open `folderPath` as a project. If it's not a valid project yet,
+  // initialize it locally (no remote) or pull from remote if a URL is configured.
+  // Returns true on success, false on unrecoverable failure.
+  async function openOrSyncFolder(folderPath: string, branch: string): Promise<boolean> {
+    try {
+      const proj = await openProject(folderPath)
+      await handleProjectOpened(proj)
+      return true
+    } catch {
+      debug("branch-auto-resolve: openProject failed, attempting init", { folderPath, branch })
+    }
+
+    const repoBaseUrl = (await loadGitRemoteUrl()) || import.meta.env.VITE_GIT_REPO_URL || ""
+
+    const localInit = async () => {
+      const { initProject } = await import("@/lib/project-init")
+      await initProject({ projectPath: folderPath })
+      const proj = await openProject(folderPath)
+      await handleProjectOpened(proj)
+    }
+
+    if (!repoBaseUrl) {
+      try {
+        await localInit()
+        return true
+      } catch (err) {
+        debug("branch-auto-resolve: local init failed", err)
+        window.alert(`Failed to initialize local project: ${err}`)
+        return false
+      }
+    }
+
+    // Remote URL is set — check if the branch actually exists on remote.
+    // If not, treat as local-only rather than failing with a git fetch error.
+    try {
+      const { gitLsRemote } = await import("@/commands/git")
+      const gitToken = import.meta.env.VITE_GIT_TOKEN
+      const remoteUrl = gitToken
+        ? `https://oauth2:${encodeURIComponent(gitToken)}@${repoBaseUrl}`
+        : `https://${repoBaseUrl}`
+
+      const remoteBranches = await gitLsRemote(remoteUrl)
+      if (!remoteBranches.includes(branch)) {
+        debug("branch-auto-resolve: branch not on remote, falling back to local init", { branch })
+        try {
+          await localInit()
+          return true
+        } catch (err) {
+          debug("branch-auto-resolve: local init failed", err)
+          window.alert(`Failed to initialize local project: ${err}`)
+          return false
+        }
+      }
+
+      const { gitSetupFromRemote } = await import("@/commands/git")
+      await gitSetupFromRemote(folderPath, remoteUrl, branch)
+      const proj = await openProject(folderPath)
+      await handleProjectOpened(proj)
+      return true
+    } catch (err) {
+      debug("branch-auto-resolve: git sync failed", err)
+      window.alert(`Failed to sync branch "${branch}" into folder: ${err}`)
+      return false
+    }
+  }
+
   async function handleProjectOpened(proj: WikiProject) {
     debug("project-open: start", { name: proj.name, path: proj.path })
     // Clear all per-project state BEFORE loading new project data
@@ -244,11 +343,19 @@ function App() {
     setProject(proj)
     setSelectedFile(null)
     setActiveView("wiki")
+    const remoteUrl = await loadGitRemoteUrl()
+    setIsLocalOnly(!remoteUrl)
     // Bump data version so any cached graphs/views invalidate
     useWikiStore.getState().bumpDataVersion()
     debug("project-open: before saveLastProject")
     await saveLastProject(proj)
     debug("project-open: after saveLastProject")
+
+    // Save branch → folder mapping so next launch auto-resolves
+    const currentBranch = useWikiStore.getState().selectedBranch
+    if (currentBranch) {
+      await saveBranchFolderMapping(currentBranch, proj.path)
+    }
 
     // Restore ingest queue (resume interrupted tasks). Keyed by the
     // project's stable UUID so the queue still finds the right project
@@ -358,30 +465,6 @@ function App() {
     debug("project-open: finished")
   }
 
-  async function handleSelectRecent(proj: WikiProject) {
-    try {
-      const validated = await openProject(proj.path)
-      await handleProjectOpened(validated)
-    } catch (err) {
-      window.alert(`Failed to open project: ${err}`)
-    }
-  }
-
-  async function handleOpenProject() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Open Wiki Project",
-    })
-    if (!selected) return
-    try {
-      const proj = await openProject(selected)
-      await handleProjectOpened(proj)
-    } catch (err) {
-      window.alert(`Failed to open project: ${err}`)
-    }
-  }
-
   async function handleSwitchProject() {
     // Clear all per-project state BEFORE flipping back to the welcome screen
     // so old data cannot leak in via any async render pass.
@@ -432,7 +515,7 @@ function App() {
     getCurrentWindow().destroy()
   }
 
-  if (loading) {
+  if (loading || branchAutoLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
         Loading...
@@ -445,35 +528,18 @@ function App() {
   }
 
   if (!project) {
-    return (
-      <>
-        <WelcomeScreen
-          onCreateProject={() => setShowCreateDialog(true)}
-          onOpenProject={handleOpenProject}
-          onSelectProject={handleSelectRecent}
-        />
-        <CreateProjectDialog
-          open={showCreateDialog}
-          onOpenChange={setShowCreateDialog}
-          onCreated={handleProjectOpened}
-        />
-      </>
-    )
+    return null
   }
 
   return (
     <>
       <AppLayout onSwitchProject={handleSwitchProject} />
-      <CreateProjectDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        onCreated={handleProjectOpened}
-      />
       <SyncOnExitDialog
         open={showSyncExitDialog}
         onOpenChange={setShowSyncExitDialog}
         onSync={handleSync}
         onExit={handleExit}
+        isLocalOnly={isLocalOnly}
       />
     </>
   )

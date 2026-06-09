@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react"
-import { useTranslation } from "react-i18next"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
@@ -7,13 +6,11 @@ import rehypeKatex from "rehype-katex"
 import "katex/dist/katex.min.css"
 import {
   Bot, User, FileText, BookmarkPlus, ChevronDown, ChevronRight, RefreshCw, Copy, Check,
-  Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, Layout, Globe, ShieldAlert,
+  Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, Layout, Globe,
 } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { lastQueryPages } from "@/components/chat/chat-panel"
-import { ExclusionTrace } from "@/components/chat/exclusion-trace"
-import { recordCounterexample } from "@/lib/exclusion-validity"
 import type { DisplayMessage } from "@/stores/chat-store"
 import type { FileNode } from "@/types/wiki"
 
@@ -84,9 +81,6 @@ export function ChatMessage({ message, isLastAssistant, onRegenerate }: ChatMess
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
       </div>
       <div className="max-w-[80%] flex flex-col gap-1.5">
-        {isAssistant && message.trace && (
-          <ExclusionTrace trace={message.trace} />
-        )}
         <div
           className={`rounded-lg px-3 py-2 text-sm ${
             isUser
@@ -292,50 +286,16 @@ function getRefType(path: string): string {
 }
 
 function CitedReferencesPanel({ content, savedReferences }: { content: string; savedReferences?: CitedPage[] }) {
-  const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
-  const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
-  const bumpDataVersion = useWikiStore((s) => s.bumpDataVersion)
+  const setActiveView = useWikiStore((s) => s.setActiveView)
+  const setPendingOpenFile = useWikiStore((s) => s.setPendingOpenFile)
   const [expanded, setExpanded] = useState(false)
-  const [markBusy, setMarkBusy] = useState<string | null>(null)
-  const [markStatus, setMarkStatus] = useState<Record<string, "ok" | "noop" | "err">>({})
 
   // Use saved references first (persisted with message), fall back to dynamic extraction
   const citedPages = useMemo(() => {
     if (savedReferences && savedReferences.length > 0) return savedReferences
     return extractCitedPages(content)
   }, [content, savedReferences])
-
-  const handleMarkCorrect = useCallback(
-    async (page: CitedPage) => {
-      if (!project) return
-      const pp = normalizePath(project.path)
-      // Build a project-relative "db/..." path — recordCounterexample
-      // matches glob patterns against db/-rooted paths.
-      let relPath = page.path
-      if (relPath.startsWith(pp + "/")) relPath = relPath.slice(pp.length + 1)
-      if (!relPath.startsWith("db/")) relPath = `db/${relPath.replace(/^db\//, "")}`
-      setMarkBusy(page.path)
-      try {
-        const out = await recordCounterexample(
-          pp,
-          relPath,
-          `사용자가 정답으로 표시 — ${page.title}`,
-        )
-        setMarkStatus((s) => ({
-          ...s,
-          [page.path]: out.flagged.length > 0 ? "ok" : "noop",
-        }))
-        if (out.flagged.length > 0) bumpDataVersion()
-      } catch (err) {
-        console.error("[counterexample] mark-as-correct failed:", err)
-        setMarkStatus((s) => ({ ...s, [page.path]: "err" }))
-      } finally {
-        setMarkBusy(null)
-      }
-    },
-    [project, bumpDataVersion],
-  )
 
   if (citedPages.length === 0) return null
 
@@ -363,7 +323,6 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
           const refType = getRefType(page.path)
           const config = REF_TYPE_CONFIG[refType] ?? REF_TYPE_CONFIG.source
           const Icon = config.icon
-          const status = markStatus[page.path]
           return (
             <div key={page.path} className="flex items-center gap-1">
               <button
@@ -371,7 +330,6 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
                 onClick={async () => {
                   if (!project) return
                   const pp = normalizePath(project.path)
-                  // Try the given path first, then search all wiki subdirectories
                   const id = getFileName(page.path.replace(/^wiki\//, "").replace(/\.md$/, ""))
                   const candidates = [
                     `${pp}/${page.path}`,
@@ -383,17 +341,19 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
                     `${pp}/db/comparisons/${id}.md`,
                     `${pp}/db/${id}.md`,
                   ]
+                  let resolved: string | null = null
                   for (const candidate of candidates) {
                     try {
                       await readFile(candidate)
-                      setSelectedFile(candidate)
-                      return
+                      resolved = candidate
+                      break
                     } catch {
                       // try next
                     }
                   }
-                  // Last resort: set the original path anyway
-                  setSelectedFile(`${pp}/${page.path}`)
+                  const target = resolved ?? `${pp}/${page.path}`
+                  setPendingOpenFile(target)
+                  setActiveView("graph")
                 }}
                 className="flex flex-1 min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50 transition-colors"
                 title={page.path}
@@ -401,28 +361,6 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
                 <span className="text-[10px] text-muted-foreground/60 w-4 shrink-0 text-right">[{i + 1}]</span>
                 <Icon className={`h-3 w-3 shrink-0 ${config.color}`} />
                 <span className="truncate text-foreground/80">{page.title}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleMarkCorrect(page)}
-                disabled={markBusy === page.path || status === "ok"}
-                className={`shrink-0 inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] transition-colors ${
-                  status === "ok"
-                    ? "text-emerald-600 dark:text-emerald-400"
-                    : status === "err"
-                      ? "text-destructive"
-                      : "text-muted-foreground/70 hover:text-amber-600 hover:bg-amber-500/10"
-                }`}
-                title={t("chat.markAsCorrectHint")}
-              >
-                <ShieldAlert className="h-3 w-3" />
-                {status === "ok"
-                  ? t("chat.markedAsCorrect")
-                  : status === "noop"
-                    ? t("chat.markNoMatch")
-                    : status === "err"
-                      ? t("chat.markFailed")
-                      : t("chat.markAsCorrect")}
               </button>
             </div>
           )
@@ -543,8 +481,11 @@ export function StreamingMessage({ content }: StreamingMessageProps) {
 }
 
 function MarkdownContent({ content }: { content: string }) {
-  // Strip hidden comments
-  const cleaned = content.replace(/<!--.*?-->/gs, "").trimEnd()
+  // Strip hidden comments and the ## Sources section (duplicated in References panel)
+  const cleaned = content
+    .replace(/<!--.*?-->/gs, "")
+    .replace(/\n##\s+Sources\b[\s\S]*$/, "")
+    .trimEnd()
 
   // Separate thinking blocks from main content
   const { thinking, answer } = useMemo(() => separateThinking(cleaned), [cleaned])

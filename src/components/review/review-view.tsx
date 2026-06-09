@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import {
   AlertTriangle,
   Copy,
@@ -396,7 +398,9 @@ function ReviewCard({
         </button>
       </div>
 
-      <p className="mb-3 text-xs text-muted-foreground">{item.description}</p>
+      <div className="mb-3 text-xs text-muted-foreground prose prose-xs max-w-none prose-p:my-0.5 prose-ul:my-0.5 prose-li:my-0 prose-strong:font-semibold prose-code:text-xs prose-code:before:content-none prose-code:after:content-none dark:prose-invert">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.description}</ReactMarkdown>
+      </div>
 
       {item.affectedPages && item.affectedPages.length > 0 && (
         <div className="mb-3 text-xs text-muted-foreground">

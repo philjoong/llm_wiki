@@ -6,7 +6,7 @@
  * response_format is not available on CLI, so JSON is enforced via prompt only.
  *
  * Test cases:
- *  1. Clean Stage 1 + Stage 2 response → writes FILE blocks with graph + relations
+ *  1. Clean Stage 1 + Stage 2 response → writes FILE blocks with source_range title (no graph, no wikilinks)
  *  2. Stage 2 returns no assignments → chunk skipped, review item created (no throw)
  *  3. Stage 2 assignments with invalid relation types → skipped, review item created, valid ones written
  *  4. CLI transport error on Stage 1 → chunk skipped (no throw)
@@ -38,7 +38,7 @@ vi.mock("../graph-policy", () => ({
 }))
 
 vi.mock("../graph-sync", () => ({
-  syncGraphToFalkorDb: vi.fn().mockResolvedValue("0 nodes, 0 edges synced"),
+  syncGraphToFalkorDb: vi.fn().mockResolvedValue("0 triples (nothing to sync)"),
 }))
 
 vi.mock("@/lib/counterexample-index", () => ({
@@ -120,13 +120,14 @@ const STAGE1_RESPONSE = [
 ].join("\n")
 
 const STAGE2_RESPONSE = JSON.stringify({
-  assignments: [
+  triples: [
     {
       source_id: "s1",
-      concept: "고블린 전사",
-      page_path: "db/enemies/goblin-warrior.md",
+      subject: "고블린 전사",
+      predicate: "WEAK_AGAINST",
+      object: "불",
       graph: "combat_graph",
-      relations: [{ target: "불", type: "WEAK_AGAINST" }],
+      page_path: "db/enemies/goblin-warrior.md",
       new_graph: false,
     },
   ],
@@ -173,7 +174,7 @@ beforeEach(() => {
 })
 
 describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
-  it("Stage 2 scaffold는 source_text를 sections에만 싣고 assignment는 source_id로 참조함", () => {
+  it("Stage 2 scaffold는 source_text를 sections에만 싣고 triple은 source_id로 참조함", () => {
     const scaffold = JSON.parse(buildStage2Scaffold([
       {
         source_range: "## 고블린 전사",
@@ -188,12 +189,12 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
         source_text: "고블린 전사는 불에 약하고 독침을 사용한다.",
       },
     ])
-    expect(scaffold.assignments[0]).toEqual(expect.objectContaining({ source_id: "s1" }))
-    expect(scaffold.assignments[0]).not.toHaveProperty("source_text")
-    expect(scaffold.assignments[0]).not.toHaveProperty("source_range")
+    expect(scaffold.triples[0]).toEqual(expect.objectContaining({ source_id: "s1" }))
+    expect(scaffold.triples[0]).not.toHaveProperty("source_text")
+    expect(scaffold.triples[0]).not.toHaveProperty("source_range")
   })
 
-  it("Stage 1+2 성공 시 graph frontmatter와 wikilink가 포함된 파일을 씀", async () => {
+  it("Stage 1+2 성공 시 source_range를 title로 쓰고 graph/wikilink 없는 파일을 씀", async () => {
     mockSequentialResponses(STAGE1_RESPONSE, STAGE2_RESPONSE)
 
     const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
@@ -201,8 +202,11 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     expect(written).toContain("db/enemies/goblin-warrior.md")
     expect(mockWriteFile).toHaveBeenCalled()
     const [, content] = mockWriteFile.mock.calls[0]
-    expect(content).toContain("graph: combat_graph")
-    expect(content).toContain("[[불|WEAK_AGAINST]]")
+    // Fix 30: title은 source_range(섹션 제목)로, graph frontmatter와 wikilink는 제거됨
+    expect(content).toContain("title: ## 고블린 전사")
+    expect(content).not.toContain("graph:")
+    expect(content).not.toContain("## Related")
+    expect(content).not.toContain("[[불|WEAK_AGAINST]]")
     const last = useActivityStore.getState().items[0]
     expect(last.status).toBe("done")
   })
@@ -216,13 +220,14 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     mockSequentialResponses(
       ["---SECTION: ## 리니지---", hostileText, "---END SECTION---"].join("\n"),
       JSON.stringify({
-        assignments: [
+        triples: [
           {
             source_id: "s1",
-            concept: "리니지",
-            page_path: "db/games/lineage.md",
+            subject: "리니지",
+            predicate: "WEAK_AGAINST",
+            object: "흥행",
             graph: "combat_graph",
-            relations: [{ target: "흥행", type: "WEAK_AGAINST" }],
+            page_path: "db/games/lineage.md",
             new_graph: false,
           },
         ],
@@ -242,7 +247,7 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
     mockSequentialResponses(
       STAGE1_RESPONSE,
-      JSON.stringify({ assignments: [] }),
+      JSON.stringify({ triples: [] }),
     )
 
     const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
@@ -270,13 +275,14 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     mockSequentialResponses(
       STAGE1_RESPONSE,
       JSON.stringify({
-        assignments: [
+        triples: [
           {
             source_id: "s1",
-            concept: "고블린 전사",
-            page_path: "db/enemies/goblin-warrior.md",
+            subject: "고블린 전사",
+            predicate: "INVALID_TYPE",
+            object: "불",
             graph: "combat_graph",
-            relations: [{ target: "불", type: "INVALID_TYPE" }],
+            page_path: "db/enemies/goblin-warrior.md",
             new_graph: false,
           },
         ],
@@ -309,15 +315,25 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     mockSequentialResponses(
       STAGE1_RESPONSE,
       JSON.stringify({
-        assignments: [
+        triples: [
           {
             source_id: "s1",
-            concept: "고블린 전사",
-            page_path: "db/enemies/goblin-warrior.md",
+            subject: "고블린 전사",
+            predicate: "USES_SKILL",
+            object: "독침",
             graph: "combat_graph",
-            relations: [{ target: "독침", type: "USES_SKILL" }, { target: "얼음", type: "VULNERABLE_TO" }],
+            page_path: "db/enemies/goblin-warrior.md",
             new_graph: false,
             graph_relation_types: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "VULNERABLE_TO"],
+          },
+          {
+            source_id: "s1",
+            subject: "고블린 전사",
+            predicate: "VULNERABLE_TO",
+            object: "얼음",
+            graph: "combat_graph",
+            page_path: "db/enemies/goblin-warrior.md",
+            new_graph: false,
           },
         ],
       }),
@@ -334,8 +350,10 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
         }),
       }),
     )
+    // Fix 30: wikilink는 더 이상 파일에 포함되지 않음
     const [, content] = mockWriteFile.mock.calls[0]
-    expect(content).toContain("[[얼음|VULNERABLE_TO]]")
+    expect(content).not.toContain("[[얼음|VULNERABLE_TO]]")
+    expect(content).not.toContain("## Related")
   })
 
   it("같은 concept의 다중 assignment 중 실패한 assignment만 건너뜀", async () => {
@@ -351,21 +369,23 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     mockSequentialResponses(
       STAGE1_RESPONSE,
       JSON.stringify({
-        assignments: [
+        triples: [
           {
             source_id: "s1",
-            concept: "고블린 전사",
-            page_path: "db/enemies/goblin-warrior-weakness.md",
+            subject: "고블린 전사",
+            predicate: "WEAK_AGAINST",
+            object: "불",
             graph: "combat_graph",
-            relations: [{ target: "불", type: "WEAK_AGAINST" }],
+            page_path: "db/enemies/goblin-warrior-weakness.md",
             new_graph: false,
           },
           {
             source_id: "s1",
-            concept: "고블린 전사",
-            page_path: "db/enemies/goblin-warrior-tactic.md",
+            subject: "고블린 전사",
+            predicate: "AMBUSHES",
+            object: "기습",
             graph: "combat_graph",
-            relations: [{ target: "기습", type: "AMBUSHES" }],
+            page_path: "db/enemies/goblin-warrior-tactic.md",
             new_graph: false,
           },
         ],
@@ -409,21 +429,23 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
         "---END SECTION---",
       ].join("\n"),
       JSON.stringify({
-        assignments: [
+        triples: [
           {
             source_id: "s1",
-            concept: "고블린 전사",
-            page_path: "db/enemies/goblin-warrior.md",
+            subject: "고블린 전사",
+            predicate: "WEAK_AGAINST",
+            object: "불",
             graph: "combat_graph",
-            relations: [{ target: "불", type: "WEAK_AGAINST" }],
+            page_path: "db/enemies/goblin-warrior.md",
             new_graph: false,
           },
           {
             source_id: "s2",
-            concept: "오크 전사",
-            page_path: "db/enemies/orc-warrior.md",
+            subject: "오크 전사",
+            predicate: "WEAK_AGAINST",
+            object: "불",
             graph: "combat_graph",
-            relations: [{ target: "불", type: "WEAK_AGAINST" }],
+            page_path: "db/enemies/orc-warrior.md",
             new_graph: false,
           },
         ],

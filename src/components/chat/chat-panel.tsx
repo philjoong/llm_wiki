@@ -8,13 +8,15 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { executeIngestWrites } from "@/lib/ingest"
 import { listDirectory, readFile, deleteFile } from "@/commands/fs"
-import { runExcludeSearch, type SearchTrace } from "@/lib/exclude-search"
-import { buildRetrievalGraph, getRelatedNodes } from "@/lib/graph-relevance"
+import { searchWiki } from "@/lib/search"
 import { getGraphContext } from "@/lib/graph-qna"
-import { normalizePath, getFileName, getRelativePath } from "@/lib/path-utils"
+import { normalizePath, getRelativePath } from "@/lib/path-utils"
+import { loadPageGraphIndex, lookupPageGraphs } from "@/lib/page-graph-index"
+import { queryGraphDb } from "@/commands/graph-db"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
+import { loadQuestionTypes } from "@/lib/question-types"
 
 // Store the page mapping from the last query so SourceFilesBar can show which pages were cited
 export let lastQueryPages: { title: string; path: string }[] = []
@@ -156,7 +158,7 @@ export function ChatPanel() {
   }, [activeMessages, streamingContent])
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, questionTypeId?: string, useEmbedding?: boolean) => {
       // Auto-create a conversation if none is active
       let convId = useChatStore.getState().activeConversationId
       if (!convId) {
@@ -170,7 +172,6 @@ export function ChatPanel() {
       const systemMessages: LLMMessage[] = []
       let queryRefs: { title: string; path: string }[] = []
       let langReminder: string | undefined
-      let searchTrace: SearchTrace | undefined
       // Pure greetings ("hi", "你好", "嗨") don't warrant running the whole
       // retrieval pipeline — it's slow, costs context, and drags in random
       // wiki pages the user clearly didn't ask about. Short-circuit with a
@@ -191,7 +192,6 @@ export function ChatPanel() {
         // Skip retrieval; queryRefs stays empty so no "Sources" chip is shown.
       } else if (project) {
         const pp = normalizePath(project.path)
-        const dataVersion = useWikiStore.getState().dataVersion
 
         // ── Budget allocation (see context-budget.ts) ─────────
         // Page budget scales with the LLM's context window; we now
@@ -205,31 +205,25 @@ export function ChatPanel() {
 
         const rawIndex = await readFile(`${pp}/db/index.md`).catch(() => "")
 
-        // ── Phase 1: Exclusion-aware retrieval (IDEA.md Part 2) ───
-        // Replaces the prior `searchWiki` call. Pipeline:
-        //   classifyQuestion → load exclusions for that type
-        //   → applyExclusions over the db/ tree → searchPaths
-        //     (token + vector hybrid restricted to the residue)
-        // The trace is persisted on the assistant message so the user
-        // can see what was ruled out and why (§2.9). When the residue
-        // is empty AND the question was classified, we surface the
-        // type's `zeroResidueMeaning` instead of fabricating an answer
-        // (§2.10) — see the early return below.
-        const exclude = await runExcludeSearch(text, pp, llmConfig)
-        searchTrace = exclude.trace
-        const keptPathSet = new Set(exclude.keptPaths)
-        const topSearchResults = exclude.hits.slice(0, 10)
-
-        if (
-          exclude.trace.residueCount === 0 &&
-          exclude.trace.judgedType !== null &&
-          exclude.trace.zeroResidueMeaning
-        ) {
-          lastQueryPages = []
-          finalizeStream(exclude.trace.zeroResidueMeaning, [], exclude.trace)
-          abortRef.current = null
-          return
+        // ── Phase 1: Search retrieval ──────────────────────────
+        // useEmbedding=false: temporarily override embeddingConfig so
+        // fuseTokenAndVector skips vector search for this query only.
+        const { useWikiStore: _wikiStore } = await import("@/stores/wiki-store")
+        let embeddingRestoreValue: ReturnType<typeof _wikiStore.getState>["embeddingConfig"] | null = null
+        if (useEmbedding === false) {
+          embeddingRestoreValue = _wikiStore.getState().embeddingConfig
+          _wikiStore.getState().setEmbeddingConfig({ ...embeddingRestoreValue, enabled: false })
         }
+        let searchResults
+        try {
+          searchResults = await searchWiki(pp, text)
+        } finally {
+          if (embeddingRestoreValue !== null) {
+            _wikiStore.getState().setEmbeddingConfig(embeddingRestoreValue)
+          }
+        }
+        const topSearchResults = searchResults.slice(0, 10)
+        const keptPathSet = new Set(topSearchResults.map((r) => r.path))
 
         // ── Trim index by relevance if over budget ─────────────
         let index = rawIndex
@@ -258,32 +252,40 @@ export function ChatPanel() {
           }
         }
 
-        // ── Phase 2: Graph 1-level expansion (residue-bounded) ─
-        // Hybrid token+vector fusion already happened inside
-        // `searchPaths`. Here we widen the candidate set via the
-        // wiki-link / source-overlap graph, but ONLY to nodes that are
-        // still in the residue. Pulling an excluded page back in via
-        // graph traversal would silently undo the pre-exclusion
-        // contract (IDEA.md §2.5).
-        const graph = await buildRetrievalGraph(pp, dataVersion)
-        const expandedIds = new Set<string>()
+        // ── Phase 2: Graph 3-hop expansion via FalkorDB ────────
+        const pageGraphIndex = await loadPageGraphIndex(pp)
         const searchHitPaths = new Set(topSearchResults.map((r) => r.path))
         const graphExpansions: { title: string; path: string; relevance: number }[] = []
+        const expandedPaths = new Set<string>()
 
         for (const result of topSearchResults) {
-          const fileName = getFileName(result.path)
-          const nodeId = fileName.replace(/\.md$/, "")
-          const related = getRelatedNodes(nodeId, graph, 3)
-          for (const { node, relevance } of related) {
-            if (relevance < 2.0) continue
-            if (searchHitPaths.has(node.path)) continue
-            if (expandedIds.has(node.id)) continue
-            if (!keptPathSet.has(normalizePath(node.path))) continue
-            expandedIds.add(node.id)
-            graphExpansions.push({ title: node.title, path: node.path, relevance })
+          const relPath = getRelativePath(result.path, pp)
+          const graphs = lookupPageGraphs(pageGraphIndex, relPath)
+          for (const graphName of graphs) {
+            let queryResult: any
+            try {
+              queryResult = await queryGraphDb(
+                project.name,
+                graphName,
+                `MATCH (src:Page {page_path: '${relPath.replace(/'/g, "\\'")}'})--(nb:Page) WHERE nb.page_path IS NOT NULL AND nb.page_path <> '${relPath.replace(/'/g, "\\'")}' RETURN DISTINCT nb.page_path`,
+              )
+            } catch {
+              continue
+            }
+            const rows: any[][] = queryResult?.rows ?? queryResult?.data?.rows ?? []
+            for (const row of rows) {
+              const nbPath = row[0]
+              if (typeof nbPath !== "string") continue
+              const absPath = nbPath.startsWith("/") || nbPath.match(/^[A-Za-z]:/) ? nbPath : `${pp}/${nbPath}`
+              const normalizedAbs = normalizePath(absPath)
+              if (searchHitPaths.has(normalizedAbs)) continue
+              if (expandedPaths.has(nbPath)) continue
+              if (!keptPathSet.has(normalizedAbs) && !keptPathSet.has(nbPath)) continue
+              expandedPaths.add(nbPath)
+              graphExpansions.push({ title: nbPath, path: normalizedAbs, relevance: 1.0 })
+            }
           }
         }
-        graphExpansions.sort((a, b) => b.relevance - a.relevance)
 
         // ── Phase 2.5: Cypher Knowledge Retrieval ─────────────
         const cypherResults = await getGraphContext(text, pp, project.name, llmConfig)
@@ -345,48 +347,7 @@ export function ChatPanel() {
 
         const outLang = getOutputLanguage(text)
 
-        // Residue meta block: tell the model the candidate space was
-        // already pruned for this question type, so it shouldn't pull
-        // in memory from the excluded regions. When no type was
-        // judged, we still note that no exclusions were applied — gives
-        // the model a stable shape regardless of classification outcome.
-        const judged = exclude.trace.judgedType
-        const residueMeta = judged
-          ? [
-              "## Retrieval Context",
-              `The wiki pages below are the RESIDUE — what remains after pre-excluding regions known not to apply to question type "${judged.name}". The exclusions are deliberate domain rules, not noise.`,
-              "Do NOT supplement these pages with information you remember about topics outside this residue. The excluded regions have been ruled out for this question type and using them would defeat the whole point of pre-exclusion.",
-            ].join("\n")
-          : [
-              "## Retrieval Context",
-              "No question type was classified for this turn, so no exclusions were applied — the wiki pages below come from the unfiltered candidate space.",
-            ].join("\n")
-
-        const qt = exclude.questionType
-        if (qt && qt.promptTemplate) {
-          let systemContent = qt.promptTemplate
-            .replace("{{context}}", `${cypherContext}\n\n## Wiki Pages\n\n${pagesContext}`)
-            .replace("{{question}}", text)
-            .replace("{{language}}", outLang)
-          
-          // Inject field descriptions if template uses {{fields.xxx}}
-          for (const [key, desc] of Object.entries(qt.fields ?? {})) {
-            systemContent = systemContent.replace(new RegExp(`{{fields\.${key}}}`, "g"), desc)
-          }
-
-          systemMessages.push({
-            role: "system",
-            content: [
-              systemContent,
-              "",
-              "---",
-              "",
-              `## ⚠️ MANDATORY OUTPUT LANGUAGE: ${outLang}`,
-              `Respond in ${outLang} only.`,
-            ].join("\n")
-          })
-        } else {
-          systemMessages.push({
+        systemMessages.push({
             role: "system",
             content: [
               "You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
@@ -406,8 +367,6 @@ export function ChatPanel() {
               "",
               "Use markdown formatting for clarity.",
               "",
-              residueMeta,
-              "",
               cypherContext,
               "",
               index ? `## Wiki Index\n${index}` : "",
@@ -425,11 +384,32 @@ export function ChatPanel() {
               `DO NOT use any other language. This overrides all other instructions.`,
             ].filter(Boolean).join("\n"),
           })
-        }
 
         // Reminder injected later, right before the user's current message
         // (after history so it's the last system instruction the LLM sees).
         langReminder = buildLanguageReminder(text)
+
+        // Inject Answer Format section if a question type is selected
+        if (questionTypeId) {
+          const allTypes = await loadQuestionTypes(pp)
+          const qt = allTypes.find((t) => t.id === questionTypeId)
+          if (qt) {
+            const formatLines: string[] = ["", "## Answer Format"]
+            if (qt.fields && Object.keys(qt.fields).length > 0) {
+              formatLines.push("Your answer must include each of the following fields:")
+              for (const [key, desc] of Object.entries(qt.fields)) {
+                formatLines.push(`- **${key}**: ${desc}`)
+              }
+            }
+            if (qt.promptTemplate) {
+              formatLines.push("", qt.promptTemplate)
+            }
+            const sysMsg = systemMessages[systemMessages.length - 1]
+            if (sysMsg) {
+              sysMsg.content = sysMsg.content + formatLines.join("\n")
+            }
+          }
+        }
 
         lastQueryPages = relevantPages.map((p) => ({ title: p.title, path: p.path }))
         queryRefs = [...lastQueryPages]
@@ -437,7 +417,9 @@ export function ChatPanel() {
 
       // ── Conversation history with count limit ────────────────
       // Only include messages from the active conversation, last N messages
-      const activeConvMessages = useChatStore.getState().getActiveMessages()
+      const activeConvMessages = useChatStore
+        .getState()
+        .getActiveMessages()
         .filter((m) => m.role === "user" || m.role === "assistant")
         .slice(-maxHistoryMessages)
 
@@ -476,12 +458,12 @@ export function ChatPanel() {
             appendStreamToken(token)
           },
           onDone: () => {
-            finalizeStream(accumulated, queryRefs, searchTrace)
+            finalizeStream(accumulated, queryRefs)
             abortRef.current = null
             // save-worthy detection removed — user has direct "Save to Wiki" button on each message
           },
           onError: (err) => {
-            finalizeStream(`Error: ${err.message}`, undefined, searchTrace)
+            finalizeStream(`Error: ${err.message}`)
             abortRef.current = null
           },
         },
@@ -598,6 +580,7 @@ export function ChatPanel() {
           onSend={handleSend}
           onStop={handleStop}
           isStreaming={isStreaming}
+          projectPath={project ? normalizePath(project.path) : undefined}
           placeholder={
             mode === "ingest"
               ? "Discuss the source or ask follow-up questions..."

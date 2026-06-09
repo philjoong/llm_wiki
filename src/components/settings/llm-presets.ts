@@ -62,15 +62,9 @@ export const LLM_PRESETS: LlmPreset[] = [
     // Cross-referenced with hermes-agent/hermes_cli/models.py:233-242.
     // Both shortened and dated aliases work on api.anthropic.com.
     suggestedModels: [
-      "claude-opus-4-7",
-      "claude-opus-4-6",
+      "claude-opus-4-8",
       "claude-sonnet-4-6",
-      "claude-sonnet-4-5-20250929",
-      "claude-haiku-4-5-20251001",
-      "claude-opus-4-5-20251101",
-      "claude-sonnet-4-20250514",
-      "claude-3-5-sonnet-20241022",
-      "claude-3-5-haiku-20241022",
+      "claude-haiku-4-5",
     ],
     suggestedContextSize: 200000,
   },
@@ -84,11 +78,9 @@ export const LLM_PRESETS: LlmPreset[] = [
     // backend, so model ids are identical. Users with a subscription
     // can pick Opus/Sonnet/Haiku here without paying an API key bill.
     suggestedModels: [
-      "claude-opus-4-7",
-      "claude-opus-4-6",
+      "claude-opus-4-8",
       "claude-sonnet-4-6",
-      "claude-sonnet-4-5-20250929",
-      "claude-haiku-4-5-20251001",
+      "claude-haiku-4-5",
     ],
     suggestedContextSize: 200000,
   },
@@ -102,12 +94,9 @@ export const LLM_PRESETS: LlmPreset[] = [
     // to api.openai.com under the user's existing login, so the catalog
     // mirrors what's available on the chat/completions wire.
     suggestedModels: [
-      "gpt-5-codex",
-      "gpt-5",
-      "gpt-4.1",
-      "gpt-4o",
-      "o3",
-      "o3-mini",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
     ],
     suggestedContextSize: 200000,
   },
@@ -119,9 +108,8 @@ export const LLM_PRESETS: LlmPreset[] = [
     defaultModel: "gemini-2.5-pro",
     suggestedModels: [
       "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-2.0-flash",
+      "gemini-3-flash",
+      "gemini-3.1-pro",
     ],
     suggestedContextSize: 1000000,
   },
@@ -134,16 +122,9 @@ export const LLM_PRESETS: LlmPreset[] = [
     // Current public GPT models on api.openai.com. Reasoning models and
     // the 4.1 family are both exposed under the chat/completions route.
     suggestedModels: [
-      "gpt-4o",
-      "gpt-4o-mini",
-      "gpt-4.1",
-      "gpt-4.1-mini",
-      "gpt-4.1-nano",
-      "o3",
-      "o3-mini",
-      "o1",
-      "o1-mini",
-      "gpt-4-turbo",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
     ],
     suggestedContextSize: 128000,
   },
@@ -156,12 +137,8 @@ export const LLM_PRESETS: LlmPreset[] = [
     // 2.5 generation is the current stable; 2.0 kept as fallback.
     suggestedModels: [
       "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
-      "gemini-1.5-pro",
-      "gemini-1.5-flash",
+      "gemini-3-flash",
+      "gemini-3.1-pro",
     ],
     suggestedContextSize: 1000000,
   },

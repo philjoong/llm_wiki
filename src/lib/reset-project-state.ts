@@ -11,6 +11,7 @@
 import { useChatStore } from "@/stores/chat-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
+import { useWikiStore } from "@/stores/wiki-store"
 
 export async function resetProjectState(): Promise<void> {
   // Zustand stores — clear all per-project data (synchronous)
@@ -31,6 +32,8 @@ export async function resetProjectState(): Promise<void> {
   useActivityStore.setState({
     items: [],
   })
+
+  useWikiStore.setState({ navHistory: [], pendingGraphRestore: null })
 
   // Module-level caches — load in parallel and clear each, surfacing any
   // failure instead of swallowing it.

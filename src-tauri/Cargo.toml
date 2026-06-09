@@ -33,6 +33,7 @@ zip = "2"
 calamine = "0.34.0"
 docx-rs = "0.4.20"
 lancedb = "0.27.2"
+fastembed = "4"
 # tokio provided by tauri runtime for async commands
 arrow-array = "57"
 arrow-schema = "57"

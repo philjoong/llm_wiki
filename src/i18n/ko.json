@@ -4,12 +4,10 @@
     "subtitle": "LLM과 함께 개인 지식 베이스를 구축하고 관리하세요"
   },
   "nav": {
-    "wiki": "DB",
+    "wiki": "Chat",
     "sources": "Raw",
     "graph": "그래프",
-    "lint": "Lint",
     "review": "수정 요청",
-    "promotion": "승격",
     "history": "히스토리",
     "settings": "설정",
     "switchProject": "프로젝트 전환",
@@ -39,6 +37,7 @@
       "label": "프로젝트 목적",
       "placeholder": "이 프로젝트의 목적을 markdown으로 작성하세요. (생략 가능)"
     },
+    "localOnly": "로컬 온리 (Git 원격 연동 건너뜀)",
     "error": {
       "nameAndPath": "이름과 경로를 모두 입력해주세요.",
       "schemaRequired": "스키마 파일을 선택해주세요."
@@ -65,77 +64,12 @@
     "saved": "저장됨!",
     "writeToWiki": "Wiki에 쓰기",
     "emptyHint": "질문을 하거나 자료 ingest를 시작하세요.",
-    "sources": "출처",
-    "trace": {
-      "headerWithType": "판정된 유형: {{name}} · {{initial}}개 중 {{removed}}개 제거",
-      "headerNoType": "유형 미판정 · 후보 {{initial}}개",
-      "judgedType": "판정된 유형",
-      "appliedExclusions": "적용된 배제",
-      "removedOfInitial": "{{initial}}개 중 {{removed}}개 제거",
-      "residueCount": "잔존: {{count}}개",
-      "noEntriesFired": "매칭된 배제 항목 없음."
-    },
-    "zeroResidue": {
-      "label": "잔존 0"
-    },
-    "markAsCorrect": "정답으로 표시",
-    "markAsCorrectHint": "이 결과를 정답으로 표시 — 다른 유형에서 같은 path를 배제 중인 entry가 있다면 needs_review로 마킹됩니다.",
-    "markedAsCorrect": "표시됨",
-    "markNoMatch": "일치 없음",
-    "markFailed": "실패"
-  },
-  "lint": {
-    "title": "Lint",
-    "runLint": "Lint 실행",
-    "running": "실행 중...",
-    "semantic": "Semantic (LLM)",
-    "allClear": "이상 없음 — 발견된 문제가 없습니다",
-    "orphan": "고립 페이지",
-    "brokenLink": "끊긴 링크",
-    "noOutlinks": "외부 링크 없음",
-    "contradiction": "내용 모순",
-    "stale": "오래된 콘텐츠",
-    "staleAxiom": "오래된 Axiom",
-    "missingPage": "누락된 페이지",
-    "suggestion": "제안"
+    "sources": "출처"
   },
   "review": {
     "title": "수정 요청",
     "clearResolved": "해결 완료 항목 정리",
     "allClear": "이상 없음 — 검토할 항목이 없습니다"
-  },
-  "promotion": {
-    "title": "승격 / 배제 지도",
-    "reload": "새로고침",
-    "empty": "승격 후보 없음",
-    "emptyHint": "chat 검색을 더 누적하세요. exclusions/promotion_rules.md의 임계값을 넘은 (typeId, path) 쌍이 여기에 표시됩니다.",
-    "countLabel": "{{count}}회 누적",
-    "instancesLabel": "{{count}}개 인용",
-    "citationsToggle": "인용된 instance 보기",
-    "promotePattern": "Pattern으로 승격",
-    "promoteAxiom": "Axiom으로 승격",
-    "dismiss": "기각",
-    "axiomNamePrompt": "axiom 파일 이름 (exclusions/axioms/<name>.md로 저장):",
-    "dismissReasonPrompt": "기각 사유 (선택):",
-    "section": {
-      "candidates": "승격 후보"
-    }
-  },
-  "exclusion": {
-    "entriesTitle": "기존 배제 entry",
-    "entriesEmpty": "등록된 배제 entry 없음",
-    "entriesEmptyHint": "exclusions/by_question_type/ 또는 exclusions/axioms/에 entry를 추가하면 여기에 표시됩니다.",
-    "needsReviewFilter": "재검토 필요만 보기",
-    "needsReview": "재검토 필요",
-    "stale": "오래됨",
-    "archivedBadge": "보관됨",
-    "markValidated": "검증 완료 표시",
-    "archive": "보관",
-    "restore": "복원",
-    "checkFreshness": "신선도 검사",
-    "checkFreshnessHint": "출처 파일의 git mtime을 확인해 각 entry의 last_validated_at 이후 변경된 출처가 있으면 needs_review로 마킹합니다.",
-    "validatedAt": "검증",
-    "sourcesLabel": "출처 {{count}}건"
   },
   "history": {
     "title": "히스토리",
@@ -179,6 +113,7 @@
       "embedding": "임베딩",
       "output": "출력",
       "interface": "인터페이스",
+      "questionTypes": "질문 유형",
       "falkordb": "FalkorDB",
       "about": "정보"
     },
@@ -208,6 +143,10 @@
         "description": "Wiki에 대한 의미 검색을 활성화합니다. OpenAI 호환 /v1/embeddings 엔드포인트와 동작합니다. 로컬 모델 (LM Studio, Ollama embedding 등) 은 API 키가 필요 없습니다.",
         "enableLabel": "벡터 검색 활성화",
         "enableHint": "비활성화 시 검색은 토큰 매칭만 사용합니다.",
+        "sourceLabel": "임베딩 소스",
+        "sourceBuiltin": "내장 (BGE-small, ~130MB, 첫 사용 시 다운로드)",
+        "sourceBuiltinHint": "fastembed를 통해 번들된 BAAI/bge-small-en-v1.5 모델을 사용합니다. 첫 사용 시 ~/.cache/fastembed에 모델 (~130MB) 이 다운로드됩니다. 외부 서버 불필요.",
+        "sourceExternal": "외부 서버 (직접 endpoint 입력)",
         "endpoint": "엔드포인트",
         "apiKey": "API 키 (선택)",
         "apiKeyPlaceholder": "로컬 모델은 비워두세요",

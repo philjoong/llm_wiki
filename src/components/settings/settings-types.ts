@@ -17,6 +17,7 @@ export interface SettingsDraft {
   apiMode: CustomApiMode | undefined
 
   // Embedding
+  embeddingSource: "builtin" | "external"
   embeddingEnabled: boolean
   embeddingEndpoint: string
   embeddingApiKey: string

@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
-import { buildWikiGraph, type GraphNode, type GraphEdge } from "./wiki-graph"
+import type { Stage2Triple } from "./ingest"
 import { createGraphDb, queryGraphDb, listGraphDb, deleteGraphDb } from "@/commands/graph-db"
-import { useReviewStore } from "@/stores/review-store"
-import { detectSchemaDrift } from "./schema-validation"
+import { upsertPageGraphIndex } from "@/lib/page-graph-index"
 
 function debug(msg: string) {
   console.log(`[graph-sync] ${msg}`)
@@ -10,160 +9,106 @@ function debug(msg: string) {
 }
 
 /**
- * Synchronize the local Markdown-based graph with FalkorDB.
- * Each node and edge is routed to one or more managed graphs based on
- * the frontmatter `graph:` field.
- * Returns a summary string (e.g. "5 nodes, 3 edges synced to main") for logging.
+ * Synchronize Stage 2 triples directly to FalkorDB.
+ * Each triple { subject, predicate, object, graph } is routed to its assigned
+ * FalkorDB graph. Both subject and object nodes are MERGEd, then the edge.
+ * Returns a summary string for logging.
  */
 export async function syncGraphToFalkorDb(
   projectPath: string,
   projectName: string,
+  triples: Stage2Triple[],
   onProgress?: (message: string) => void,
-  allowedPaths?: Set<string>,
 ): Promise<string> {
-  const { nodes, edges } = await buildWikiGraph(projectPath, onProgress, allowedPaths)
-  debug(`buildWikiGraph done: ${nodes.length} nodes, ${edges.length} edges`)
-  if (nodes.length === 0) {
-    debug("0 nodes — nothing to sync")
-    return "0 nodes (nothing to sync)"
+  if (triples.length === 0) {
+    debug("0 triples — nothing to sync")
+    return "0 triples (nothing to sync)"
   }
 
-  onProgress?.("Validating schema...")
-  // 0. Schema Validation
-  const proposals = await detectSchemaDrift(projectPath, projectName, nodes, edges)
-  debug(`detectSchemaDrift: ${proposals.length} proposals — [${proposals.map(p => p.name).join(", ")}]`)
-  if (proposals.length > 0) {
-    const reviewItems = proposals.map(p => ({
-      type: "schema" as const,
-      title: `New ${p.type === "node_type" ? "Node Type" : "Relationship Type"}: ${p.name}`,
-      description: `The AI wants to introduce a new ${p.type === "node_type" ? "label" : "relationship type"} '${p.name}' to the graph. Approve to allow this type, or Reject to forbid it.`,
-      schemaProposal: p,
-      options: [
-        { label: "Approve", action: "schema:approve" },
-        { label: "Reject", action: "schema:reject" },
-      ],
-    }))
-    useReviewStore.getState().addItems(reviewItems)
+  // Group triples by graph name
+  const graphToTriples = new Map<string, Stage2Triple[]>()
+  for (const triple of triples) {
+    if (!triple.graph || !triple.subject || !triple.predicate || !triple.object) continue
+    const list = graphToTriples.get(triple.graph) ?? []
+    list.push(triple)
+    graphToTriples.set(triple.graph, list)
   }
 
-  // Filter out nodes whose node_type is pending approval or explicitly forbidden.
-  // Edges are not filtered by pending types — relation types are managed by
-  // graph-policy (registered at ingest time) and don't require a separate
-  // approval gate. Filtering edges by pending names caused 0-edge graphs.
-  const pendingNodeTypes = new Set(proposals.filter(p => p.type === "node_type").map(p => p.name.toLowerCase()))
-
-  const policy = await (await import("./graph-policy")).loadGraphPolicy(projectPath)
-  const forbiddenTypeNames = new Set(policy.forbiddenTypes.map(t => t.toLowerCase()))
-
-  const filteredNodes = nodes.filter(n =>
-    !pendingNodeTypes.has(n.type.toLowerCase()) &&
-    !forbiddenTypeNames.has(n.type.toLowerCase())
-  )
-  const filteredEdges = edges.filter(e => {
-    const type = (e.type || "LINKS_TO").toLowerCase()
-    return !forbiddenTypeNames.has(type)
-  })
-
-  debug(`after schema filter: ${filteredNodes.length} nodes, ${filteredEdges.length} edges`)
-  if (filteredNodes.length === 0) {
-    debug("0 nodes after schema filtering — all types pending approval or forbidden")
-    return "0 nodes after schema filtering (nothing to sync)"
-  }
-
-  // 1. Group nodes by their assigned graph
-  const graphToNodes = new Map<string, GraphNode[]>()
-  const DEFAULT_GRAPH = "main"
-
-  for (const node of filteredNodes) {
-    const g = node.graph || DEFAULT_GRAPH
-    const list = graphToNodes.get(g) ?? []
-    list.push(node)
-    graphToNodes.set(g, list)
-  }
-
-  // 2. Group edges by their source node's graph
-  const graphToEdges = new Map<string, GraphEdge[]>()
-  const nodeToGraph = new Map(filteredNodes.map(n => [n.id, n.graph || DEFAULT_GRAPH]))
-
-  for (const edge of filteredEdges) {
-    const g = nodeToGraph.get(edge.source) || DEFAULT_GRAPH
-    const list = graphToEdges.get(g) ?? []
-    list.push(edge)
-    graphToEdges.set(g, list)
-  }
-
-  const managedGraphs = Array.from(new Set([...graphToNodes.keys(), ...graphToEdges.keys()]))
-
-  const REPORT_EVERY = 20
-
+  const managedGraphs = Array.from(graphToTriples.keys())
   debug(`graphs to sync: [${managedGraphs.join(", ")}]`)
 
-  // 3. For each graph, ensure it exists and sync data
+  const REPORT_EVERY = 20
+  let totalNodes = 0
+  let totalEdges = 0
+
   for (const gName of managedGraphs) {
     debug(`[${gName}] creating graph...`)
     await createGraphDb(projectName, gName)
 
-    const nodesInGraph = graphToNodes.get(gName) ?? []
-    const edgesInGraph = graphToEdges.get(gName) ?? []
+    const triplesInGraph = graphToTriples.get(gName) ?? []
 
-    // Sync Nodes
-    for (let i = 0; i < nodesInGraph.length; i++) {
+    for (let i = 0; i < triplesInGraph.length; i++) {
       if (i % REPORT_EVERY === 0) {
-        onProgress?.(`[${gName}] Syncing nodes... ${i}/${nodesInGraph.length}`)
+        onProgress?.(`[${gName}] Syncing triples... ${i}/${triplesInGraph.length}`)
       }
-      const node = nodesInGraph[i]
-      const safeLabel = node.label.replace(/'/g, "\\'")
-      const safeId = node.id.replace(/'/g, "\\'")
-      const safeType = node.type.replace(/'/g, "\\'")
-      const safePath = node.path.replace(/\\/g, "/").replace(/'/g, "\\'")
-      const cypherSources = `[${node.sources.map(s => `'${s.replace(/'/g, "\\'")}'`).join(", ")}]`
+      const triple = triplesInGraph[i]
+      const safeSubject = triple.subject.replace(/'/g, "\\'")
+      const safeObject = triple.object.replace(/'/g, "\\'")
+      const safePagePath = (triple.page_path ?? "").replace(/'/g, "\\'")
+      const relType = triple.predicate.toUpperCase().replace(/[^A-Z0-9_]/g, "_")
 
-      const cypher = `MERGE (n:Page {id: '${safeId}'}) SET n.label = '${safeLabel}', n.type = '${safeType}', n.path = '${safePath}', n.sources = ${cypherSources}`
+      // MERGE subject node
       try {
-        await queryGraphDb(projectName, gName, cypher)
+        await queryGraphDb(projectName, gName, `MERGE (n:Page {id: '${safeSubject}'}) SET n.label = '${safeSubject}', n.page_path = '${safePagePath}'`)
+        totalNodes++
       } catch (err) {
-        debug(`[${gName}] ERROR syncing node ${node.id}: ${err instanceof Error ? err.message : String(err)}`)
+        debug(`[${gName}] ERROR merging subject node ${triple.subject}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+
+      // MERGE object node
+      try {
+        await queryGraphDb(projectName, gName, `MERGE (n:Page {id: '${safeObject}'}) SET n.label = '${safeObject}'`)
+        totalNodes++
+      } catch (err) {
+        debug(`[${gName}] ERROR merging object node ${triple.object}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+
+      // MERGE edge
+      try {
+        const cypher = `
+          MATCH (a:Page {id: '${safeSubject}'}), (b:Page {id: '${safeObject}'})
+          MERGE (a)-[r:${relType}]->(b)
+        `
+        await queryGraphDb(projectName, gName, cypher)
+        totalEdges++
+      } catch (err) {
+        debug(`[${gName}] ERROR merging edge ${triple.subject}-[${triple.predicate}]->${triple.object}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    debug(`[${gName}] nodes done (${nodesInGraph.length})`)
-    onProgress?.(`[${gName}] Nodes done (${nodesInGraph.length}). Syncing edges...`)
 
-    // Sync Edges
-    for (let i = 0; i < edgesInGraph.length; i++) {
-      if (i % REPORT_EVERY === 0 && edgesInGraph.length > REPORT_EVERY) {
-        onProgress?.(`[${gName}] Syncing edges... ${i}/${edgesInGraph.length}`)
-      }
-      const edge = edgesInGraph[i]
-      const type = (edge.type || "LINKS_TO").toUpperCase().replace(/[^A-Z0-9_]/g, "_")
-      const safeSource = edge.source.replace(/'/g, "\\'")
-      const safeTarget = edge.target.replace(/'/g, "\\'")
-      const cypherSources = `[${edge.sources.map(s => `'${s.replace(/'/g, "\\'")}'`).join(", ")}]`
-      
-      // Ensure target node exists in this graph too (as a shell if it's from another graph)
-      const targetNode = nodes.find(n => n.id === edge.target)
-      if (targetNode) {
-        const safeTargetLabel = targetNode.label.replace(/'/g, "\\'")
-        const safeTargetType = targetNode.type.replace(/'/g, "\\'")
-        const mergeTarget = `MERGE (n:Page {id: '${safeTarget}'}) SET n.label = '${safeTargetLabel}', n.type = '${safeTargetType}'`
-        await queryGraphDb(projectName, gName, mergeTarget)
-      }
-
-      const cypher = `
-        MATCH (a:Page {id: '${safeSource}'}), (b:Page {id: '${safeTarget}'})
-        MERGE (a)-[r:${type}]->(b)
-        SET r.sources = ${cypherSources}
-      `
-      try {
-        await queryGraphDb(projectName, gName, cypher)
-      } catch (err) {
-        debug(`[${gName}] ERROR syncing edge ${edge.source}->${edge.target}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-    debug(`[${gName}] done — ${nodesInGraph.length} nodes, ${edgesInGraph.length} edges`)
-    onProgress?.(`[${gName}] Done — ${nodesInGraph.length} nodes, ${edgesInGraph.length} edges`)
+    debug(`[${gName}] done — ${triplesInGraph.length} triples`)
+    onProgress?.(`[${gName}] Done — ${triplesInGraph.length} triples`)
   }
 
-  const summary = `${filteredNodes.length} nodes, ${filteredEdges.length} edges synced to [${managedGraphs.join(", ")}]`
+  // Build page_path → graph[] index from the synced triples and persist it.
+  // This lets Files tab look up related graphs instantly without querying FalkorDB.
+  const pageGraphUpdates: Record<string, string[]> = {}
+  for (const triple of triples) {
+    if (!triple.page_path || !triple.graph) continue
+    const existing = pageGraphUpdates[triple.page_path] ?? []
+    if (!existing.includes(triple.graph)) existing.push(triple.graph)
+    pageGraphUpdates[triple.page_path] = existing
+  }
+  if (Object.keys(pageGraphUpdates).length > 0) {
+    try {
+      await upsertPageGraphIndex(projectPath, pageGraphUpdates)
+      debug(`page-graph-index updated for ${Object.keys(pageGraphUpdates).length} page(s)`)
+    } catch (err) {
+      debug(`page-graph-index update failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const summary = `${triples.length} triples synced to [${managedGraphs.join(", ")}]`
   debug(summary)
   return summary
 }

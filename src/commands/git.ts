@@ -108,3 +108,7 @@ export async function gitPush(project_path: string, remote: string, branch: stri
 export async function gitPull(project_path: string, remote: string, branch: string): Promise<void> {
   return invoke<void>("git_pull", { projectPath: project_path, remote, branch })
 }
+
+export async function gitSetupFromRemote(projectPath: string, remoteUrl: string, branch: string): Promise<void> {
+  return invoke<void>("git_setup_from_remote", { projectPath, remoteUrl, branch })
+}

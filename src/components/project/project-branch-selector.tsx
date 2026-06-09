@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react"
-import { gitLsRemote } from "@/commands/git"
+import { gitLsRemote, gitRemoteAdd, gitCreateBranch, gitPush } from "@/commands/git"
 import { useWikiStore } from "@/stores/wiki-store"
-import { getRecentProjects, saveSelectedBranch, saveGitRemoteUrl, loadGitRemoteUrl } from "@/lib/project-store"
+import { getRecentProjects, saveSelectedBranch, saveGitRemoteUrl, loadGitRemoteUrl, removeFromRecentProjects } from "@/lib/project-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2, GitBranch, HardDrive, RefreshCw } from "lucide-react"
+import { Loader2, GitBranch, HardDrive, RefreshCw, Upload, Trash2 } from "lucide-react"
 
 const ENV_GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
 const ENV_REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
@@ -21,6 +21,7 @@ function buildRepoUrl(baseUrl: string): string {
 interface BranchItem {
   name: string
   localOnly: boolean
+  path?: string
 }
 
 export function ProjectBranchSelector() {
@@ -28,6 +29,8 @@ export function ProjectBranchSelector() {
   const [items, setItems] = useState<BranchItem[]>([])
   const [loading, setLoading] = useState(true)
   const [remoteError, setRemoteError] = useState<string | null>(null)
+  const [pushingBranch, setPushingBranch] = useState<string | null>(null)
+  const [pushError, setPushError] = useState<string | null>(null)
   const [newBranchName, setNewBranchName] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
   const setSelectedBranch = useWikiStore((s) => s.setSelectedBranch)
@@ -68,7 +71,7 @@ export function ProjectBranchSelector() {
     const remoteSet = new Set(remoteBranches)
     const localOnlyItems: BranchItem[] = localProjects
       .filter((p) => !remoteSet.has(p.name))
-      .map((p) => ({ name: p.name, localOnly: true }))
+      .map((p) => ({ name: p.name, localOnly: true, path: p.path }))
     const remoteItems: BranchItem[] = remoteBranches.map((b) => ({ name: b, localOnly: false }))
 
     setItems([...remoteItems, ...localOnlyItems])
@@ -89,6 +92,33 @@ export function ProjectBranchSelector() {
     const name = newBranchName.trim()
     if (!name) return
     await handleSelectBranch(name)
+  }
+
+  async function handleDelete(item: BranchItem) {
+    if (!item.path) return
+    await removeFromRecentProjects(item.path)
+    setItems((prev) => prev.filter((i) => i.name !== item.name))
+  }
+
+  async function handlePushToRemote(item: BranchItem) {
+    if (!item.path || !remoteUrlInput.trim()) return
+    setPushingBranch(item.name)
+    setPushError(null)
+    try {
+      const repoUrl = buildRepoUrl(remoteUrlInput.trim())
+      const remoteBranches = await gitLsRemote(repoUrl)
+      if (remoteBranches.includes(item.name)) {
+        throw new Error(`Branch "${item.name}" already exists on remote`)
+      }
+      await gitRemoteAdd(item.path, "origin", repoUrl)
+      await gitCreateBranch(item.path, item.name)
+      await gitPush(item.path, "origin", item.name)
+      await fetchAll(remoteUrlInput.trim())
+    } catch (err) {
+      setPushError(String(err))
+    } finally {
+      setPushingBranch(null)
+    }
   }
 
   return (
@@ -131,6 +161,11 @@ export function ProjectBranchSelector() {
               Remote unavailable: {remoteError}
             </p>
           )}
+          {pushError && (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive break-all">
+              Push failed: {pushError}
+            </p>
+          )}
         </div>
 
         {/* Branch list */}
@@ -155,7 +190,38 @@ export function ProjectBranchSelector() {
                   )}
                   <span className="text-sm font-medium">{item.name}</span>
                   {item.localOnly && (
-                    <span className="ml-auto text-xs text-muted-foreground">local only</span>
+                    <>
+                      <span className="ml-auto text-xs text-muted-foreground">local only</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        disabled={!remoteUrlInput.trim() || pushingBranch === item.name}
+                        title={remoteUrlInput.trim() ? "Push to remote" : "Remote URL을 먼저 입력하세요"}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handlePushToRemote(item)
+                        }}
+                      >
+                        {pushingBranch === item.name ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Upload className="h-3 w-3" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                        title="목록에서 제거"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleDelete(item)
+                        }}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </>
                   )}
                 </button>
               ))}

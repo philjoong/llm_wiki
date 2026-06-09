@@ -39,9 +39,11 @@ export function FalkorCanvas({
       canvas.setConfig({
         backgroundColor,
         foregroundColor,
-        onNodeClick,
-        onLinkClick,
-        // Disable CRUD interactions
+        captionsKeys: [["concept", true], ["label", true], ["id", true]],
+        eventHandlers: {
+          onNodeClick: onNodeClick ? (node: any, _event: MouseEvent) => onNodeClick(node) : undefined,
+          onLinkClick: onLinkClick ? (link: any, _event: MouseEvent) => onLinkClick(link) : undefined,
+        },
         isReadOnly: true,
       })
     }

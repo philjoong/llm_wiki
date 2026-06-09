@@ -107,6 +107,39 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
       {draft.embeddingEnabled && (
         <>
           <div className="space-y-2">
+            <Label>{t("settings.sections.embedding.sourceLabel")}</Label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="embeddingSource"
+                  value="builtin"
+                  checked={draft.embeddingSource === "builtin"}
+                  onChange={() => setDraft("embeddingSource", "builtin")}
+                />
+                <span className="text-sm">{t("settings.sections.embedding.sourceBuiltin")}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="embeddingSource"
+                  value="external"
+                  checked={draft.embeddingSource === "external"}
+                  onChange={() => setDraft("embeddingSource", "external")}
+                />
+                <span className="text-sm">{t("settings.sections.embedding.sourceExternal")}</span>
+              </label>
+            </div>
+            {draft.embeddingSource === "builtin" && (
+              <p className="text-xs text-muted-foreground">
+                {t("settings.sections.embedding.sourceBuiltinHint")}
+              </p>
+            )}
+          </div>
+
+          {draft.embeddingSource === "external" && (
+            <>
+          <div className="space-y-2">
             <Label>{t("settings.sections.embedding.endpoint")}</Label>
             <Input
               value={draft.embeddingEndpoint}
@@ -133,6 +166,8 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
               placeholder="e.g. text-embedding-qwen3-embedding-0.6b"
             />
           </div>
+            </>
+          )}
 
           <div className="space-y-3 rounded-md border p-3">
             <div className="text-sm font-medium">

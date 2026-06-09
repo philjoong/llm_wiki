@@ -66,6 +66,7 @@ function initialDraft(
     customEndpoint: llm.customEndpoint,
     maxContextSize: llm.maxContextSize ?? 204800,
     apiMode: llm.apiMode,
+    embeddingSource: embed.source ?? "builtin",
     embeddingEnabled: embed.enabled,
     embeddingEndpoint: embed.endpoint,
     embeddingApiKey: embed.apiKey,
@@ -140,6 +141,7 @@ export function SettingsView() {
       apiMode: draft.provider === "custom" ? draft.apiMode : undefined,
     }
     const newEmbed = {
+      source: draft.embeddingSource,
       enabled: draft.embeddingEnabled,
       endpoint: draft.embeddingEndpoint,
       apiKey: draft.embeddingApiKey,

@@ -4,12 +4,10 @@
     "subtitle": "Build and maintain your personal knowledge base with LLMs"
   },
   "nav": {
-    "wiki": "DB",
+    "wiki": "Chat",
     "sources": "Raw",
     "graph": "Graph",
-    "lint": "Lint",
     "review": "Modifications",
-    "promotion": "Promotion",
     "history": "History",
     "settings": "Settings",
     "switchProject": "Switch Project",
@@ -39,6 +37,7 @@
       "label": "Project purpose",
       "placeholder": "Describe the purpose of this project in markdown. (optional)"
     },
+    "localOnly": "Local only (skip Git remote)",
     "error": {
       "nameAndPath": "Please enter both a name and a path.",
       "schemaRequired": "Please choose a schema file."
@@ -65,77 +64,12 @@
     "saved": "Saved!",
     "writeToWiki": "Write to Wiki",
     "emptyHint": "Ask a question or start an ingest to begin.",
-    "sources": "Sources",
-    "trace": {
-      "headerWithType": "Judged: {{name}} · removed {{removed}} of {{initial}}",
-      "headerNoType": "No type judged · {{initial}} candidates",
-      "judgedType": "Judged type",
-      "appliedExclusions": "Applied exclusions",
-      "removedOfInitial": "removed {{removed}} of {{initial}}",
-      "residueCount": "Residue: {{count}}",
-      "noEntriesFired": "No exclusion entries matched."
-    },
-    "zeroResidue": {
-      "label": "Zero residue"
-    },
-    "markAsCorrect": "Mark as correct",
-    "markAsCorrectHint": "Flag this result as a correct answer. Any entry that excludes this path under a different type will be marked needs_review.",
-    "markedAsCorrect": "Marked",
-    "markNoMatch": "No match",
-    "markFailed": "Failed"
-  },
-  "lint": {
-    "title": "Lint",
-    "runLint": "Run Lint",
-    "running": "Running...",
-    "semantic": "Semantic (LLM)",
-    "allClear": "All clear — no issues found",
-    "orphan": "Orphan Page",
-    "brokenLink": "Broken Link",
-    "noOutlinks": "No Outbound Links",
-    "contradiction": "Contradiction",
-    "stale": "Stale Content",
-    "staleAxiom": "Stale Axiom",
-    "missingPage": "Missing Page",
-    "suggestion": "Suggestion"
+    "sources": "Sources"
   },
   "review": {
     "title": "Modifications",
     "clearResolved": "Clear resolved",
     "allClear": "All clear — nothing to review"
-  },
-  "promotion": {
-    "title": "Promotion / Exclusion Map",
-    "reload": "Reload",
-    "empty": "No promotion candidates",
-    "emptyHint": "Run more chat searches; pairs whose count crosses the threshold in exclusions/promotion_rules.md will appear here.",
-    "countLabel": "{{count}} instances",
-    "instancesLabel": "{{count}} citations",
-    "citationsToggle": "Show citations",
-    "promotePattern": "Promote to Pattern",
-    "promoteAxiom": "Promote to Axiom",
-    "dismiss": "Dismiss",
-    "axiomNamePrompt": "Axiom file name (will be saved under exclusions/axioms/<name>.md):",
-    "dismissReasonPrompt": "Reason for dismissing this candidate (optional):",
-    "section": {
-      "candidates": "Promotion candidates"
-    }
-  },
-  "exclusion": {
-    "entriesTitle": "Existing exclusion entries",
-    "entriesEmpty": "No exclusion entries yet",
-    "entriesEmptyHint": "Add entries under exclusions/by_question_type/ or exclusions/axioms/ to see them listed here.",
-    "needsReviewFilter": "Show only needs-review",
-    "needsReview": "Needs review",
-    "stale": "Stale",
-    "archivedBadge": "Archived",
-    "markValidated": "Mark validated",
-    "archive": "Archive",
-    "restore": "Restore",
-    "checkFreshness": "Check freshness",
-    "checkFreshnessHint": "Walks git mtimes for cited sources and flags entries whose sources changed since last_validated_at as needs_review.",
-    "validatedAt": "Validated",
-    "sourcesLabel": "{{count}} source(s)"
   },
   "history": {
     "title": "History",
@@ -179,6 +113,7 @@
       "embedding": "Embeddings",
       "output": "Output",
       "interface": "Interface",
+      "questionTypes": "Question Types",
       "falkordb": "FalkorDB",
       "about": "About"
     },
@@ -208,6 +143,10 @@
         "description": "Enable semantic search against your wiki. Works with any OpenAI-compatible /v1/embeddings endpoint. Local models (LM Studio, Ollama embedding) don't need an API key.",
         "enableLabel": "Enable vector search",
         "enableHint": "When off, search uses token matching only.",
+        "sourceLabel": "Embedding Source",
+        "sourceBuiltin": "Built-in (BGE-small, ~130 MB, downloaded on first use)",
+        "sourceBuiltinHint": "Uses the bundled BAAI/bge-small-en-v1.5 model via fastembed. The model (~130 MB) is downloaded to ~/.cache/fastembed on first use. No external server needed.",
+        "sourceExternal": "External (custom endpoint)",
         "endpoint": "Endpoint",
         "apiKey": "API Key (optional)",
         "apiKeyPlaceholder": "Leave empty for local models",

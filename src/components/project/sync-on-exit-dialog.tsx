@@ -15,6 +15,7 @@ interface SyncOnExitDialogProps {
   onOpenChange: (open: boolean) => void
   onSync: () => Promise<void>
   onExit: () => void
+  isLocalOnly?: boolean
 }
 
 export function SyncOnExitDialog({
@@ -22,6 +23,7 @@ export function SyncOnExitDialog({
   onOpenChange,
   onSync,
   onExit,
+  isLocalOnly = false,
 }: SyncOnExitDialogProps) {
   const { t } = useTranslation()
   const [syncing, setSyncing] = useState(false)
@@ -57,7 +59,7 @@ export function SyncOnExitDialog({
           <Button variant="secondary" onClick={onExit} disabled={syncing}>
             {t("sync.exit.no_sync", "Exit without Sync")}
           </Button>
-          <Button onClick={handleSync} disabled={syncing}>
+          <Button onClick={handleSync} disabled={syncing || isLocalOnly} title={isLocalOnly ? "Local-only project — no remote configured" : undefined}>
             {syncing ? t("sync.exit.syncing", "Syncing...") : t("sync.exit.sync", "Sync to Remote")}
           </Button>
         </DialogFooter>

@@ -5,10 +5,35 @@ use arrow_array::{
     UInt32Array,
 };
 use arrow_schema::{DataType, Field, Schema};
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::panic_guard::run_guarded_async;
+
+static BUILTIN_EMBEDDER: OnceLock<Result<TextEmbedding, String>> = OnceLock::new();
+
+fn get_builtin_embedder() -> Result<&'static TextEmbedding, String> {
+    BUILTIN_EMBEDDER
+        .get_or_init(|| {
+            TextEmbedding::try_new(InitOptions::new(EmbeddingModel::BGESmallENV15))
+                .map_err(|e| format!("Failed to init built-in embedder: {e}"))
+        })
+        .as_ref()
+        .map_err(|e| e.clone())
+}
+
+#[tauri::command]
+pub async fn embed_text_builtin(text: String) -> Result<Vec<f32>, String> {
+    run_guarded_async("embed_text_builtin", async move {
+        let embedder = get_builtin_embedder()?;
+        let results = embedder
+            .embed(vec![text], None)
+            .map_err(|e| format!("Embed error: {e}"))?;
+        Ok(results.into_iter().next().unwrap_or_default())
+    })
+    .await
+}
 
 /// v1 per-page result (legacy — kept so pre-0.3.11 projects still load).
 #[derive(Debug, Serialize, Deserialize, Clone)]

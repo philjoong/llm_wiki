@@ -604,6 +604,59 @@ pub async fn git_revert(
     Err(format!("git revert 실패: {}", err.trim()))
 }
 
+/// Initialize an empty folder as a git repo and pull an existing remote branch
+/// into it. Used when the user points to a folder that has no .git yet.
+/// Sequence: git init → git remote add origin → git fetch origin → git checkout -b <branch> origin/<branch>
+#[tauri::command]
+pub async fn git_setup_from_remote(
+    project_path: String,
+    remote_url: String,
+    branch: String,
+) -> Result<(), String> {
+    // init (no commit — folder may be empty)
+    let out = run_git(&project_path, &["-c", "init.defaultBranch=main", "init"]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "git init 실패: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    // remote add origin
+    let out = run_git(&project_path, &["remote", "add", "origin", &remote_url]).await?;
+    if !out.status.success() {
+        // already exists → set-url
+        let out2 = run_git(&project_path, &["remote", "set-url", "origin", &remote_url]).await?;
+        if !out2.status.success() {
+            return Err(format!(
+                "git remote 설정 실패: {}",
+                String::from_utf8_lossy(&out2.stderr).trim()
+            ));
+        }
+    }
+
+    // fetch the specific branch only
+    let out = run_git(&project_path, &["fetch", "origin", &branch]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "git fetch 실패: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    // checkout tracking branch
+    let tracking = format!("origin/{}", branch);
+    let out = run_git(&project_path, &["checkout", "-b", &branch, &tracking]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "git checkout 실패: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn git_create_branch(project_path: String, branch_name: String) -> Result<(), String> {
     let out = run_git(&project_path, &["checkout", "-b", &branch_name]).await?;

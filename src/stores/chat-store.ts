@@ -1,6 +1,5 @@
 import { create } from "zustand"
 import type { ChatMessage } from "@/lib/llm-client"
-import type { SearchTrace } from "@/lib/exclude-search"
 
 export interface Conversation {
   id: string
@@ -21,13 +20,6 @@ export interface DisplayMessage {
   timestamp: number
   conversationId: string
   references?: MessageReference[]  // pages cited in this response, saved at creation time
-  /**
-   * Exclusion-search trace for this assistant turn, when retrieval ran
-   * through `runExcludeSearch`. Surfaced in the UI as a collapsible
-   * badge above the response so the user can see "왜 이 답?" — judged
-   * type, applied exclusions, residue size (IDEA.md §2.9).
-   */
-  trace?: SearchTrace
 }
 
 interface ChatState {
@@ -52,7 +44,7 @@ interface ChatState {
   setConversations: (conversations: Conversation[]) => void
   setStreaming: (streaming: boolean) => void
   appendStreamToken: (token: string) => void
-  finalizeStream: (content: string, references?: MessageReference[], trace?: SearchTrace) => void
+  finalizeStream: (content: string, references?: MessageReference[]) => void
   setMode: (mode: ChatState["mode"]) => void
   setIngestSource: (path: string | null) => void
   clearMessages: () => void
@@ -170,7 +162,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingContent: state.streamingContent + token,
     })),
 
-  finalizeStream: (content, references, trace) =>
+  finalizeStream: (content, references) =>
     set((state) => {
       const { activeConversationId, conversations } = state
       if (!activeConversationId) {
@@ -187,7 +179,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         timestamp: Date.now(),
         conversationId: activeConversationId,
         references,
-        trace,
       }
 
       return {

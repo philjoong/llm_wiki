@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react"
 import { useTranslation } from "react-i18next"
-import { Plus, Edit2, Trash2, Save, X, FileJson, AlertCircle } from "lucide-react"
+import { Plus, Edit2, Trash2, Save, X, FileJson, AlertCircle, Info } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { useWikiStore } from "@/stores/wiki-store"
 import { loadQuestionTypes, type QuestionType } from "@/lib/question-types"
 import { writeFile, deleteFile, createDirectory, fileExists } from "@/commands/fs"
@@ -11,7 +12,9 @@ export function QuestionTypesSection() {
   const { t } = useTranslation()
   const projectPath = useWikiStore((s) => s.project?.path ?? null)
   const [types, setTypes] = useState<QuestionType[]>([])
-  const [editing, setEditing] = useState<Partial<QuestionType> | null>(null)
+  const [editing, setEditing] = useState<QuestionType | null>(null)
+  const [editingId, setEditingId] = useState("")
+  const [isNew, setIsNew] = useState(false)
   const [yamlText, setYamlText] = useState("")
   const [error, setError] = useState<string | null>(null)
 
@@ -27,13 +30,25 @@ export function QuestionTypesSection() {
 
   const handleEdit = (qt: QuestionType) => {
     setEditing(qt)
-    const { id, ...rest } = qt
+    setEditingId(qt.id)
+    setIsNew(false)
+    const { id, _source, _filePath, ...rest } = qt
     setYamlText(yaml.dump(rest))
     setError(null)
   }
 
   const handleNew = () => {
-    setEditing({ id: "new_type", name: "New Question Type", fields: { answer: "Description" }, promptTemplate: "" })
+    const placeholder: QuestionType = {
+      id: "new_type",
+      name: "New Question Type",
+      description: "",
+      fields: { answer: "Description" },
+      promptTemplate: "",
+      _source: "user",
+    }
+    setEditing(placeholder)
+    setEditingId("new_type")
+    setIsNew(true)
     setYamlText(yaml.dump({ name: "New Question Type", description: "", fields: { answer: "Description" }, prompt_template: "" }))
     setError(null)
   }
@@ -43,15 +58,16 @@ export function QuestionTypesSection() {
     try {
       const parsed = yaml.load(yamlText) as any
       if (!parsed || typeof parsed !== "object") throw new Error("Invalid YAML")
-      
-      const id = editing.id || parsed.name?.toLowerCase().replace(/\s+/g, "_") || "unnamed"
-      const userPath = `${projectPath}/.llm-wiki/question-types`
-      
-      if (!(await fileExists(userPath))) {
-        await createDirectory(userPath)
-      }
-      
-      await writeFile(`${userPath}/${id}.yaml`, yamlText)
+
+      const id = editingId.trim() || "unnamed"
+      const savePath = (editing._source === "project" && !isNew)
+        ? `${projectPath}/question_types/${id}.yaml`
+        : `${projectPath}/.llm-wiki/question-types/${id}.yaml`
+
+      const dir = savePath.substring(0, savePath.lastIndexOf("/"))
+      if (!(await fileExists(dir))) await createDirectory(dir)
+
+      await writeFile(savePath, yamlText)
       setEditing(null)
       await reload()
     } catch (err: any) {
@@ -59,26 +75,26 @@ export function QuestionTypesSection() {
     }
   }
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (qt: QuestionType) => {
     if (!projectPath) return
-    if (!confirm(t("settings.questionTypes.confirmDelete", { id }))) return
-    
-    // Try to delete from user overrides first
-    const userPath = `${projectPath}/.llm-wiki/question-types/${id}.yaml`
-    const userPathYml = `${projectPath}/.llm-wiki/question-types/${id}.yml`
-    
-    if (await fileExists(userPath)) {
-      await deleteFile(userPath)
-    } else if (await fileExists(userPathYml)) {
-      await deleteFile(userPathYml)
+    if (!confirm(t("settings.questionTypes.confirmDelete", { id: qt.id }))) return
+
+    if (qt._source === "app") {
+      const userPath = `${projectPath}/.llm-wiki/question-types`
+      if (!(await fileExists(userPath))) await createDirectory(userPath)
+      await writeFile(`${userPath}/${qt.id}.yaml`, "_deleted: true\n")
     } else {
-      // If not in user overrides, maybe it's in the system path?
-      // But we shouldn't delete system ones usually, or we just can't.
-      alert("Cannot delete system-default question types.")
-      return
+      if (!qt._filePath) return
+      await deleteFile(qt._filePath)
     }
-    
+
     await reload()
+  }
+
+  const sourceLabel = (qt: QuestionType) => {
+    if (qt._source === "app") return "app"
+    if (qt._source === "project") return "project"
+    return "user"
   }
 
   return (
@@ -101,15 +117,29 @@ export function QuestionTypesSection() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileJson className="h-4 w-4 text-primary" />
-              <span className="font-mono text-sm">{editing.id}.yaml</span>
+              {isNew ? (
+                <Input
+                  value={editingId}
+                  onChange={(e) => setEditingId(e.target.value)}
+                  placeholder="type_id"
+                  className="h-7 font-mono text-sm w-48"
+                />
+              ) : (
+                <span className="font-mono text-sm">{editing.id}.yaml</span>
+              )}
             </div>
-            <div className="flex items-center gap-2">
-              <Button onClick={() => setEditing(null)} variant="ghost" size="sm">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button onClick={() => setEditing(null)} variant="ghost" size="sm">
+              <X className="h-4 w-4" />
+            </Button>
           </div>
-          
+
+          {editing._source === "app" && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              {t("settings.questionTypes.appTypeEditNotice", "Editing a built-in type saves it as a user override.")}
+            </div>
+          )}
+
           <div className="space-y-2">
             <textarea
               value={yamlText}
@@ -148,6 +178,9 @@ export function QuestionTypesSection() {
                   <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase font-mono tracking-tighter">
                     {qt.id}
                   </span>
+                  <span className="text-[10px] text-muted-foreground/60 bg-muted/50 px-1.5 py-0.5 rounded font-mono tracking-tighter">
+                    {sourceLabel(qt)}
+                  </span>
                 </div>
                 <p className="truncate text-xs text-muted-foreground mt-0.5">
                   {qt.description}
@@ -166,7 +199,7 @@ export function QuestionTypesSection() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-destructive hover:text-destructive"
-                  onClick={() => handleDelete(qt.id)}
+                  onClick={() => handleDelete(qt)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>

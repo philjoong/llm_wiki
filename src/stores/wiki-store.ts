@@ -20,6 +20,7 @@ interface LlmConfig {
 }
 
 interface EmbeddingConfig {
+  source: "builtin" | "external"
   enabled: boolean
   endpoint: string // e.g. "http://127.0.0.1:1234/v1/embeddings"
   apiKey: string
@@ -84,13 +85,20 @@ export interface ProviderOverride {
 
 export type ProviderConfigs = Record<string, ProviderOverride>
 
-interface WikiState {
+export type NavSnapshot = {
+  view: WikiState["activeView"]
+  selectedFile: string | null
+  graphTab?: "knowledge" | "files"
+  graphDbFile?: string | null  // selectedDbFile.path
+}
+
+export interface WikiState {
   project: WikiProject | null
   fileTree: FileNode[]
   selectedFile: string | null
   fileContent: string
   chatExpanded: boolean
-  activeView: "wiki" | "graph" | "lint" | "review" | "promotion" | "history" | "settings"
+  activeView: "wiki" | "graph" | "review" | "history" | "settings"
   llmConfig: LlmConfig
   /** Per-provider-preset stored overrides (API key, model, endpoint, …). */
   providerConfigs: ProviderConfigs
@@ -102,6 +110,11 @@ interface WikiState {
   dataVersion: number
   selectedGraph: string // Active sub-graph name for visualization
   highlightSource: string | null // Source file path to highlight in graph
+  /** Absolute path set when the user clicks a Reference — GraphView.Files picks this up. */
+  pendingOpenFile: string | null
+  navHistory: NavSnapshot[]
+  /** Set by goBack when it needs GraphView to restore its internal tab/file state. */
+  pendingGraphRestore: { graphTab: "knowledge" | "files"; graphDbFile: string | null } | null
 
   setProject: (project: WikiProject | null) => void
   setFileTree: (tree: FileNode[]) => void
@@ -118,6 +131,9 @@ interface WikiState {
   bumpDataVersion: () => void
   setSelectedGraph: (graph: string) => void
   setHighlightSource: (source: string | null) => void
+  setPendingOpenFile: (path: string | null) => void
+  setPendingGraphRestore: (v: WikiState["pendingGraphRestore"]) => void
+  goBack: () => void
 }
 
 export const useWikiStore = create<WikiState>((set) => ({
@@ -142,15 +158,27 @@ export const useWikiStore = create<WikiState>((set) => ({
   dataVersion: 0,
   selectedGraph: "main",
   highlightSource: null,
+  pendingOpenFile: null,
+  navHistory: [],
+  pendingGraphRestore: null,
 
   setProject: (project) => set({ project }),
   setFileTree: (fileTree) => set({ fileTree }),
-  setSelectedFile: (selectedFile) => set({ selectedFile }),
+  setSelectedFile: (path) => set((state) => {
+    if (path === state.selectedFile) return { selectedFile: path }
+    const snap: NavSnapshot = { view: state.activeView, selectedFile: state.selectedFile }
+    return { selectedFile: path, navHistory: [...state.navHistory, snap].slice(-5) }
+  }),
   setFileContent: (fileContent) => set({ fileContent }),
   setChatExpanded: (chatExpanded) => set({ chatExpanded }),
-  setActiveView: (activeView) => set({ activeView }),
+  setActiveView: (view) => set((state) => {
+    if (view === state.activeView) return { activeView: view }
+    const snap: NavSnapshot = { view: state.activeView, selectedFile: state.selectedFile }
+    return { activeView: view, navHistory: [...state.navHistory, snap].slice(-5) }
+  }),
   embeddingConfig: {
-    enabled: false,
+    source: "builtin",
+    enabled: true,
     endpoint: "",
     apiKey: "",
     model: "",
@@ -167,6 +195,21 @@ export const useWikiStore = create<WikiState>((set) => ({
   bumpDataVersion: () => set((state) => ({ dataVersion: state.dataVersion + 1 })),
   setSelectedGraph: (selectedGraph) => set({ selectedGraph }),
   setHighlightSource: (highlightSource) => set({ highlightSource }),
+  setPendingOpenFile: (pendingOpenFile) => set({ pendingOpenFile }),
+  setPendingGraphRestore: (pendingGraphRestore) => set({ pendingGraphRestore }),
+  goBack: () => set((state) => {
+    if (state.navHistory.length === 0) return {}
+    const prev = state.navHistory[state.navHistory.length - 1]
+    const graphRestore = (prev.graphTab != null)
+      ? { graphTab: prev.graphTab, graphDbFile: prev.graphDbFile ?? null }
+      : null
+    return {
+      activeView: prev.view,
+      selectedFile: prev.selectedFile,
+      navHistory: state.navHistory.slice(0, -1),
+      pendingGraphRestore: graphRestore,
+    }
+  }),
 }))
 
 export type { WikiState, LlmConfig, EmbeddingConfig, OutputLanguage }

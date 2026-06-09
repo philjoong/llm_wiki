@@ -2,10 +2,11 @@ import { useEffect, useCallback, useState, useRef } from "react"
 import { Network, RefreshCw, X, Info, FileText } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
-import { useWikiStore } from "@/stores/wiki-store"
+import { useWikiStore, type NavSnapshot } from "@/stores/wiki-store"
 import { readFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { queryGraphDb, findRelatedGraphs, listGraphDb } from "@/commands/graph-db"
+import { queryGraphDb, listGraphDb } from "@/commands/graph-db"
+import { loadPageGraphIndex, lookupPageGraphs } from "@/lib/page-graph-index"
 import { listDbFiles } from "@/lib/wiki-graph"
 import type { FileNode } from "@/types/wiki"
 import { FalkorCanvas } from "./falkor-canvas"
@@ -33,14 +34,6 @@ function saveCachedGraphs(projectName: string, graphs: string[]): void {
   } catch {}
 }
 
-function extractFrontmatterGraph(content: string): string | null {
-  const match = content.match(/^---\n[\s\S]*?^graph:\s*["']?(.+?)["']?\s*$/m)
-  return match?.[1]?.trim() || null
-}
-
-function dbFileId(fileName: string): string {
-  return fileName.replace(/\.md$/i, "")
-}
 
 export function GraphView() {
   const project = useWikiStore((s) => s.project)
@@ -51,6 +44,15 @@ export function GraphView() {
   const setSelectedGraph = useWikiStore((s) => s.setSelectedGraph)
   const setFileTree = useWikiStore((s) => s.setFileTree)
   const bumpDataVersion = useWikiStore((s) => s.bumpDataVersion)
+  const pendingOpenFile = useWikiStore((s) => s.pendingOpenFile)
+  const setPendingOpenFile = useWikiStore((s) => s.setPendingOpenFile)
+  const pendingGraphRestore = useWikiStore((s) => s.pendingGraphRestore)
+  const setPendingGraphRestore = useWikiStore((s) => s.setPendingGraphRestore)
+
+  const navHistory = useWikiStore((s) => s.navHistory)
+  const pushNav = useCallback((snap: NavSnapshot) => {
+    useWikiStore.setState((s) => ({ navHistory: [...s.navHistory, snap].slice(-5) }))
+  }, [])
 
   const [activeTab, setActiveTab] = useState<TabId>("knowledge")
 
@@ -212,17 +214,28 @@ export function GraphView() {
     }
   }, [activeTab, loadDbFiles])
 
-  const handleDbFileSelect = useCallback(async (file: FileNode) => {
+  const handleDbFileSelect = useCallback(async (file: FileNode, skipHistory = false) => {
     if (!project) return
+    if (!skipHistory) {
+      pushNav({ view: "graph", selectedFile: useWikiStore.getState().selectedFile, graphTab: "files", graphDbFile: selectedDbFile?.path ?? null })
+    }
     setSelectedDbFile(file)
     setSelectedRelatedGraph(null)
     setGraphData({ nodes: [], links: [] })
     setSelectedDbFileContent("")
     setLoadingRelated(true)
     try {
-      const content = await readFile(file.path).catch(() => "")
-      const assignedGraph = extractFrontmatterGraph(content)
-      const graphs = await findRelatedGraphs(project.name, file.name, file.path, assignedGraph)
+      const [content, index] = await Promise.all([
+        readFile(file.path).catch(() => ""),
+        loadPageGraphIndex(project.path),
+      ])
+      // Derive the page_path relative to the project root (e.g. "db/enemies/goblin.md")
+      const normalizedProjectPath = project.path.replace(/\\/g, "/").replace(/\/$/, "")
+      const normalizedFilePath = file.path.replace(/\\/g, "/")
+      const relPath = normalizedFilePath.startsWith(normalizedProjectPath + "/")
+        ? normalizedFilePath.slice(normalizedProjectPath.length + 1)
+        : file.name
+      const graphs = lookupPageGraphs(index, relPath)
       setRelatedGraphs(graphs)
       setSelectedDbFileContent(content)
     } catch (err) {
@@ -233,6 +246,47 @@ export function GraphView() {
     }
   }, [project])
 
+  // When a Reference link is clicked in ChatPanel, pendingOpenFile is set.
+  // Switch to Files tab and select the file, then clear the pending flag.
+  useEffect(() => {
+    if (!pendingOpenFile || !project) return
+    setPendingOpenFile(null)
+    setActiveTab("files")
+    // Ensure db/ files are loaded before selecting
+    const doOpen = async () => {
+      const files = await listDbFiles(normalizePath(project.path))
+      setDbFiles(files)
+      setDbFilesLoaded(true)
+      const match = files.find((f) => normalizePath(f.path) === normalizePath(pendingOpenFile))
+      if (match) {
+        void handleDbFileSelect(match)
+      }
+    }
+    void doOpen()
+  }, [pendingOpenFile]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Restore tab/file state when goBack() targets the graph view
+  useEffect(() => {
+    if (!pendingGraphRestore || !project) return
+    setPendingGraphRestore(null)
+    setActiveTab(pendingGraphRestore.graphTab)
+    if (pendingGraphRestore.graphTab === "files") {
+      const targetPath = pendingGraphRestore.graphDbFile
+      if (!targetPath) {
+        setSelectedDbFile(null)
+        return
+      }
+      const doRestore = async () => {
+        const files = dbFilesLoaded ? dbFiles : await listDbFiles(normalizePath(project.path))
+        if (!dbFilesLoaded) { setDbFiles(files); setDbFilesLoaded(true) }
+        const match = files.find((f) => normalizePath(f.path) === normalizePath(targetPath))
+        if (match) void handleDbFileSelect(match, true)
+        else setSelectedDbFile(null)
+      }
+      void doRestore()
+    }
+  }, [pendingGraphRestore]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleRelatedGraphSelect = useCallback(async (graphName: string) => {
     if (!project) return
     setSelectedRelatedGraph(graphName)
@@ -240,26 +294,16 @@ export function GraphView() {
     setLoading(true)
     setError(null)
     try {
-      const safeId = dbFileId(selectedDbFile!.name).replace(/\\/g, "\\\\").replace(/'/g, "\\'")
-      const safePath = selectedDbFile!.path.replace(/\\/g, "/").replace(/'/g, "\\'")
-      const cypher = `MATCH (n) WHERE n.id = '${safeId}' OR n.path = '${safePath}' OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m`
+      const cypher = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r"
       const result = await queryGraphDb(project.name, graphName, cypher)
       const parsed = parseFalkorQueryResult(result)
-
-      const colored = assignColors(parsed)
-      colored.nodes = colored.nodes.map((n) => ({
-        ...n,
-        highlighted: n.data?.id === dbFileId(selectedDbFile!.name) || n.data?.path === selectedDbFile!.path.replace(/\\/g, "/"),
-        size: n.data?.id === dbFileId(selectedDbFile!.name) ? 12 : n.size,
-        color: n.data?.id === dbFileId(selectedDbFile!.name) ? "#ef4444" : n.color,
-      }))
-      setGraphData(colored)
+      setGraphData(assignColors(parsed))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load graph")
     } finally {
       setLoading(false)
     }
-  }, [project, selectedDbFile])
+  }, [project])
 
   if (!project) {
     return (
@@ -277,7 +321,11 @@ export function GraphView() {
         {(["knowledge", "files"] as TabId[]).map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => {
+              if (tab === activeTab) return
+              pushNav({ view: "graph", selectedFile: useWikiStore.getState().selectedFile, graphTab: activeTab, graphDbFile: selectedDbFile?.path ?? null })
+              setActiveTab(tab)
+            }}
             className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
               activeTab === tab
                 ? "border-primary text-foreground"

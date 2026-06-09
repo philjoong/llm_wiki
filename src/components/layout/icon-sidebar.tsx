@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, ClipboardCheck, Settings, ArrowLeftRight, ClipboardList, History, Network, TrendingUp, DatabaseZap, Link2,
+  FileText, Settings, ClipboardList, History, Network, DatabaseZap, Link2, ChevronLeft, FolderOpen,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
@@ -11,7 +11,6 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
 import { useTranslation } from "react-i18next"
-import logoImg from "@/assets/logo.jpg"
 import type { WikiState } from "@/stores/wiki-store"
 import { open } from "@tauri-apps/plugin-dialog"
 import { enqueueIngest } from "@/lib/ingest-queue"
@@ -25,9 +24,7 @@ type NavView = WikiState["activeView"]
 const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = [
   { view: "wiki", icon: FileText, labelKey: "nav.wiki" },
   { view: "graph", icon: Network, labelKey: "nav.graph" },
-  { view: "lint", icon: ClipboardCheck, labelKey: "nav.lint" },
   { view: "review", icon: ClipboardList, labelKey: "nav.review" },
-  { view: "promotion", icon: TrendingUp, labelKey: "nav.promotion" },
   { view: "history", icon: History, labelKey: "nav.history" },
 ]
 
@@ -42,6 +39,8 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const pendingCount = useReviewStore((s) => s.items.filter((i) => !i.resolved).length)
   const updateBannerVisible = useUpdateStore((s) => shouldShowUpdateBanner(s))
   const project = useWikiStore((s) => s.project)
+  const navHistory = useWikiStore((s) => s.navHistory)
+  const goBack = useWikiStore((s) => s.goBack)
   const [injecting, setInjecting] = useState(false)
   const [injectingUrl, setInjectingUrl] = useState(false)
   const [urlDialogOpen, setUrlDialogOpen] = useState(false)
@@ -125,14 +124,17 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   return (
     <TooltipProvider delay={300}>
       <div className="flex h-full w-12 flex-col items-center border-r bg-muted/50 py-2">
-        {/* Logo */}
-        <div className="mb-2 flex items-center justify-center">
-          <img
-            src={logoImg}
-            alt="LLM Wiki"
-            className="h-8 w-8 rounded-[22%]"
-          />
-        </div>
+        {/* Back button */}
+        <Tooltip>
+          <TooltipTrigger
+            onClick={goBack}
+            disabled={navHistory.length === 0}
+            className="mb-2 flex h-9 w-9 items-center justify-center rounded-md transition-colors disabled:opacity-30 disabled:cursor-default text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </TooltipTrigger>
+          <TooltipContent side="right">뒤로</TooltipContent>
+        </Tooltip>
         {/* Top: main nav items */}
         <div className="flex flex-1 flex-col items-center gap-1">
           {NAV_ITEMS.map(({ view, icon: Icon, labelKey }) => (
@@ -230,11 +232,11 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
           <Tooltip>
             <TooltipTrigger
               onClick={onSwitchProject}
-              className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-accent-foreground"
+              className="flex h-10 w-10 items-center justify-center rounded-md transition-colors text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground"
             >
-              <ArrowLeftRight className="h-5 w-5" />
+              <FolderOpen className="h-5 w-5" />
             </TooltipTrigger>
-            <TooltipContent side="right">{t("nav.switchProject")}</TooltipContent>
+            <TooltipContent side="right">Switch Project</TooltipContent>
           </Tooltip>
         </div>
       </div>

@@ -1200,11 +1200,190 @@ pub fn create_directory(path: String) -> Result<(), String> {
     })
 }
 
+/// Copy bundled schema/question_types/*.yaml into {project_path}/question_types/.
+/// The schema directory is resolved relative to the app executable so it works
+/// in both dev (repo root) and production (installed bundle) layouts.
+#[tauri::command]
+pub fn seed_question_types(project_path: String) -> Result<(), String> {
+    run_guarded("seed_question_types", || {
+        let dest_dir = Path::new(&project_path).join("question_types");
+        fs::create_dir_all(&dest_dir)
+            .map_err(|e| format!("Failed to create question_types dir: {}", e))?;
+
+        // Candidate locations for schema/question_types/ in order of preference:
+        //   1. RESOURCE_DIR_HINT (set by Tauri setup — production bundle)
+        //   2. Relative to the executable (production fallback)
+        //   3. Relative to the current working directory (dev server)
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+        if let Some(resource_dir) = RESOURCE_DIR_HINT.get() {
+            candidates.push(resource_dir.join("schema").join("question_types"));
+            candidates.push(resource_dir.join("question_types"));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                candidates.push(exe_dir.join("schema").join("question_types"));
+                candidates.push(exe_dir.join("_up_").join("schema").join("question_types")); // macOS .app
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("schema").join("question_types"));
+        }
+
+        let src_dir = candidates.iter().find(|p| p.is_dir()).ok_or_else(|| {
+            format!(
+                "Could not locate schema/question_types. Tried: {}",
+                candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+            )
+        })?;
+
+        for entry in fs::read_dir(src_dir)
+            .map_err(|e| format!("Failed to read schema dir: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+            let src_path = entry.path();
+            let ext = src_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "yaml" && ext != "yml" {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let dest_path = dest_dir.join(&file_name);
+            // Never overwrite an existing file — project may have customised it.
+            if !dest_path.exists() {
+                fs::copy(&src_path, &dest_path).map_err(|e| {
+                    format!("Failed to copy {:?}: {}", file_name, e)
+                })?;
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Cheap existence check without reading or classifying the file.
 /// Returns true iff `path` refers to something on disk right now.
 #[tauri::command]
 pub fn file_exists(path: String) -> Result<bool, String> {
     run_guarded("file_exists", || Ok(Path::new(&path).exists()))
+}
+
+fn zip_add_dir_recursive(
+    zip: &mut zip::ZipWriter<fs::File>,
+    options: zip::write::SimpleFileOptions,
+    root: &Path,
+    dir: &Path,
+) -> Result<(), String> {
+    use std::io::Write;
+    for entry in fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read dir '{}': {}", dir.display(), e))?
+    {
+        let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|e| format!("Path strip error: {}", e))?;
+        let zip_name = relative.to_string_lossy().replace('\\', "/");
+        if path.is_dir() {
+            zip.add_directory(&format!("{}/", zip_name), options)
+                .map_err(|e| format!("Failed to add dir '{}': {}", zip_name, e))?;
+            zip_add_dir_recursive(zip, options, root, &path)?;
+        } else {
+            zip.start_file(&zip_name, options)
+                .map_err(|e| format!("Failed to start file '{}': {}", zip_name, e))?;
+            let bytes =
+                fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", zip_name, e))?;
+            zip.write_all(&bytes)
+                .map_err(|e| format!("Failed to write '{}': {}", zip_name, e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Pack a project folder into a zip archive.
+/// Includes: db/, question_types/, .llm-wiki/, graphs.json (if present).
+/// The frontend writes graphs.json before calling this, then deletes it after.
+#[tauri::command]
+pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(), String> {
+    use std::io::Write;
+
+    let root = Path::new(&project_path);
+    let include_dirs = ["db", "question_types", ".llm-wiki"];
+    let extra_files = ["graphs.json"];
+
+    let zip_file = fs::File::create(&dest_zip_path)
+        .map_err(|e| format!("Cannot create zip at '{}': {}", dest_zip_path, e))?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for dir_name in &include_dirs {
+        let dir_path = root.join(dir_name);
+        if !dir_path.exists() {
+            continue;
+        }
+        let zip_dir_name = dir_name.replace('\\', "/");
+        zip.add_directory(&format!("{}/", zip_dir_name), options)
+            .map_err(|e| format!("Failed to add dir '{}': {}", zip_dir_name, e))?;
+        zip_add_dir_recursive(&mut zip, options, root, &dir_path)?;
+    }
+
+    for file_name in &extra_files {
+        let file_path = root.join(file_name);
+        if file_path.exists() {
+            zip.start_file(file_name, options)
+                .map_err(|e| format!("Failed to start file '{}': {}", file_name, e))?;
+            let bytes = fs::read(&file_path)
+                .map_err(|e| format!("Failed to read '{}': {}", file_name, e))?;
+            zip.write_all(&bytes)
+                .map_err(|e| format!("Failed to write '{}': {}", file_name, e))?;
+        }
+    }
+
+    zip.finish()
+        .map_err(|e| format!("Failed to finalize zip: {}", e))?;
+    Ok(())
+}
+
+/// Extract a project zip archive into dest_folder.
+/// dest_folder will be created if it does not exist.
+#[tauri::command]
+pub fn project_import(zip_path: String, dest_folder: String) -> Result<(), String> {
+    use std::io::Read as _;
+
+    let dest = Path::new(&dest_folder);
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("Cannot create destination '{}': {}", dest_folder, e))?;
+
+    let zip_file = fs::File::open(&zip_path)
+        .map_err(|e| format!("Cannot open zip '{}': {}", zip_path, e))?;
+    let mut archive = zip::ZipArchive::new(zip_file)
+        .map_err(|e| format!("Failed to read zip '{}': {}", zip_path, e))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry {}: {}", i, e))?;
+        let out_path = dest.join(entry.name());
+
+        if entry.name().ends_with('/') {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create dir '{}': {}", out_path.display(), e))?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create dir '{}': {}", parent.display(), e))?;
+            }
+            let mut outfile = fs::File::create(&out_path)
+                .map_err(|e| format!("Failed to create '{}': {}", out_path.display(), e))?;
+            let mut buf = Vec::new();
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("Failed to read entry '{}': {}", entry.name(), e))?;
+            std::io::Write::write_all(&mut outfile, &buf)
+                .map_err(|e| format!("Failed to write '{}': {}", out_path.display(), e))?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

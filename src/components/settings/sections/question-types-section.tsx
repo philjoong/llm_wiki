@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react"
+import { confirm } from "@tauri-apps/plugin-dialog"
 import { useTranslation } from "react-i18next"
-import { Plus, Edit2, Trash2, Save, X, FileJson, AlertCircle, Info } from "lucide-react"
+import { Plus, Edit2, Trash2, Save, X, FileJson, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -44,7 +45,8 @@ export function QuestionTypesSection() {
       description: "",
       fields: { answer: "Description" },
       promptTemplate: "",
-      _source: "user",
+      _source: "project",
+      _filePath: "",
     }
     setEditing(placeholder)
     setEditingId("new_type")
@@ -60,9 +62,9 @@ export function QuestionTypesSection() {
       if (!parsed || typeof parsed !== "object") throw new Error("Invalid YAML")
 
       const id = editingId.trim() || "unnamed"
-      const savePath = (editing._source === "project" && !isNew)
-        ? `${projectPath}/question_types/${id}.yaml`
-        : `${projectPath}/.llm-wiki/question-types/${id}.yaml`
+      const savePath = editing._source === "user"
+        ? `${projectPath}/.llm-wiki/question-types/${id}.yaml`
+        : `${projectPath}/question_types/${id}.yaml`
 
       const dir = savePath.substring(0, savePath.lastIndexOf("/"))
       if (!(await fileExists(dir))) await createDirectory(dir)
@@ -78,16 +80,7 @@ export function QuestionTypesSection() {
   const handleDelete = async (qt: QuestionType) => {
     if (!projectPath) return
     if (!confirm(t("settings.questionTypes.confirmDelete", { id: qt.id }))) return
-
-    if (qt._source === "app") {
-      const userPath = `${projectPath}/.llm-wiki/question-types`
-      if (!(await fileExists(userPath))) await createDirectory(userPath)
-      await writeFile(`${userPath}/${qt.id}.yaml`, "_deleted: true\n")
-    } else {
-      if (!qt._filePath) return
-      await deleteFile(qt._filePath)
-    }
-
+    await deleteFile(qt._filePath)
     await reload()
   }
 
@@ -132,13 +125,6 @@ export function QuestionTypesSection() {
               <X className="h-4 w-4" />
             </Button>
           </div>
-
-          {editing._source === "app" && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
-              <Info className="h-3.5 w-3.5 shrink-0" />
-              {t("settings.questionTypes.appTypeEditNotice", "Editing a built-in type saves it as a user override.")}
-            </div>
-          )}
 
           <div className="space-y-2">
             <textarea

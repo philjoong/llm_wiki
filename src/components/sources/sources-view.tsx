@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react"
-import { open } from "@tauri-apps/plugin-dialog"
+import { open, confirm } from "@tauri-apps/plugin-dialog"
 import { invoke } from "@tauri-apps/api/core"
 import { Plus, FileText, RefreshCw, Trash2, Folder, ChevronRight, ChevronDown, Network } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -388,7 +388,7 @@ export function SourcesView() {
     if (!project) return
     const pp = normalizePath(project.path)
     const fileName = node.name
-    const confirmed = window.confirm(
+    const confirmed = await confirm(
       t("sources.deleteConfirm", { name: fileName })
     )
     if (!confirmed) return

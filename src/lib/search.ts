@@ -236,7 +236,7 @@ async function fuseTokenAndVector(
     const { useWikiStore } = await import("@/stores/wiki-store")
     const embCfg = useWikiStore.getState().embeddingConfig
     console.log(`[Vector Search] Config: enabled=${embCfg.enabled}, model="${embCfg.model}"`)
-    if (embCfg.enabled && embCfg.model) {
+    if (embCfg.enabled && (embCfg.source === "builtin" || embCfg.model)) {
       const t0 = performance.now()
       const { searchByEmbedding } = await import("@/lib/embedding")
       const vectorResults = await searchByEmbedding(pp, query, embCfg, 10)

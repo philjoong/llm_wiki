@@ -1,4 +1,4 @@
-import { createDirectory, writeFile } from "@/commands/fs"
+import { createDirectory, writeFile, seedQuestionTypes } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
 import { ensureOriginalsGitignore } from "@/lib/originals"
 import { saveGraphPolicy, DEFAULT_POLICY } from "@/lib/graph-policy"
@@ -22,6 +22,8 @@ export async function initProject({ projectPath }: InitProjectOptions): Promise<
     await createDirectory(dirPath)
     await writeFile(`${dirPath}/.gitkeep`, "")
   }
+
+  await seedQuestionTypes(pp)
 
   await saveGraphPolicy(pp, DEFAULT_POLICY)
 

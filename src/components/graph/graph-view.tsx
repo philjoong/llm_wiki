@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef } from "react"
+import { useEffect, useCallback, useState, useRef, useMemo } from "react"
 import { Network, RefreshCw, X, Info, FileText } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
@@ -11,9 +11,11 @@ import { listDbFiles } from "@/lib/wiki-graph"
 import type { FileNode } from "@/types/wiki"
 import { FalkorCanvas } from "./falkor-canvas"
 import { parseFalkorQueryResult, assignColors, type CanvasData } from "@/lib/falkor-visualization"
+import { cn } from "@/lib/utils"
 import { WikiEditor } from "@/components/editor/wiki-editor"
+import { GraphsTab } from "@/components/layout/graphs-tab"
 
-type TabId = "knowledge" | "files"
+type TabId = "knowledge" | "files" | "graphs"
 
 function nonEmptyGraphsCacheKey(projectName: string): string {
   return `llm-wiki:non-empty-graphs:${projectName}`
@@ -58,6 +60,8 @@ export function GraphView() {
 
   // Graph data & state
   const [graphData, setGraphData] = useState<CanvasData>({ nodes: [], links: [] })
+  const [relationColorMap, setRelationColorMap] = useState<Map<string, string>>(new Map())
+  const [selectedRelationType, setSelectedRelationType] = useState<string>("all")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedElement, setSelectedElement] = useState<any>(null)
@@ -69,6 +73,14 @@ export function GraphView() {
   )
 
   const allGraphs = liveGraphs
+
+  const filteredGraphData = useMemo(() => {
+    if (selectedRelationType === "all") return graphData
+    const links = graphData.links.filter((l) => l.relationship === selectedRelationType)
+    const connectedIds = new Set(links.flatMap((l) => [l.source, l.target]))
+    const nodes = graphData.nodes.filter((n) => connectedIds.has(n.id))
+    return { nodes, links }
+  }, [graphData, selectedRelationType])
 
   // Files tab state
   const [dbFiles, setDbFiles] = useState<FileNode[]>([])
@@ -88,8 +100,10 @@ export function GraphView() {
       const cypher = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r"
       const result = await queryGraphDb(project.name, target, cypher)
       const parsed = parseFalkorQueryResult(result)
-      const colored = assignColors(parsed)
+      const { data: colored, relationColorMap: colorMap } = assignColors(parsed)
       setGraphData(colored)
+      setRelationColorMap(colorMap)
+      setSelectedRelationType("all")
       lastLoadedVersion.current = useWikiStore.getState().dataVersion
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load graph from FalkorDB")
@@ -297,7 +311,10 @@ export function GraphView() {
       const cypher = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r"
       const result = await queryGraphDb(project.name, graphName, cypher)
       const parsed = parseFalkorQueryResult(result)
-      setGraphData(assignColors(parsed))
+      const { data: colored, relationColorMap: colorMap } = assignColors(parsed)
+      setGraphData(colored)
+      setRelationColorMap(colorMap)
+      setSelectedRelationType("all")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load graph")
     } finally {
@@ -318,12 +335,14 @@ export function GraphView() {
     <div className="flex h-full flex-col">
       {/* Tab bar */}
       <div className="flex shrink-0 items-center border-b">
-        {(["knowledge", "files"] as TabId[]).map((tab) => (
+        {(["knowledge", "files", "graphs"] as TabId[]).map((tab) => (
           <button
             key={tab}
             onClick={() => {
               if (tab === activeTab) return
-              pushNav({ view: "graph", selectedFile: useWikiStore.getState().selectedFile, graphTab: activeTab, graphDbFile: selectedDbFile?.path ?? null })
+              if (activeTab === "knowledge" || activeTab === "files") {
+                pushNav({ view: "graph", selectedFile: useWikiStore.getState().selectedFile, graphTab: activeTab, graphDbFile: selectedDbFile?.path ?? null })
+              }
               setActiveTab(tab)
             }}
             className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
@@ -332,7 +351,7 @@ export function GraphView() {
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "knowledge" ? "Knowledge" : "Files"}
+            {tab === "knowledge" ? "Knowledge" : tab === "files" ? "Files" : "Graphs"}
           </button>
         ))}
         <div className="ml-auto pr-2">
@@ -342,7 +361,11 @@ export function GraphView() {
         </div>
       </div>
 
-      {activeTab === "knowledge" ? (
+      {activeTab === "graphs" ? (
+        <GraphsTab onPolicySaved={(managedGraphs) => {
+          setLiveGraphs((prev) => prev.filter((g) => managedGraphs.includes(g)))
+        }} />
+      ) : activeTab === "knowledge" ? (
         <div className="flex h-full min-h-0 flex-col">
           {/* Graph selector + stats */}
           <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
@@ -374,10 +397,31 @@ export function GraphView() {
               </div>
             ) : (
               <ErrorBoundary>
-                <FalkorCanvas data={graphData} onNodeClick={handleNodeClick} onLinkClick={handleLinkClick} />
+                <FalkorCanvas data={filteredGraphData} onNodeClick={handleNodeClick} onLinkClick={handleLinkClick} />
               </ErrorBoundary>
             )}
             <SelectionOverlay element={selectedElement} onClose={() => setSelectedElement(null)} />
+            {relationColorMap.size > 1 && (
+              <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">
+                <button
+                  className={cn("flex items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-muted", selectedRelationType === "all" && "bg-muted font-medium")}
+                  onClick={() => setSelectedRelationType("all")}
+                >
+                  <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: "#94a3b8" }} />
+                  전체
+                </button>
+                {Array.from(relationColorMap.entries()).map(([rel, color]) => (
+                  <button
+                    key={rel}
+                    className={cn("flex items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-muted", selectedRelationType === rel && "bg-muted font-medium")}
+                    onClick={() => setSelectedRelationType(rel)}
+                  >
+                    <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: color }} />
+                    {rel}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -466,10 +510,31 @@ export function GraphView() {
                       <div className="flex h-full items-center justify-center text-sm text-destructive">{error}</div>
                     ) : (
                       <ErrorBoundary>
-                        <FalkorCanvas data={graphData} onNodeClick={handleNodeClick} onLinkClick={handleLinkClick} />
+                        <FalkorCanvas data={filteredGraphData} onNodeClick={handleNodeClick} onLinkClick={handleLinkClick} />
                       </ErrorBoundary>
                     )}
                     <SelectionOverlay element={selectedElement} onClose={() => setSelectedElement(null)} />
+                    {relationColorMap.size > 1 && (
+                      <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">
+                        <button
+                          className={cn("flex items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-muted", selectedRelationType === "all" && "bg-muted font-medium")}
+                          onClick={() => setSelectedRelationType("all")}
+                        >
+                          <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: "#94a3b8" }} />
+                          전체
+                        </button>
+                        {Array.from(relationColorMap.entries()).map(([rel, color]) => (
+                          <button
+                            key={rel}
+                            className={cn("flex items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-muted", selectedRelationType === rel && "bg-muted font-medium")}
+                            onClick={() => setSelectedRelationType(rel)}
+                          >
+                            <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: color }} />
+                            {rel}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Markdown preview */}

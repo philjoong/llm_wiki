@@ -4,7 +4,9 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { getRecentProjects, saveSelectedBranch, saveGitRemoteUrl, loadGitRemoteUrl, removeFromRecentProjects } from "@/lib/project-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2, GitBranch, HardDrive, RefreshCw, Upload, Trash2 } from "lucide-react"
+import { Loader2, GitBranch, HardDrive, RefreshCw, Upload, Trash2, Download, PackageOpen } from "lucide-react"
+import { exportProject, importProject } from "@/commands/project-transfer"
+import { openProject } from "@/commands/fs"
 
 const ENV_GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
 const ENV_REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
@@ -32,6 +34,9 @@ export function ProjectBranchSelector() {
   const [pushingBranch, setPushingBranch] = useState<string | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
   const [newBranchName, setNewBranchName] = useState("")
+  const [exportingBranch, setExportingBranch] = useState<string | null>(null)
+  const [importingProject, setImportingProject] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const setSelectedBranch = useWikiStore((s) => s.setSelectedBranch)
 
@@ -100,6 +105,37 @@ export function ProjectBranchSelector() {
     setItems((prev) => prev.filter((i) => i.name !== item.name))
   }
 
+  async function handleExport(item: BranchItem) {
+    if (!item.path) return
+    setExportingBranch(item.name)
+    setTransferError(null)
+    try {
+      await exportProject(item.name, item.path)
+    } catch (err) {
+      setTransferError(String(err))
+    } finally {
+      setExportingBranch(null)
+    }
+  }
+
+  async function handleImport() {
+    const name = newBranchName.trim()
+    if (!name) return
+    setImportingProject(true)
+    setTransferError(null)
+    try {
+      const projectPath = await importProject(name)
+      if (!projectPath) return
+      const project = await openProject(projectPath)
+      setSelectedBranch(project.name)
+      await saveSelectedBranch(project.name)
+    } catch (err) {
+      setTransferError(String(err))
+    } finally {
+      setImportingProject(false)
+    }
+  }
+
   async function handlePushToRemote(item: BranchItem) {
     if (!item.path || !remoteUrlInput.trim()) return
     setPushingBranch(item.name)
@@ -166,6 +202,11 @@ export function ProjectBranchSelector() {
               Push failed: {pushError}
             </p>
           )}
+          {transferError && (
+            <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive break-all">
+              {transferError}
+            </p>
+          )}
         </div>
 
         {/* Branch list */}
@@ -192,6 +233,23 @@ export function ProjectBranchSelector() {
                   {item.localOnly && (
                     <>
                       <span className="ml-auto text-xs text-muted-foreground">local only</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0"
+                        disabled={exportingBranch === item.name}
+                        title="Export as .llmwiki"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleExport(item)
+                        }}
+                      >
+                        {exportingBranch === item.name ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Download className="h-3 w-3" />
+                        )}
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
@@ -246,6 +304,20 @@ export function ProjectBranchSelector() {
               Create
             </Button>
           </div>
+          <Button
+            variant="outline"
+            className="w-full gap-2"
+            disabled={!newBranchName.trim() || importingProject}
+            onClick={() => void handleImport()}
+            title="프로젝트 이름을 입력한 뒤 .llmwiki 파일을 선택해 가져옵니다"
+          >
+            {importingProject ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <PackageOpen className="h-4 w-4" />
+            )}
+            Import .llmwiki
+          </Button>
         </div>
       </div>
     </div>

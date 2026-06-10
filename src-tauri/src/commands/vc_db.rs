@@ -10,13 +10,6 @@ pub struct VCCommit {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct GraphSnapshot {
-    pub commit_hash: String,
-    pub snapshot: String,
-    pub created_at: String,
-}
-
 fn get_conn(project_path: &str) -> Result<Connection, String> {
     let db_path = Path::new(project_path).join("vc.db");
     Connection::open(db_path).map_err(|e| format!("SQLite 연결 실패: {}", e))

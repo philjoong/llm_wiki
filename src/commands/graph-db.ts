@@ -42,6 +42,21 @@ export async function exportGraphDb(projectName: string, graphName: string): Pro
   return invoke<any>("graph_db_export", { graphName: prefixedName, url: await getUrl() })
 }
 
+export async function importGraphDb(
+  projectName: string,
+  graphName: string,
+  nodes: unknown[],
+  edges: unknown[],
+): Promise<number> {
+  const prefixedName = getPrefixedName(projectName, graphName)
+  return invoke<number>("graph_db_import", {
+    graphName: prefixedName,
+    nodes,
+    edges,
+    url: await getUrl(),
+  })
+}
+
 export async function pingGraphDb(): Promise<void> {
   return invoke<void>("graph_db_ping", { url: await getUrl() })
 }

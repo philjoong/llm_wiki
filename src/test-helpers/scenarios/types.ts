@@ -70,31 +70,6 @@ export interface LintScenario {
 }
 
 /**
- * Enrich-wikilinks scenarios assert the behavior of enrichWithWikilinks:
- * given an existing page + wiki index + canned LLM response, does the
- * function write the expected new content (or correctly refuse to write)?
- */
-export interface EnrichScenario {
-  name: string
-  description: string
-  /** Virtual project tree. Must include db/index.md. */
-  initialWiki: Record<string, string>
-  /** Project-relative path of the page to enrich (e.g. "db/transformer.md"). */
-  pageToEnrich: string
-  /** Raw streamChat response text (including fences, prose wrappers, etc). */
-  llmResponse: string
-  expected: {
-    /** True if the page on disk should have been overwritten. */
-    writeCalled: boolean
-    /**
-     * Exact expected content of pageToEnrich after the call — only checked
-     * when writeCalled is true.
-     */
-    expectedContent?: string
-  }
-}
-
-/**
  * Ingest scenarios exercise autoIngest end-to-end: a source document plus
  * existing project state, through two LLM calls (analysis + generation),
  * to the files written on disk and the review items injected into the store.

@@ -122,6 +122,132 @@ pub async fn graph_db_ping(url: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Import nodes and edges (clean JSON, already parsed by the frontend) into a FalkorDB graph.
+/// nodes: array of { id, labels, properties }
+/// edges: array of { id, type, src_node, dest_node, properties }
+#[tauri::command]
+pub async fn graph_db_import(
+    graph_name: String,
+    nodes: serde_json::Value,
+    edges: serde_json::Value,
+    url: Option<String>,
+) -> Result<u32, String> {
+    validate_graph_name(&graph_name)?;
+    let resolved = resolve_url(url.as_deref());
+    let mut conn = connect(&resolved).await?;
+
+    // Ensure graph exists
+    let _: redis::Value = redis::cmd("GRAPH.QUERY")
+        .arg(graph_name.trim())
+        .arg("RETURN 1")
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| format!("Failed to create graph '{}': {}", graph_name, e))?;
+
+    let mut count: u32 = 0;
+
+    // Import nodes
+    if let Some(node_arr) = nodes.as_array() {
+        for node in node_arr {
+            let id = node["id"].as_i64().unwrap_or(0);
+            let labels = node["labels"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(":")
+                })
+                .unwrap_or_default();
+            let label_part = if labels.is_empty() {
+                "Node".to_string()
+            } else {
+                labels
+            };
+
+            let mut set_parts: Vec<String> = vec![format!("n.__import_id__ = {}", id)];
+            if let Some(props) = node["properties"].as_object() {
+                for (k, v) in props {
+                    let safe_key = k.replace('`', "");
+                    let val_str = match v {
+                        serde_json::Value::String(s) => {
+                            format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+                        }
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        serde_json::Value::Null => "null".to_string(),
+                        other => format!("'{}'", other.to_string().replace('\'', "\\'")),
+                    };
+                    set_parts.push(format!("n.`{}` = {}", safe_key, val_str));
+                }
+            }
+
+            let cypher = format!(
+                "MERGE (n:{} {{__import_id__: {}}}) SET {}",
+                label_part,
+                id,
+                set_parts.join(", ")
+            );
+            let _: redis::Value = redis::cmd("GRAPH.QUERY")
+                .arg(graph_name.trim())
+                .arg(&cypher)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| format!("Node import failed (id={}): {}", id, e))?;
+            count += 1;
+        }
+    }
+
+    // Import edges
+    if let Some(edge_arr) = edges.as_array() {
+        for edge in edge_arr {
+            let src = edge["src_node"].as_i64().unwrap_or(0);
+            let dst = edge["dest_node"].as_i64().unwrap_or(0);
+            let rel_type = edge["type"]
+                .as_str()
+                .unwrap_or("RELATED")
+                .replace('`', "");
+
+            let mut set_parts: Vec<String> = Vec::new();
+            if let Some(props) = edge["properties"].as_object() {
+                for (k, v) in props {
+                    let safe_key = k.replace('`', "");
+                    let val_str = match v {
+                        serde_json::Value::String(s) => {
+                            format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+                        }
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        serde_json::Value::Null => "null".to_string(),
+                        other => format!("'{}'", other.to_string().replace('\'', "\\'")),
+                    };
+                    set_parts.push(format!("r.`{}` = {}", safe_key, val_str));
+                }
+            }
+
+            let set_clause = if set_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" SET {}", set_parts.join(", "))
+            };
+
+            let cypher = format!(
+                "MATCH (a {{__import_id__: {}}}), (b {{__import_id__: {}}}) MERGE (a)-[r:`{}`]->(b){}",
+                src, dst, rel_type, set_clause
+            );
+            let _: redis::Value = redis::cmd("GRAPH.QUERY")
+                .arg(graph_name.trim())
+                .arg(&cypher)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| format!("Edge import failed ({}->{} [{}]): {}", src, dst, rel_type, e))?;
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
 #[tauri::command]
 pub async fn graph_db_export(graph_name: String, url: Option<String>) -> Result<serde_json::Value, String> {
     validate_graph_name(&graph_name)?;

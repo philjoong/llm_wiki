@@ -1,7 +1,7 @@
-name: 변경 영향 분석
+name: "변경 영향 분석 — 예: '스킬 A의 쿨타임을 10초에서 8초로 바꾸면 어떤 시스템에 영향이 가?'"
 description: 특정 수치·공식·정책·콘텐츠 변경이 다른 시스템·콘텐츠에 어떤 영향을 주는지 추적한다.
 fields:
-  affected_pages: 영향받는 페이지 목록 (related: 연결 + 출처 인용을 따라간 결과)
+  affected_pages: 영향받는 페이지 목록 (related 연결 + 출처 인용을 따라간 결과)
   update_candidates: 동시 갱신이 필요한 페이지 후보
 prompt_template: |
   당신은 시스템 영향 분석가입니다.

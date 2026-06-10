@@ -27,6 +27,13 @@ export async function copyFile(
   return invoke("copy_file", { source, destination })
 }
 
+export async function copyDirectory(
+  source: string,
+  destination: string
+): Promise<string[]> {
+  return invoke<string[]>("copy_directory", { source, destination })
+}
+
 export async function preprocessFile(path: string): Promise<string> {
   return invoke<string>("preprocess_file", { path })
 }
@@ -48,6 +55,10 @@ export async function createDirectory(path: string): Promise<void> {
 
 export async function fileExists(path: string): Promise<boolean> {
   return invoke<boolean>("file_exists", { path })
+}
+
+export async function seedQuestionTypes(projectPath: string): Promise<void> {
+  return invoke<void>("seed_question_types", { projectPath })
 }
 
 export async function createProject(

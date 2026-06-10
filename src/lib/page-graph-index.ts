@@ -38,3 +38,10 @@ export async function upsertPageGraphIndex(
 export function lookupPageGraphs(index: PageGraphIndex, pagePath: string): string[] {
   return index[pagePath] ?? []
 }
+
+/** Returns all page_paths associated with the given graphName. */
+export function findPagesByGraph(index: PageGraphIndex, graphName: string): string[] {
+  return Object.entries(index)
+    .filter(([, graphs]) => graphs.includes(graphName))
+    .map(([pagePath]) => pagePath)
+}

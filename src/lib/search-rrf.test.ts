@@ -58,6 +58,7 @@ beforeEach(() => {
   // Default: embedding ENABLED (the whole point of this file). Tests
   // that want token-only override locally.
   useWikiStore.getState().setEmbeddingConfig({
+    source: "external",
     enabled: true,
     endpoint: "http://test/v1/embeddings",
     apiKey: "",
@@ -150,6 +151,7 @@ describe("searchWiki — RRF fusion of token + vector lists", () => {
 
   it("vector list is empty (embedding disabled) → behaves like pure token rank", async () => {
     useWikiStore.getState().setEmbeddingConfig({
+      source: "builtin",
       enabled: false,
       endpoint: "",
       apiKey: "",

@@ -18,9 +18,8 @@ vi.mock("@/commands/git", () => ({
 
 import { writeFile, fileExists } from "@/commands/fs"
 import { gitCommit } from "@/commands/git"
-import { recordSearchInstance } from "../instance-log"
+import { recordSearchInstance, type ExcludeSearchResult } from "../instance-log"
 import { __resetProjectLocksForTesting } from "../project-mutex"
-import type { ExcludeSearchResult } from "../exclude-search"
 
 const mockWrite = vi.mocked(writeFile)
 const mockExists = vi.mocked(fileExists)

@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState, useRef, useMemo } from "react"
-import { Network, RefreshCw, X, Info, FileText } from "lucide-react"
+import { Network, RefreshCw, X, Info, FileText, ChevronRight, ChevronDown, Folder } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
 import { useWikiStore, type NavSnapshot } from "@/stores/wiki-store"
@@ -51,7 +51,6 @@ export function GraphView() {
   const pendingGraphRestore = useWikiStore((s) => s.pendingGraphRestore)
   const setPendingGraphRestore = useWikiStore((s) => s.setPendingGraphRestore)
 
-  const navHistory = useWikiStore((s) => s.navHistory)
   const pushNav = useCallback((snap: NavSnapshot) => {
     useWikiStore.setState((s) => ({ navHistory: [...s.navHistory, snap].slice(-5) }))
   }, [])
@@ -436,22 +435,11 @@ export function GraphView() {
               {dbFiles.length === 0 ? (
                 <div className="p-4 text-center text-xs text-muted-foreground">No files found</div>
               ) : (
-                dbFiles.map((f) => {
-                  const dbIdx = f.path.replace(/\\/g, "/").indexOf("/db/")
-                  const label = dbIdx >= 0 ? f.path.slice(dbIdx + 4) : f.name
-                  return (
-                    <button
-                      key={f.path}
-                      onClick={() => { void handleDbFileSelect(f) }}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
-                        selectedDbFile?.path === f.path ? "bg-accent text-accent-foreground" : "text-muted-foreground"
-                      }`}
-                    >
-                      <FileText className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate" title={label}>{label}</span>
-                    </button>
-                  )
-                })
+                <DbFileTree
+                  files={dbFiles}
+                  selectedFile={selectedDbFile}
+                  onSelect={(f) => { void handleDbFileSelect(f) }}
+                />
               )}
             </div>
           </div>
@@ -603,5 +591,85 @@ function SelectionOverlay({ element, onClose }: { element: any; onClose: () => v
         )}
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// DbFileTree — groups db/ files by folder with collapsible sections
+// ---------------------------------------------------------------------------
+
+interface DbFileTreeProps {
+  files: FileNode[]
+  selectedFile: FileNode | null
+  onSelect: (f: FileNode) => void
+}
+
+function DbFileTree({ files, selectedFile, onSelect }: DbFileTreeProps) {
+  const groups = useMemo(() => {
+    const map = new Map<string, { file: FileNode; name: string }[]>()
+    for (const f of files) {
+      const rel = (() => {
+        const norm = f.path.replace(/\\/g, "/")
+        const idx = norm.indexOf("/db/")
+        return idx >= 0 ? norm.slice(idx + 4) : f.name
+      })()
+      const slashIdx = rel.indexOf("/")
+      const folder = slashIdx >= 0 ? rel.slice(0, slashIdx) : ""
+      const name = slashIdx >= 0 ? rel.slice(slashIdx + 1) : rel
+      if (!map.has(folder)) map.set(folder, [])
+      map.get(folder)!.push({ file: f, name })
+    }
+    return map
+  }, [files])
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+
+  const toggle = (folder: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(folder)) next.delete(folder)
+      else next.add(folder)
+      return next
+    })
+  }
+
+  return (
+    <>
+      {Array.from(groups.entries()).map(([folder, items]) => {
+        const isCollapsed = collapsed.has(folder)
+        return (
+          <div key={folder || "__root__"}>
+            {folder && (
+              <button
+                onClick={() => toggle(folder)}
+                className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs font-medium text-foreground hover:bg-accent transition-colors"
+              >
+                {isCollapsed
+                  ? <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  : <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                }
+                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{folder}</span>
+                <span className="ml-auto text-muted-foreground font-normal">{items.length}</span>
+              </button>
+            )}
+            {!isCollapsed && items.map(({ file, name }) => (
+              <button
+                key={file.path}
+                onClick={() => onSelect(file)}
+                className={`flex w-full items-center gap-2 py-1.5 text-left text-xs transition-colors hover:bg-accent ${
+                  folder ? "pl-7 pr-3" : "px-3"
+                } ${
+                  selectedFile?.path === file.path ? "bg-accent text-accent-foreground" : "text-muted-foreground"
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate" title={name}>{name}</span>
+              </button>
+            ))}
+          </div>
+        )
+      })}
+    </>
   )
 }

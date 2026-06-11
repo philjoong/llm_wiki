@@ -49,6 +49,7 @@ async function setupProject(files: Record<string, string>): Promise<Ctx> {
 beforeEach(() => {
   mockSearchByEmbedding.mockReset()
   useWikiStore.getState().setEmbeddingConfig({
+    source: "external",
     enabled: true,
     endpoint: "http://test/v1/embeddings",
     apiKey: "",
@@ -125,6 +126,7 @@ describe("searchPaths — vector hits are clipped to the kept candidate set", ()
 
   it("when embedding is disabled, searchPaths is pure token over the kept set", async () => {
     useWikiStore.getState().setEmbeddingConfig({
+      source: "external",
       enabled: false,
       endpoint: "",
       apiKey: "",

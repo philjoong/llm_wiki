@@ -56,6 +56,7 @@ const ENABLED =
   !!process.env.EMBEDDING_MODEL
 
 const cfg = {
+  source: "external" as const,
   enabled: true,
   endpoint: process.env.EMBEDDING_ENDPOINT ?? "",
   apiKey: process.env.EMBEDDING_API_KEY ?? "",
@@ -313,6 +314,7 @@ describe("fetchEmbedding against a fake small-context server (real TCP)", () => 
     const server = await startFakeEmbeddingServer(/* maxInputChars */ 200)
     try {
       const smallCfg = {
+        source: "external" as const,
         enabled: true,
         endpoint: server.url,
         apiKey: "",
@@ -342,6 +344,7 @@ describe("fetchEmbedding against a fake small-context server (real TCP)", () => 
     const server = await startFakeEmbeddingServer(/* maxInputChars */ 50)
     try {
       const smallCfg = {
+        source: "external" as const,
         enabled: true,
         endpoint: server.url,
         apiKey: "",
@@ -366,6 +369,7 @@ describe("fetchEmbedding against a fake small-context server (real TCP)", () => 
     const server = await startFakeEmbeddingServer(/* maxInputChars */ 0)
     try {
       const smallCfg = {
+        source: "external" as const,
         enabled: true,
         endpoint: server.url,
         apiKey: "",

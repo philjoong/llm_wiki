@@ -36,6 +36,7 @@ beforeEach(() => {
   // Disable embedding/vector search — we only want to exercise the
   // BM25-style text search path.
   useWikiStore.getState().setEmbeddingConfig({
+    source: "builtin",
     enabled: false,
     endpoint: "",
     apiKey: "",

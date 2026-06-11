@@ -31,10 +31,8 @@ function mockBothDirs(projectFiles: FileNode[], userFiles: FileNode[] = []) {
 describe("loadQuestionTypes", () => {
   it("returns [] when the question_types directory is missing", async () => {
     mockListDirectory.mockRejectedValue(new Error("ENOENT"))
-    // App defaults are always included; when both dirs fail we still get app defaults
     const out = await loadQuestionTypes("/proj")
-    expect(out.length).toBeGreaterThan(0)
-    expect(out.every((q) => q._source === "app")).toBe(true)
+    expect(out).toEqual([])
   })
 
   it("parses the IDEA §2.4 example file end-to-end", async () => {

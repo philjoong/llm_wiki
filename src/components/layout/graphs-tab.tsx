@@ -75,12 +75,14 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
   async function handleAddGraph() {
     const name = newGraphName.trim()
     if (!name) return
+    if (!policy) return
     if (policy.managedGraphs.includes(name)) {
       await message(`Graph "${name}" already exists.`, { kind: "warning" })
       return
     }
     const next: GraphPolicy = {
       ...policy,
+      relationTypes: policy.relationTypes ?? [],
       managedGraphs: [...policy.managedGraphs, name],
       graphRelationTypes: { ...policy.graphRelationTypes, [name]: [] },
     }
@@ -104,6 +106,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
       setRenamingGraph(null)
       return
     }
+    if (!policy) return
     if (policy.managedGraphs.includes(newName)) {
       await message(`Graph "${newName}" already exists.`, { kind: "warning" })
       return
@@ -120,12 +123,14 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
       }
     }
 
+    if (!policy) return
     const newRelTypes = { ...policy.graphRelationTypes }
     newRelTypes[newName] = newRelTypes[oldName] ?? []
     delete newRelTypes[oldName]
 
     const next: GraphPolicy = {
       ...policy,
+      relationTypes: policy.relationTypes,
       managedGraphs: policy.managedGraphs.map((g) => (g === oldName ? newName : g)),
       graphRelationTypes: newRelTypes,
     }
@@ -162,11 +167,13 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
       // Graph may not exist in FalkorDB yet; proceed with policy cleanup
     }
 
+    if (!policy) return
     const newRelTypes = { ...policy.graphRelationTypes }
     delete newRelTypes[graphName]
 
     const next: GraphPolicy = {
       ...policy,
+      relationTypes: policy.relationTypes,
       managedGraphs: policy.managedGraphs.filter((g) => g !== graphName),
       graphRelationTypes: newRelTypes,
     }
@@ -183,6 +190,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
   }
 
   async function handleSaveRelation(graphName: string, index: number) {
+    if (!policy) return
     const newValue = editingRelationValue.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_")
     const types = policy.graphRelationTypes[graphName] ?? []
     const oldValue = types[index]
@@ -216,6 +224,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     newTypes[index] = newValue
     const next: GraphPolicy = {
       ...policy,
+      relationTypes: policy.relationTypes,
       graphRelationTypes: { ...policy.graphRelationTypes, [graphName]: newTypes },
     }
     const saved = await saveGraphPolicy(projectPath, next)
@@ -227,6 +236,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
   // ── Relation Type Delete ───────────────────────────────────────────────────
 
   async function handleDeleteRelation(graphName: string, index: number) {
+    if (!policy) return
     const types = policy.graphRelationTypes[graphName] ?? []
     const typeName = types[index]
 
@@ -251,6 +261,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     const newTypes = types.filter((_, i) => i !== index)
     const next: GraphPolicy = {
       ...policy,
+      relationTypes: policy.relationTypes,
       graphRelationTypes: { ...policy.graphRelationTypes, [graphName]: newTypes },
     }
     const saved = await saveGraphPolicy(projectPath, next)
@@ -261,6 +272,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
   // ── Relation Type Add ─────────────────────────────────────────────────────
 
   async function handleAddRelation(graphName: string) {
+    if (!policy) return
     const newValue = addingRelationValue.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_")
     if (!newValue) {
       setAddingRelationGraph(null)
@@ -273,6 +285,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     }
     const next: GraphPolicy = {
       ...policy,
+      relationTypes: policy.relationTypes,
       graphRelationTypes: { ...policy.graphRelationTypes, [graphName]: [...types, newValue] },
     }
     const saved = await saveGraphPolicy(projectPath, next)

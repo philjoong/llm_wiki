@@ -59,12 +59,7 @@ pub fn run() {
             } else {
                 eprintln!("[tauri-debug] setup: resource_dir unavailable");
             }
-            if let Some(window) = app.get_webview_window("main") {
-                eprintln!("[tauri-debug] setup: main window found");
-                let _ = window.set_title("LLM Wiki - debug attached");
-            } else {
-                eprintln!("[tauri-debug] setup: main window NOT found");
-            }
+
             // Registry of running `claude` subprocesses, keyed by the
             // frontend-generated stream id. Populated by claude_cli_spawn,
             // drained on process exit or by claude_cli_kill.

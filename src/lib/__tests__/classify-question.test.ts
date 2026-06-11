@@ -40,12 +40,16 @@ const TYPES: QuestionType[] = [
     id: "policy_violation",
     name: "정책 위반 탐지",
     description: "사용자/운영 정책에 위반되는 동작을 식별한다.",
+    _source: "project",
+    _filePath: "",
   },
   {
     id: "condition_based_test",
     name: "조건 기반 가상 테스트",
     description: "특정 조건에서의 시스템 동작을 묘사한다.",
     inputShape: "조건 + 행위",
+    _source: "project",
+    _filePath: "",
   },
 ]
 

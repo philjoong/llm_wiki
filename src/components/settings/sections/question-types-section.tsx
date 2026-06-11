@@ -85,7 +85,6 @@ export function QuestionTypesSection() {
   }
 
   const sourceLabel = (qt: QuestionType) => {
-    if (qt._source === "app") return "app"
     if (qt._source === "project") return "project"
     return "user"
   }

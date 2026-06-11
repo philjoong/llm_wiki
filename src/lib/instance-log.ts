@@ -30,7 +30,36 @@
 import { writeFile, fileExists } from "@/commands/fs"
 import { makeQuerySlug } from "@/lib/wiki-filename"
 import { commitSearchInstance } from "@/lib/auto-commit"
-import type { ExcludeSearchResult } from "./exclude-search"
+
+export interface ExcludeSearchHit {
+  path: string
+  score: number
+  title?: string
+  snippet?: string
+  titleMatch?: boolean
+}
+
+export interface ExcludeSearchResult {
+  hits: ExcludeSearchHit[]
+  keptPaths: string[]
+  trace: {
+    judgedType?: {
+      id: string
+      name: string
+      confidence: number
+      reasoning?: string
+    } | null
+    appliedEntries: Array<{
+      pattern: string
+      rationale: string
+      matched: string[]
+      filePath: string
+    }>
+    initialCandidateCount: number
+    residueCount: number
+    zeroResidueMeaning?: string
+  }
+}
 
 export interface RecordedInstance {
   /** Project-relative path to the markdown file just written. */

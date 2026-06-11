@@ -60,3 +60,28 @@ export async function importGraphDb(
 export async function pingGraphDb(): Promise<void> {
   return invoke<void>("graph_db_ping", { url: await getUrl() })
 }
+
+export async function findRelatedGraphs(projectName: string, fileName: string): Promise<string[]> {
+  const prefix = `${projectName}___`
+  const allGraphs = await invoke<string[]>("graph_db_list", { url: await getUrl() })
+  const projectGraphs = allGraphs
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => name.slice(prefix.length))
+
+  const related: string[] = []
+  for (const graphName of projectGraphs) {
+    try {
+      const result = await invoke<{ nodes: unknown[] }>("graph_db_query", {
+        graphName: `${prefix}${graphName}`,
+        cypher: `MATCH (n) WHERE n.source = '${fileName}' RETURN n LIMIT 1`,
+        url: await getUrl(),
+      })
+      if (result && Array.isArray(result.nodes) && result.nodes.length > 0) {
+        related.push(graphName)
+      }
+    } catch {
+      // Graph may not exist or query failed; skip
+    }
+  }
+  return related
+}

@@ -16,8 +16,6 @@ import { gitInit } from "@/commands/git"
 import {
   initProject,
   SYSTEM_PREFIX_DIRS,
-  EXCLUSION_SCHEMA_SEED,
-  PROMOTION_RULES_SEED,
 } from "../project-init"
 
 const mockCreateDirectory = vi.mocked(createDirectory)
@@ -47,28 +45,7 @@ describe("initProject", () => {
       "pending",
       "counterexamples",
       "question_types",
-      "exclusions/by_question_type",
-      "exclusions/axioms",
-      "exclusions/instances",
     ])
-  })
-
-  it("writes the two exclusion seed markdown files into exclusions/", async () => {
-    await initProject({ projectPath: "/tmp/proj" })
-
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      "/tmp/proj/exclusions/exclusion_schema.md",
-      EXCLUSION_SCHEMA_SEED,
-    )
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      "/tmp/proj/exclusions/promotion_rules.md",
-      PROMOTION_RULES_SEED,
-    )
-  })
-
-  it("seeds promotion_rules.md with an explicit 자동 승격 금지 clause", () => {
-    expect(PROMOTION_RULES_SEED).toMatch(/자동 승격 금지/)
-    expect(PROMOTION_RULES_SEED).toMatch(/사람의 명시적 승인/)
   })
 
   it("seeds .gitignore so binary originals + preprocess caches stay untracked", async () => {
@@ -92,30 +69,6 @@ describe("initProject", () => {
     expect(gitignoreCall).toBeDefined()
     const gitInitOrder = mockGitInit.mock.invocationCallOrder[0]
     expect(gitInitOrder).toBeGreaterThan(gitignoreCall!.order)
-  })
-
-  it("seeds exclusion_schema.md with the coordinate / application / conflict rules", () => {
-    expect(EXCLUSION_SCHEMA_SEED).toMatch(/좌표계/)
-    expect(EXCLUSION_SCHEMA_SEED).toMatch(/적용 시점/)
-    expect(EXCLUSION_SCHEMA_SEED).toMatch(/axiom > pattern/)
-    expect(EXCLUSION_SCHEMA_SEED).toMatch(/archived/)
-  })
-
-  it("orders writes so seed markdown lands before gitInit captures the tree", async () => {
-    await initProject({ projectPath: "/tmp/proj" })
-
-    const seedWriteOrders = mockWriteFile.mock.calls
-      .map((call, i) => ({ path: call[0], order: mockWriteFile.mock.invocationCallOrder[i] }))
-      .filter(
-        (c) =>
-          c.path === "/tmp/proj/exclusions/exclusion_schema.md" ||
-          c.path === "/tmp/proj/exclusions/promotion_rules.md",
-      )
-    expect(seedWriteOrders).toHaveLength(2)
-    const gitInitOrder = mockGitInit.mock.invocationCallOrder[0]
-    for (const { order } of seedWriteOrders) {
-      expect(gitInitOrder).toBeGreaterThan(order)
-    }
   })
 
   it("strips trailing slashes from projectPath so paths don't double up", async () => {

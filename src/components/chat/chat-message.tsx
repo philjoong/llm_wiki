@@ -273,6 +273,37 @@ const REF_TYPE_CONFIG: Record<string, { icon: typeof FileText; color: string }> 
   clip: { icon: Globe, color: "text-blue-400" },
 }
 
+/**
+ * Extract the sentences surrounding a [N] citation in the LLM answer.
+ * Returns up to ~300 chars of context centered on the citation marker,
+ * stripped of markdown syntax, for use as a section-level search needle.
+ */
+function extractSnippetForRef(text: string, refNumber: number): string {
+  // Work on the plain answer (strip frontmatter-like hidden comments and Sources section)
+  const plain = text
+    .replace(/<!--.*?-->/gs, "")
+    .replace(/\n##\s+Sources\b[\s\S]*$/, "")
+
+  const marker = `[${refNumber}]`
+  const idx = plain.indexOf(marker)
+  if (idx === -1) return ""
+
+  // Grab ~300 chars around the marker (150 before, 150 after)
+  const start = Math.max(0, idx - 150)
+  const end = Math.min(plain.length, idx + 150)
+  const raw = plain.slice(start, end)
+
+  // Strip markdown syntax (headings, bold, italic, links, code, list markers)
+  return raw
+    .replace(/#{1,6}\s+/g, "")
+    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
+    .replace(/`[^`]+`/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/\[\d+\]/g, "")
+    .trim()
+}
+
 function getRefType(path: string): string {
   if (path.includes("/entities/")) return "entity"
   if (path.includes("/concepts/")) return "concept"
@@ -287,8 +318,7 @@ function getRefType(path: string): string {
 
 function CitedReferencesPanel({ content, savedReferences }: { content: string; savedReferences?: CitedPage[] }) {
   const project = useWikiStore((s) => s.project)
-  const setActiveView = useWikiStore((s) => s.setActiveView)
-  const setPendingOpenFile = useWikiStore((s) => s.setPendingOpenFile)
+  const setChatReferencePreview = useWikiStore((s) => s.setChatReferencePreview)
   const [expanded, setExpanded] = useState(false)
 
   // Use saved references first (persisted with message), fall back to dynamic extraction
@@ -352,8 +382,8 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
                     }
                   }
                   const target = resolved ?? `${pp}/${page.path}`
-                  setPendingOpenFile(target)
-                  setActiveView("graph")
+                  const snippet = extractSnippetForRef(content, i + 1)
+                  setChatReferencePreview({ path: target, highlightSection: snippet || page.title })
                 }}
                 className="flex flex-1 min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50 transition-colors"
                 title={page.path}

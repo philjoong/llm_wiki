@@ -115,6 +115,8 @@ export interface WikiState {
   navHistory: NavSnapshot[]
   /** Set by goBack when it needs GraphView to restore its internal tab/file state. */
   pendingGraphRestore: { graphTab: "knowledge" | "files"; graphDbFile: string | null } | null
+  /** Inline reference preview shown to the right of the Chat panel. */
+  chatReferencePreview: { path: string; highlightSection?: string } | null
 
   setProject: (project: WikiProject | null) => void
   setFileTree: (tree: FileNode[]) => void
@@ -133,6 +135,7 @@ export interface WikiState {
   setHighlightSource: (source: string | null) => void
   setPendingOpenFile: (path: string | null) => void
   setPendingGraphRestore: (v: WikiState["pendingGraphRestore"]) => void
+  setChatReferencePreview: (preview: WikiState["chatReferencePreview"]) => void
   goBack: () => void
 }
 
@@ -161,6 +164,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   pendingOpenFile: null,
   navHistory: [],
   pendingGraphRestore: null,
+  chatReferencePreview: null,
 
   setProject: (project) => set({ project }),
   setFileTree: (fileTree) => set({ fileTree }),
@@ -197,6 +201,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setHighlightSource: (highlightSource) => set({ highlightSource }),
   setPendingOpenFile: (pendingOpenFile) => set({ pendingOpenFile }),
   setPendingGraphRestore: (pendingGraphRestore) => set({ pendingGraphRestore }),
+  setChatReferencePreview: (chatReferencePreview) => set({ chatReferencePreview }),
   goBack: () => set((state) => {
     if (state.navHistory.length === 0) return {}
     const prev = state.navHistory[state.navHistory.length - 1]
@@ -212,4 +217,4 @@ export const useWikiStore = create<WikiState>((set) => ({
   }),
 }))
 
-export type { WikiState, LlmConfig, EmbeddingConfig, OutputLanguage }
+export type { LlmConfig, EmbeddingConfig, OutputLanguage }

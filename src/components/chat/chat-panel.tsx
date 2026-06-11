@@ -3,6 +3,7 @@ import { BookOpen, Plus, Trash2, MessageSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message"
 import { ChatInput } from "./chat-input"
+import { ChatReferencePanel } from "./chat-reference-panel"
 import { useChatStore, chatMessagesToLLM } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
@@ -123,6 +124,7 @@ function ConversationSidebar() {
 
 export function ChatPanel() {
   useSourceFiles() // Keep source file cache warm
+  const chatReferencePreview = useWikiStore((s) => s.chatReferencePreview)
   const activeConversationId = useChatStore((s) => s.activeConversationId)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const streamingContent = useChatStore((s) => s.streamingContent)
@@ -526,7 +528,7 @@ export function ChatPanel() {
     <div className="flex h-full flex-row overflow-hidden">
       <ConversationSidebar />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         {!activeConversationId ? (
           <div className="flex flex-1 items-center justify-center text-muted-foreground">
             <div className="text-center">
@@ -588,6 +590,8 @@ export function ChatPanel() {
           }
         />
       </div>
+
+      {chatReferencePreview && <ChatReferencePanel />}
     </div>
   )
 }

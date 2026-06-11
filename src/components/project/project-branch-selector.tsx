@@ -9,7 +9,6 @@ import { exportProject, importProject } from "@/commands/project-transfer"
 import { openProject } from "@/commands/fs"
 
 const ENV_GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
-const ENV_REPO_BASE_URL = import.meta.env.VITE_GIT_REPO_URL || ""
 
 function buildRepoUrl(baseUrl: string): string {
   const cleaned = baseUrl.replace(/^https?:\/\//, "")
@@ -44,7 +43,7 @@ export function ProjectBranchSelector() {
   useEffect(() => {
     async function init() {
       const cached = await loadGitRemoteUrl()
-      const initial = cached ?? ENV_REPO_BASE_URL
+      const initial = cached ?? ""
       setRemoteUrlInput(initial)
       await fetchAll(initial)
     }
@@ -77,7 +76,7 @@ export function ProjectBranchSelector() {
     const localOnlyItems: BranchItem[] = localProjects
       .filter((p) => !remoteSet.has(p.name))
       .map((p) => ({ name: p.name, localOnly: true, path: p.path }))
-    const remoteItems: BranchItem[] = remoteBranches.map((b) => ({ name: b, localOnly: false }))
+    const remoteItems: BranchItem[] = remoteBranches.filter((b) => b !== "main").map((b) => ({ name: b, localOnly: false }))
 
     setItems([...remoteItems, ...localOnlyItems])
     setLoading(false)

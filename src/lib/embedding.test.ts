@@ -47,6 +47,7 @@ import {
 } from "./embedding"
 
 const cfg = {
+  source: "external" as const,
   enabled: true,
   endpoint: "http://localhost:1234/v1/embeddings",
   apiKey: "",

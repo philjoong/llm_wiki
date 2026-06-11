@@ -63,7 +63,7 @@ export function SourcesView() {
       setLoadingGraphs(true)
       findRelatedGraphs(project.name, fileName)
         .then(setRelatedGraphs)
-        .catch(err => {
+        .catch((err: unknown) => {
           console.error("Failed to find related graphs:", err)
           setRelatedGraphs([])
         })

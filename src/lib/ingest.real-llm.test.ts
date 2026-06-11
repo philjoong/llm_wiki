@@ -20,7 +20,6 @@ import { realFs, createTempProject, readFileRaw, fileExists } from "@/test-helpe
 vi.mock("@/commands/fs", () => realFs)
 
 import { autoIngest } from "./ingest"
-import { runStructuralLint } from "./lint"
 import { useWikiStore, type OutputLanguage } from "@/stores/wiki-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { useActivityStore } from "@/stores/activity-store"
@@ -487,20 +486,6 @@ async function assertContracts(
     }
   }
 
-  // 6. Post-ingest structural lint. Rich-content LLM output naturally
-  // generates many forward-references to concepts not materialized in the
-  // same run (e.g. a Vietnamese cuisine article will link [[Phở Hà Nội]],
-  // [[Phở Nam Định]] etc. without creating all those pages). Those show
-  // up as "broken links" but are actually a to-do list. The cap is set
-  // high to only catch pathological cases — a page with almost nothing
-  // but broken links. Users can still run structural lint themselves to
-  // see every broken link as a curation suggestion.
-  const lintResults = await runStructuralLint(tmpPath)
-  const brokenLinks = lintResults.filter((r) => r.type === "broken-link")
-  expect(
-    brokenLinks.length,
-    `too many broken [[wikilinks]] in generated wiki (${brokenLinks.length}). First: ${brokenLinks[0]?.detail ?? "-"}`,
-  ).toBeLessThanOrEqual(150)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

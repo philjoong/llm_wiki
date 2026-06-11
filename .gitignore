@@ -44,3 +44,6 @@ pnpm-debug.log*
 # Brainstorm assets (not tracked in source control)
 .superpowers/
 .claude/
+
+# FastEmbed model cache (downloaded at runtime, too large for git)
+src-tauri/.fastembed_cache/

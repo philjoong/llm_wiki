@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
 import type { Stage2Triple } from "./ingest"
-import { createGraphDb, queryGraphDb, listGraphDb, deleteGraphDb } from "@/commands/graph-db"
+import { getGraphBackend } from "@/lib/graph-backend"
 import { upsertPageGraphIndex } from "@/lib/page-graph-index"
 
 function debug(msg: string) {
@@ -9,10 +9,8 @@ function debug(msg: string) {
 }
 
 /**
- * Synchronize Stage 2 triples directly to FalkorDB.
- * Each triple { subject, predicate, object, graph } is routed to its assigned
- * FalkorDB graph. Both subject and object nodes are MERGEd, then the edge.
- * Returns a summary string for logging.
+ * Synchronize Stage 2 triples to the configured graph backend.
+ * The legacy name is retained so existing ingest code does not need to move.
  */
 export async function syncGraphToFalkorDb(
   projectPath: string,
@@ -21,11 +19,10 @@ export async function syncGraphToFalkorDb(
   onProgress?: (message: string) => void,
 ): Promise<string> {
   if (triples.length === 0) {
-    debug("0 triples — nothing to sync")
+    debug("0 triples - nothing to sync")
     return "0 triples (nothing to sync)"
   }
 
-  // Group triples by graph name
   const graphToTriples = new Map<string, Stage2Triple[]>()
   for (const triple of triples) {
     if (!triple.graph || !triple.subject || !triple.predicate || !triple.object) continue
@@ -37,61 +34,10 @@ export async function syncGraphToFalkorDb(
   const managedGraphs = Array.from(graphToTriples.keys())
   debug(`graphs to sync: [${managedGraphs.join(", ")}]`)
 
-  const REPORT_EVERY = 20
-  let totalNodes = 0
-  let totalEdges = 0
+  const backend = await getGraphBackend(projectPath)
+  onProgress?.(`Syncing ${triples.length} triples to ${backend.kind} graph backend...`)
+  const synced = await backend.upsertTriples(projectName, triples)
 
-  for (const gName of managedGraphs) {
-    debug(`[${gName}] creating graph...`)
-    await createGraphDb(projectName, gName)
-
-    const triplesInGraph = graphToTriples.get(gName) ?? []
-
-    for (let i = 0; i < triplesInGraph.length; i++) {
-      if (i % REPORT_EVERY === 0) {
-        onProgress?.(`[${gName}] Syncing triples... ${i}/${triplesInGraph.length}`)
-      }
-      const triple = triplesInGraph[i]
-      const safeSubject = triple.subject.replace(/'/g, "\\'")
-      const safeObject = triple.object.replace(/'/g, "\\'")
-      const safePagePath = (triple.page_path ?? "").replace(/'/g, "\\'")
-      const relType = triple.predicate.toUpperCase().replace(/[^A-Z0-9_]/g, "_")
-
-      // MERGE subject node
-      try {
-        await queryGraphDb(projectName, gName, `MERGE (n:Page {id: '${safeSubject}'}) SET n.label = '${safeSubject}', n.page_path = '${safePagePath}'`)
-        totalNodes++
-      } catch (err) {
-        debug(`[${gName}] ERROR merging subject node ${triple.subject}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-
-      // MERGE object node
-      try {
-        await queryGraphDb(projectName, gName, `MERGE (n:Page {id: '${safeObject}'}) SET n.label = '${safeObject}'`)
-        totalNodes++
-      } catch (err) {
-        debug(`[${gName}] ERROR merging object node ${triple.object}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-
-      // MERGE edge
-      try {
-        const cypher = `
-          MATCH (a:Page {id: '${safeSubject}'}), (b:Page {id: '${safeObject}'})
-          MERGE (a)-[r:${relType}]->(b)
-        `
-        await queryGraphDb(projectName, gName, cypher)
-        totalEdges++
-      } catch (err) {
-        debug(`[${gName}] ERROR merging edge ${triple.subject}-[${triple.predicate}]->${triple.object}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-
-    debug(`[${gName}] done — ${triplesInGraph.length} triples`)
-    onProgress?.(`[${gName}] Done — ${triplesInGraph.length} triples`)
-  }
-
-  // Build page_path → graph[] index from the synced triples and persist it.
-  // This lets Files tab look up related graphs instantly without querying FalkorDB.
   const pageGraphUpdates: Record<string, string[]> = {}
   for (const triple of triples) {
     if (!triple.page_path || !triple.graph) continue
@@ -108,21 +54,22 @@ export async function syncGraphToFalkorDb(
     }
   }
 
-  const summary = `${triples.length} triples synced to [${managedGraphs.join(", ")}]`
+  const summary = `${synced} triples synced to ${backend.kind} backend [${managedGraphs.join(", ")}]`
   debug(summary)
   return summary
 }
 
-/**
- * Cleanup graphs that are no longer in the policy and have no data.
- * (Optional/Advanced)
- */
-export async function cleanupOrphanGraphs(projectName: string, activeGraphs: string[]): Promise<void> {
-  const existing = await listGraphDb(projectName)
-  const toDelete = existing.filter(g => !activeGraphs.includes(g))
+export async function cleanupOrphanGraphs(
+  projectPath: string,
+  projectName: string,
+  activeGraphs: string[],
+): Promise<void> {
+  const backend = await getGraphBackend(projectPath)
+  const existing = await backend.listGraphs(projectName)
+  const toDelete = existing.filter((g) => !activeGraphs.includes(g))
   for (const g of toDelete) {
     try {
-      await deleteGraphDb(projectName, g)
+      await backend.deleteGraph(projectName, g)
     } catch {
       // ignore
     }

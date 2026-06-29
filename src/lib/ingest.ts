@@ -27,8 +27,9 @@ import {
   findRelatedRejections,
   formatDismissalContext,
 } from "@/lib/counterexample-index"
-import type { ModificationProposal } from "@/stores/review-store"
+import type { ModificationProposal, OverflowEntry } from "@/stores/review-store"
 import type { FileNode } from "@/types/wiki"
+import { loadDataTypes } from "@/lib/data-types"
 
 // Legacy export kept for backward compatibility with existing diagnostic
 // tests. The live pipeline goes through parseFileBlocks() below, which
@@ -401,13 +402,14 @@ export async function autoIngest(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   folderContext?: string,
+  dataTypeId?: string,
 ): Promise<string[]> {
   // Single pipeline for all providers. The only provider-specific
   // divergence — how the model is asked to emit JSON — is isolated in
   // callModel(): HTTP providers use response_format, local-CLI coding
   // agents disable tools and rely on a "JSON only" prompt instruction.
   return withProjectLock(normalizePath(projectPath), () =>
-    autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext),
+    autoIngestImpl(projectPath, sourcePath, llmConfig, signal, folderContext, dataTypeId),
   )
 }
 
@@ -507,6 +509,7 @@ export async function autoIngestImpl(
   llmConfig: LlmConfig,
   signal?: AbortSignal,
   folderContext?: string,
+  dataTypeId?: string,
 ): Promise<string[]> {
   const pp = normalizePath(projectPath)
   const sp = normalizePath(sourcePath)
@@ -533,9 +536,8 @@ export async function autoIngestImpl(
     return cachedFiles
   }
 
-  // 1차 가공 is now performed at import time (sources-view → preprocessFile),
-  // so `sourceContent` here is already the markdown form that lives at
-  // `raw/sources/<name>.md`. No separate processed_1 step.
+  // Ingest receives the markdown/raw source artifact that lives under
+  // `raw/sources/<name>.md`. No separate processed_1 step runs here.
 
   // Build a compact db/ index string to inject into both prompts. We
   // skip empty / .gitkeep entries; the LLM only needs to see what real
@@ -584,24 +586,74 @@ export async function autoIngestImpl(
     const chunkLabel = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length} · ` : ""
 
     // ── Stage 1: Decomposition — extract concepts + relations ────────
-    activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1/3: Decomposing document...` })
+    // When a data type is selected, Stage 1 is replaced by a structured
+    // extraction pass: the LLM fills each field defined in the data type
+    // YAML and produces a single md file. The result is fed to Stage 2
+    // as a single section, identical to the standard path.
+    activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1/3: ${dataTypeId ? "Extracting structured fields..." : "Decomposing document..."}` })
 
     let stage1Raw = ""
-    try {
-      stage1Raw = await callModel(
-        llmConfig,
-        buildDecompositionPrompt(currentDbIndex, chunk, dismissalContext),
-        `Decompose this source document into SECTION blocks with their verbatim text.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${chunk}`,
-        signal,
-        pp,
-        16000,
-        false, // Stage 1 uses the SECTION delimiter format, not JSON.
-      )
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 failed: ${msg} — skipping chunk` })
-      failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (model call)", error: msg })
-      continue
+    if (dataTypeId) {
+      // ── Stage 1 replacement: structured extraction via data type ────
+      let dataType: import("@/lib/data-types").DataType | undefined
+      try {
+        const allDataTypes = await loadDataTypes(pp)
+        dataType = allDataTypes.find((dt) => dt.id === dataTypeId)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn(`[ingest] failed to load data types for "${dataTypeId}": ${msg}`)
+        throw new Error(`Data type "${dataTypeId}" could not be loaded: ${msg}`)
+      }
+
+      if (dataType) {
+        const fieldsBlock = Object.entries(dataType.fields)
+          .map(([k, v]) => `- **${k}**: ${v}`)
+          .join("\n")
+        const systemPrompt = `You are extracting structured information from a document according to a predefined schema.\n\nExtract the following fields from the document. If a field cannot be found, write "정보 없음" (or "N/A" if the document language is English).\n\nSchema: **${dataType.name}**\n${dataType.description ? `Description: ${dataType.description}\n` : ""}Fields to extract:\n${fieldsBlock}\n\nOutput a single markdown document with each field as a ## heading followed by the extracted content. Do NOT wrap your response in a code fence.`
+        try {
+          stage1Raw = await callModel(
+            llmConfig,
+            systemPrompt,
+            `Extract structured fields from this document.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n---\n\n${chunk}`,
+            signal,
+            pp,
+            16000,
+            false,
+          )
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 (data type extraction) failed: ${msg} — skipping chunk` })
+          failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (data type extraction)", error: msg })
+          continue
+        }
+        // Wrap the extracted md as a single SECTION so Stage 2 receives
+        // the same Stage1Section[] shape regardless of the code path.
+        stage1Raw = `---SECTION: ${fileName}---\n${stage1Raw}\n---END SECTION---`
+      } else {
+        const msg = `Data type "${dataTypeId}" not found. Ingest stopped instead of falling back to standard Stage 1.`
+        console.warn(`[ingest] ${msg}`)
+        activity.updateItem(activityId, { status: "error", detail: msg })
+        throw new Error(msg)
+      }
+    }
+
+    if (!stage1Raw) {
+      try {
+        stage1Raw = await callModel(
+          llmConfig,
+          buildDecompositionPrompt(currentDbIndex, chunk, dismissalContext),
+          `Decompose this source document into SECTION blocks with their verbatim text.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${chunk}`,
+          signal,
+          pp,
+          16000,
+          false, // Stage 1 uses the SECTION delimiter format, not JSON.
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 failed: ${msg} — skipping chunk` })
+        failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (model call)", error: msg })
+        continue
+      }
     }
 
     invoke("app_debug", { message: `[ingest:stage1] ${chunkLabel}file=${fileName} chars=${stage1Raw.length}` }).catch(() => {})
@@ -677,6 +729,29 @@ export async function autoIngestImpl(
     if (failures.length > 0) {
       const failureDetail = failures.map((f) => `${f.page_path || f.concept} [${f.graph || "no graph"}]: ${f.reason}`).join("; ")
       invoke("app_debug", { message: `[ingest:stage2:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length} failures=[${failureDetail}] raw_sample=${stage2Raw.slice(0, 500)}` }).catch(() => {})
+
+      // Build overflow entries from "already has 4 relation types" failures
+      // so the review card can offer "Create new graph" as an action.
+      const overflowMap = new Map<string, { newTypes: Set<string>; paths: string[] }>()
+      for (const f of failures) {
+        if (!f.graph || !f.reason.includes("already has 4 relation types")) continue
+        const typesMatch = f.reason.match(/new graph required for:\s*(.+)$/)
+        if (!typesMatch) continue
+        const newTypes = typesMatch[1].split(",").map((t) => t.trim()).filter(Boolean)
+        const entry = overflowMap.get(f.graph) ?? { newTypes: new Set(), paths: [] }
+        for (const t of newTypes) entry.newTypes.add(t)
+        if (f.page_path) entry.paths.push(f.page_path)
+        overflowMap.set(f.graph, entry)
+      }
+
+      const overflowEntries: OverflowEntry[] = Array.from(overflowMap.entries()).map(([graph, { newTypes, paths }]) => ({
+        graph,
+        newTypes: Array.from(newTypes),
+        suggestedGraph: `${graph}_ext`,
+        affectedPaths: paths,
+      }))
+
+      const hasOverflow = overflowEntries.length > 0
       allReviewItems.push({
         type: "suggestion",
         stage: "primary",
@@ -684,7 +759,16 @@ export async function autoIngestImpl(
         description: failures.map((f) => `- **${f.page_path || f.concept}** (${f.graph || "no graph"}): ${f.reason}`).join("\n"),
         sourcePath: sp,
         affectedPages: [],
-        options: [{ label: "Dismiss", action: "Dismiss" }],
+        overflowEntries: hasOverflow ? overflowEntries : undefined,
+        options: hasOverflow
+          ? [
+              ...overflowEntries.map((e) => ({
+                label: `Create "${e.suggestedGraph}"`,
+                action: `overflow:create:${e.graph}:${e.suggestedGraph}:${e.newTypes.join(",")}`,
+              })),
+              { label: "Dismiss", action: "Dismiss" },
+            ]
+          : [{ label: "Dismiss", action: "Dismiss" }],
       })
     }
 

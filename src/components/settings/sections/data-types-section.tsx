@@ -5,7 +5,7 @@ import { Plus, Edit2, Trash2, Save, X, FileJson, AlertCircle } from "lucide-reac
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useWikiStore } from "@/stores/wiki-store"
-import { loadQuestionTypes, type QuestionType } from "@/lib/question-types"
+import { loadDataTypes, type DataType } from "@/lib/data-types"
 import { writeFile, deleteFile, createDirectory, fileExists } from "@/commands/fs"
 import yaml from "js-yaml"
 
@@ -25,47 +25,44 @@ function rowsToFields(rows: FieldRow[]): Record<string, string> {
   return out
 }
 
-export function QuestionTypesSection() {
+export function DataTypesSection() {
   const { t } = useTranslation()
   const projectPath = useWikiStore((s) => s.project?.path ?? null)
-  const [types, setTypes] = useState<QuestionType[]>([])
-  const [editing, setEditing] = useState<QuestionType | null>(null)
+  const [types, setTypes] = useState<DataType[]>([])
+  const [editing, setEditing] = useState<DataType | null>(null)
   const [editingId, setEditingId] = useState("")
   const [isNew, setIsNew] = useState(false)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [promptTemplate, setPromptTemplate] = useState("")
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([{ key: "", value: "" }])
   const [error, setError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!projectPath) return
-    const qts = await loadQuestionTypes(projectPath)
-    setTypes(qts)
+    const dts = await loadDataTypes(projectPath)
+    setTypes(dts)
   }, [projectPath])
 
   useEffect(() => { reload() }, [reload])
 
-  const openEditor = (qt: QuestionType, asNew: boolean) => {
-    setEditing(qt)
-    setEditingId(qt.id)
+  const openEditor = (dt: DataType, asNew: boolean) => {
+    setEditing(dt)
+    setEditingId(dt.id)
     setIsNew(asNew)
-    setName(qt.name)
-    setDescription(qt.description)
-    setPromptTemplate(qt.promptTemplate ?? "")
-    setFieldRows(fieldsToRows(qt.fields))
+    setName(dt.name)
+    setDescription(dt.description)
+    setFieldRows(fieldsToRows(dt.fields))
     setError(null)
   }
 
-  const handleEdit = (qt: QuestionType) => openEditor(qt, false)
+  const handleEdit = (dt: DataType) => openEditor(dt, false)
 
   const handleNew = () => {
     openEditor({
-      id: "new_type",
-      name: "New Question Type",
+      id: "new_data_type",
+      name: "New Data Type",
       description: "",
-      fields: { answer: "Description" },
-      promptTemplate: "",
+      fields: { title: "Document title", summary: "Short summary" },
       _source: "project",
       _filePath: "",
     }, true)
@@ -76,13 +73,13 @@ export function QuestionTypesSection() {
     try {
       const id = editingId.trim() || "unnamed"
       const fields = rowsToFields(fieldRows)
-      const doc: Record<string, unknown> = { name, description, fields }
-      if (promptTemplate.trim()) doc.prompt_template = promptTemplate
+      if (Object.keys(fields).length === 0) throw new Error("fields must have at least one entry")
+      const doc = { name, description, fields }
       const yamlText = yaml.dump(doc)
 
       const savePath = editing._source === "user"
-        ? `${projectPath}/.llm-wiki/question-types/${id}.yaml`
-        : `${projectPath}/question_types/${id}.yaml`
+        ? `${projectPath}/.llm-wiki/data-types/${id}.yaml`
+        : `${projectPath}/data_types/${id}.yaml`
 
       const dir = savePath.substring(0, savePath.lastIndexOf("/"))
       if (!(await fileExists(dir))) await createDirectory(dir)
@@ -95,10 +92,10 @@ export function QuestionTypesSection() {
     }
   }
 
-  const handleDelete = async (qt: QuestionType) => {
+  const handleDelete = async (dt: DataType) => {
     if (!projectPath) return
-    if (!confirm(t("settings.questionTypes.confirmDelete", { id: qt.id }))) return
-    await deleteFile(qt._filePath)
+    if (!confirm(t("settings.dataTypes.confirmDelete", { id: dt.id }))) return
+    await deleteFile(dt._filePath)
     await reload()
   }
 
@@ -107,20 +104,18 @@ export function QuestionTypesSection() {
   const updateFieldRow = (i: number, patch: Partial<FieldRow>) =>
     setFieldRows((r) => r.map((row, idx) => idx === i ? { ...row, ...patch } : row))
 
-  const sourceLabel = (qt: QuestionType) => qt._source === "project" ? "project" : "user"
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-medium">{t("settings.questionTypes.title", "Question Types")}</h3>
+          <h3 className="text-lg font-medium">{t("settings.dataTypes.title", "Data Types")}</h3>
           <p className="text-sm text-muted-foreground">
-            {t("settings.questionTypes.description", "Manage specialized question types and their LLM templates.")}
+            {t("settings.dataTypes.description", "Define schemas for structured extraction during ingest. When selected, Stage 1 fills each field instead of free-form decomposition.")}
           </p>
         </div>
         <Button onClick={handleNew} size="sm" variant="outline" className="gap-2">
           <Plus className="h-4 w-4" />
-          {t("settings.questionTypes.add", "Add Type")}
+          {t("settings.dataTypes.add", "Add Type")}
         </Button>
       </div>
 
@@ -134,7 +129,7 @@ export function QuestionTypesSection() {
                 <Input
                   value={editingId}
                   onChange={(e) => setEditingId(e.target.value)}
-                  placeholder="type_id"
+                  placeholder="data_type_id"
                   className="h-7 font-mono text-sm w-48"
                 />
               ) : (
@@ -149,7 +144,7 @@ export function QuestionTypesSection() {
           {/* Name */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Name</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Question Type Name" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Data Type Name" />
           </div>
 
           {/* Description */}
@@ -161,7 +156,7 @@ export function QuestionTypesSection() {
           {/* Fields key-value editor */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Fields</label>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Fields to extract</label>
               <button
                 type="button"
                 onClick={addFieldRow}
@@ -176,14 +171,14 @@ export function QuestionTypesSection() {
                   <input
                     value={row.key}
                     onChange={(e) => updateFieldRow(i, { key: e.target.value })}
-                    placeholder="key"
-                    className="w-32 shrink-0 rounded border-0 bg-transparent px-1 py-0.5 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                    placeholder="field_key"
+                    className="w-36 shrink-0 rounded border-0 bg-transparent px-1 py-0.5 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                   />
                   <span className="text-muted-foreground text-xs">:</span>
                   <input
                     value={row.value}
                     onChange={(e) => updateFieldRow(i, { value: e.target.value })}
-                    placeholder="description"
+                    placeholder="what to extract"
                     className="min-w-0 flex-1 rounded border-0 bg-transparent px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                   />
                   <button
@@ -196,18 +191,6 @@ export function QuestionTypesSection() {
                 </div>
               ))}
             </div>
-          </div>
-
-          {/* Prompt template (multiline) */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Prompt Template <span className="normal-case font-normal">(optional)</span></label>
-            <textarea
-              value={promptTemplate}
-              onChange={(e) => setPromptTemplate(e.target.value)}
-              rows={5}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm font-mono shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="Optional LLM prompt template..."
-            />
           </div>
 
           {error && (
@@ -229,33 +212,36 @@ export function QuestionTypesSection() {
         </div>
       ) : (
         <div className="grid gap-3">
-          {types.map((qt) => (
+          {types.map((dt) => (
             <div
-              key={qt.id}
+              key={dt.id}
               className="group flex items-center justify-between rounded-lg border p-3 transition-colors hover:bg-accent/50"
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">{qt.name}</span>
+                  <span className="font-medium">{dt.name}</span>
                   <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase font-mono tracking-tighter">
-                    {qt.id}
+                    {dt.id}
                   </span>
                   <span className="text-[10px] text-muted-foreground/60 bg-muted/50 px-1.5 py-0.5 rounded font-mono tracking-tighter">
-                    {sourceLabel(qt)}
+                    {dt._source}
                   </span>
                 </div>
-                <p className="truncate text-xs text-muted-foreground mt-0.5">
-                  {qt.description}
+                {dt.description && (
+                  <p className="truncate text-xs text-muted-foreground mt-0.5">{dt.description}</p>
+                )}
+                <p className="text-xs text-muted-foreground/70 mt-0.5">
+                  {Object.keys(dt.fields).join(", ")}
                 </p>
               </div>
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-4">
-                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(qt)}>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(dt)}>
                   <Edit2 className="h-3.5 w-3.5" />
                 </Button>
                 <Button
                   variant="ghost" size="icon"
                   className="h-8 w-8 text-destructive hover:text-destructive"
-                  onClick={() => handleDelete(qt)}
+                  onClick={() => handleDelete(dt)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -264,7 +250,7 @@ export function QuestionTypesSection() {
           ))}
           {types.length === 0 && (
             <div className="text-center py-8 border border-dashed rounded-lg text-muted-foreground italic text-sm">
-              {t("settings.questionTypes.empty", "No specialized question types found.")}
+              {t("settings.dataTypes.empty", "No data types defined. Add one to enable structured extraction.")}
             </div>
           )}
         </div>

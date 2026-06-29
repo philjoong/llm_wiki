@@ -1,5 +1,5 @@
 {
   "bundle": {
-    "resources": {"pdfium/pdfium.dll": "pdfium/pdfium.dll", "../schema/question_types": "schema/question_types"}
+    "resources": {"pdfium/pdfium.dll": "pdfium/pdfium.dll", "../schema/question_types": "schema/question_types", "../schema/data_types": "schema/data_types"}
   }
 }

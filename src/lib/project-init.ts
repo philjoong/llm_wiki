@@ -1,4 +1,4 @@
-import { createDirectory, writeFile, seedQuestionTypes } from "@/commands/fs"
+import { createDirectory, writeFile, seedDataTypes, seedQuestionTypes } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
 import { ensureOriginalsGitignore } from "@/lib/originals"
 import { saveGraphPolicy, DEFAULT_POLICY } from "@/lib/graph-policy"
@@ -8,6 +8,7 @@ export const SYSTEM_PREFIX_DIRS = [
   "pending",
   "counterexamples",
   "question_types",
+  "data_types",
 ] as const
 
 export interface InitProjectOptions {
@@ -24,13 +25,14 @@ export async function initProject({ projectPath }: InitProjectOptions): Promise<
   }
 
   await seedQuestionTypes(pp)
+  await seedDataTypes(pp)
 
   await saveGraphPolicy(pp, DEFAULT_POLICY)
 
   // Seed .gitignore before `git init` so the initial commit doesn't
   // accidentally pick up an originals/ tree from a re-init scenario.
-  // (Existing projects pick up the same rules on first import via
-  // ensureOriginalsGitignore in sources-view.)
+  // Existing projects pick up the same rules when originals are first
+  // copied through ensureOriginalsGitignore().
   await ensureOriginalsGitignore(pp)
 
   await gitInit(pp)

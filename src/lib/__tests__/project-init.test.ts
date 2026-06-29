@@ -5,13 +5,15 @@ vi.mock("@/commands/fs", () => ({
   writeFile: vi.fn(),
   fileExists: vi.fn(),
   readFile: vi.fn(),
+  seedQuestionTypes: vi.fn(),
+  seedDataTypes: vi.fn(),
 }))
 
 vi.mock("@/commands/git", () => ({
   gitInit: vi.fn(),
 }))
 
-import { createDirectory, fileExists, readFile, writeFile } from "@/commands/fs"
+import { createDirectory, fileExists, readFile, seedDataTypes, seedQuestionTypes, writeFile } from "@/commands/fs"
 import { gitInit } from "@/commands/git"
 import {
   initProject,
@@ -22,6 +24,8 @@ const mockCreateDirectory = vi.mocked(createDirectory)
 const mockWriteFile = vi.mocked(writeFile)
 const mockFileExists = vi.mocked(fileExists)
 const mockReadFile = vi.mocked(readFile)
+const mockSeedQuestionTypes = vi.mocked(seedQuestionTypes)
+const mockSeedDataTypes = vi.mocked(seedDataTypes)
 const mockGitInit = vi.mocked(gitInit)
 
 beforeEach(() => {
@@ -29,6 +33,8 @@ beforeEach(() => {
   mockWriteFile.mockReset().mockResolvedValue(undefined)
   mockFileExists.mockReset().mockResolvedValue(false)
   mockReadFile.mockReset().mockResolvedValue("")
+  mockSeedQuestionTypes.mockReset().mockResolvedValue(undefined)
+  mockSeedDataTypes.mockReset().mockResolvedValue(undefined)
   mockGitInit.mockReset().mockResolvedValue(undefined)
 })
 
@@ -45,6 +51,7 @@ describe("initProject", () => {
       "pending",
       "counterexamples",
       "question_types",
+      "data_types",
     ])
   })
 

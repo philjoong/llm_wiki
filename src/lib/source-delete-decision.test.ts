@@ -9,7 +9,7 @@
  *   `deletingSource`     = "test.md"
  *   → must return { action: "skip" }, NOT { action: "delete" }
  *
- * Before the extraction, this branch in sources-view.tsx didn't check
+ * Before the extraction, this source-delete branch didn't check
  * whether the sole source was the one being deleted — it just saw
  * length === 1 and fell through to delete. findRelatedWikiPages'
  * over-eager matching (see fs.rs Strategy 3) could surface pages whose

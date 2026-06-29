@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button"
 import { useWikiStore, type NavSnapshot } from "@/stores/wiki-store"
 import { readFile, listDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { queryGraphDb, listGraphDb } from "@/commands/graph-db"
 import { loadPageGraphIndex, lookupPageGraphs } from "@/lib/page-graph-index"
 import { listDbFiles } from "@/lib/wiki-graph"
 import type { FileNode } from "@/types/wiki"
 import { FalkorCanvas } from "./falkor-canvas"
-import { parseFalkorQueryResult, assignColors, type CanvasData } from "@/lib/falkor-visualization"
+import { assignColors, type CanvasData } from "@/lib/falkor-visualization"
+import { getGraphBackend } from "@/lib/graph-backend"
+import { graphSnapshotToCanvas } from "@/lib/graph-backend/graph-result-mappers"
 import { cn } from "@/lib/utils"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { GraphsTab } from "@/components/layout/graphs-tab"
@@ -96,9 +97,8 @@ export function GraphView() {
     setLoading(true)
     setError(null)
     try {
-      const cypher = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r"
-      const result = await queryGraphDb(project.name, target, cypher)
-      const parsed = parseFalkorQueryResult(result)
+      const backend = await getGraphBackend(project.path)
+      const parsed = graphSnapshotToCanvas(await backend.queryGraph(project.name, target, { type: "all" }))
       const { data: colored, relationColorMap: colorMap } = assignColors(parsed)
       setGraphData(colored)
       setRelationColorMap(colorMap)
@@ -145,7 +145,8 @@ export function GraphView() {
   const refreshLiveGraphs = useCallback(async (forceAll = false) => {
     if (!project) return
     try {
-      const allGraphs = await listGraphDb(project.name)
+      const backend = await getGraphBackend(project.path)
+      const allGraphs = await backend.listGraphs(project.name)
       const cached = forceAll ? [] : loadCachedGraphs(project.name)
       const cachedSet = new Set(cached)
 
@@ -168,8 +169,7 @@ export function GraphView() {
       const results = await Promise.all(
         unchecked.map(async (g) => {
           try {
-            const res = await queryGraphDb(project.name, g, "MATCH (n) RETURN n LIMIT 1")
-            const parsed = parseFalkorQueryResult(res)
+            const parsed = graphSnapshotToCanvas(await backend.queryGraph(project.name, g, { type: "all" }))
             return parsed.nodes.length > 0 ? g : null
           } catch {
             return null
@@ -307,9 +307,8 @@ export function GraphView() {
     setLoading(true)
     setError(null)
     try {
-      const cypher = "MATCH (n) OPTIONAL MATCH (n)-[r]->(m) RETURN n, r"
-      const result = await queryGraphDb(project.name, graphName, cypher)
-      const parsed = parseFalkorQueryResult(result)
+      const backend = await getGraphBackend(project.path)
+      const parsed = graphSnapshotToCanvas(await backend.queryGraph(project.name, graphName, { type: "all" }))
       const { data: colored, relationColorMap: colorMap } = assignColors(parsed)
       setGraphData(colored)
       setRelationColorMap(colorMap)

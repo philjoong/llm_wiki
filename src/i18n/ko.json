@@ -5,7 +5,6 @@
   },
   "nav": {
     "wiki": "Chat",
-    "sources": "Raw",
     "graph": "그래프",
     "review": "수정 요청",
     "history": "히스토리",
@@ -42,19 +41,6 @@
       "nameAndPath": "이름과 경로를 모두 입력해주세요.",
       "schemaRequired": "스키마 파일을 선택해주세요."
     }
-  },
-  "sources": {
-    "title": "Raw 자료",
-    "import": "가져오기",
-    "importing": "가져오는 중...",
-    "noSources": "자료가 없습니다",
-    "importHint": "문서를 가져와서 wiki 구축을 시작하세요",
-    "importFiles": "파일 가져오기",
-    "ingest": "Wiki에 반영",
-    "delete": "자료 및 관련 wiki 페이지 삭제",
-    "deleteConfirm": "「{{name}}」 및 관련 wiki 페이지를 삭제하시겠습니까?\n\n이 작업은:\n- 자료 파일 삭제\n- 자료에서 생성된 wiki 페이지 삭제\n- index.md 갱신",
-    "sourceCount": "{{count}}개 자료",
-    "sourceCount_plural": "{{count}}개 자료"
   },
   "chat": {
     "placeholder": "wiki에 질문해보세요...",
@@ -114,6 +100,7 @@
       "output": "출력",
       "interface": "인터페이스",
       "questionTypes": "질문 유형",
+      "dataTypes": "데이터 유형",
       "falkordb": "FalkorDB",
       "about": "정보"
     },

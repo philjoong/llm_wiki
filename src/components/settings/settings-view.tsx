@@ -22,6 +22,7 @@ import { InterfaceSection } from "./sections/interface-section"
 import { AboutSection } from "./sections/about-section"
 import { FalkordbSection } from "./sections/falkordb-section"
 import { QuestionTypesSection } from "./sections/question-types-section"
+import { DataTypesSection } from "./sections/data-types-section"
 
 type CategoryId =
   | "llm"
@@ -29,6 +30,7 @@ type CategoryId =
   | "output"
   | "interface"
   | "question-types"
+  | "data-types"
   | "falkordb"
   | "about"
 
@@ -47,6 +49,7 @@ const CATEGORIES: Category[] = [
   { id: "output", labelKey: "settings.categories.output", icon: Languages },
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "question-types", labelKey: "settings.categories.questionTypes", icon: FileJson },
+  { id: "data-types", labelKey: "settings.categories.dataTypes", icon: FileJson },
   { id: "falkordb", labelKey: "settings.categories.falkordb", icon: Database },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
@@ -189,6 +192,8 @@ export function SettingsView() {
         return <InterfaceSection draft={draft} setDraft={setDraft} />
       case "question-types":
         return <QuestionTypesSection />
+      case "data-types":
+        return <DataTypesSection />
       case "falkordb":
         return <FalkordbSection />
       case "about":

@@ -1,8 +1,8 @@
 /**
  * Decide what to do with a wiki page when the user deletes a source
  * document. This is a pure function so the branching is unit-testable
- * in isolation — the previous inline version in sources-view.tsx was
- * entangled with React and silently harboured a data-loss bug (pages
+ * in isolation — the previous inline source-delete flow was entangled
+ * with React and silently harboured a data-loss bug (pages
  * whose sole source was NOT the one being deleted got wiped anyway,
  * because findRelatedWikiPages had returned them via a loose
  * substring match).

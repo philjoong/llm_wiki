@@ -41,6 +41,22 @@ export interface SchemaProposal {
   targetNode?: string // for attribute
 }
 
+/**
+ * One entry per overflow failure from Stage 2 validation.
+ * Carries enough info so the review card can offer "create new graph" as an
+ * actionable resolution instead of just Dismiss.
+ */
+export interface OverflowEntry {
+  /** The graph that was full. */
+  graph: string
+  /** The relation types that couldn't be added. */
+  newTypes: string[]
+  /** Suggested new graph name (e.g. "ui_nav_graph_2"). */
+  suggestedGraph: string
+  /** Pages that were skipped due to this overflow. */
+  affectedPaths: string[]
+}
+
 export interface ReviewItem {
   id: string
   type:
@@ -63,6 +79,9 @@ export interface ReviewItem {
   proposal?: ModificationProposal
   /** Schema-only payload — the new type being proposed. */
   schemaProposal?: SchemaProposal
+  /** Overflow-only payload — one entry per overflowed graph. Only present on
+   *  suggestion items that come from Stage 2 relation-type overflow. */
+  overflowEntries?: OverflowEntry[]
   title: string
   description: string
   sourcePath?: string

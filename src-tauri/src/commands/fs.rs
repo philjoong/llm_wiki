@@ -1259,6 +1259,57 @@ pub fn seed_question_types(project_path: String) -> Result<(), String> {
     })
 }
 
+#[tauri::command]
+pub fn seed_data_types(project_path: String) -> Result<(), String> {
+    run_guarded("seed_data_types", || {
+        let dest_dir = Path::new(&project_path).join("data_types");
+        fs::create_dir_all(&dest_dir)
+            .map_err(|e| format!("Failed to create data_types dir: {}", e))?;
+
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+        if let Some(resource_dir) = RESOURCE_DIR_HINT.get() {
+            candidates.push(resource_dir.join("schema").join("data_types"));
+            candidates.push(resource_dir.join("data_types"));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                candidates.push(exe_dir.join("schema").join("data_types"));
+                candidates.push(exe_dir.join("_up_").join("schema").join("data_types"));
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("schema").join("data_types"));
+        }
+
+        let src_dir = candidates.iter().find(|p| p.is_dir()).ok_or_else(|| {
+            format!(
+                "Could not locate schema/data_types. Tried: {}",
+                candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+            )
+        })?;
+
+        for entry in fs::read_dir(src_dir)
+            .map_err(|e| format!("Failed to read schema dir: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+            let src_path = entry.path();
+            let ext = src_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "yaml" && ext != "yml" {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let dest_path = dest_dir.join(&file_name);
+            if !dest_path.exists() {
+                fs::copy(&src_path, &dest_path).map_err(|e| {
+                    format!("Failed to copy {:?}: {}", file_name, e)
+                })?;
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Cheap existence check without reading or classifying the file.
 /// Returns true iff `path` refers to something on disk right now.
 #[tauri::command]
@@ -1299,14 +1350,14 @@ fn zip_add_dir_recursive(
 }
 
 /// Pack a project folder into a zip archive.
-/// Includes: db/, question_types/, .llm-wiki/, graphs.json (if present).
+/// Includes: db/, question_types/, data_types/, .llm-wiki/, graphs.json (if present).
 /// The frontend writes graphs.json before calling this, then deletes it after.
 #[tauri::command]
 pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(), String> {
     use std::io::Write;
 
     let root = Path::new(&project_path);
-    let include_dirs = ["db", "question_types", ".llm-wiki"];
+    let include_dirs = ["db", "question_types", "data_types", ".llm-wiki"];
     let extra_files = ["graphs.json"];
 
     let zip_file = fs::File::create(&dest_zip_path)

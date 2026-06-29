@@ -61,6 +61,10 @@ export async function seedQuestionTypes(projectPath: string): Promise<void> {
   return invoke<void>("seed_question_types", { projectPath })
 }
 
+export async function seedDataTypes(projectPath: string): Promise<void> {
+  return invoke<void>("seed_data_types", { projectPath })
+}
+
 export async function createProject(
   name: string,
   path: string,
@@ -80,6 +84,11 @@ export async function openProject(path: string): Promise<WikiProject> {
     await invoke("migrate_raw_sources", { projectPath: raw.path })
   } catch (err) {
     console.warn("[migrate] migrate_raw_sources failed:", err)
+  }
+  try {
+    await seedDataTypes(raw.path)
+  } catch (err) {
+    console.warn("[seed] seed_data_types failed:", err)
   }
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)

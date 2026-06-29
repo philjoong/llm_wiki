@@ -283,7 +283,7 @@ describe("Regression: the data-loss path in the user's diagnosis", () => {
     )
     expect(parseSources(afterSecondIngest)).toEqual(["test1.md", "test2.md"])
 
-    // Step 3: user later deletes test2.md. sources-view's deletion
+    // Step 3: user later deletes test2.md. The source-deletion
     // flow reads sources = ["test1.md", "test2.md"] (length 2),
     // recognises the page is shared, and keeps it on disk — no data
     // loss. Before this fix, step 2 would have clobbered sources to
@@ -394,7 +394,7 @@ describe("parseSourceRefs — accepts every form the LLM might emit", () => {
 
 describe("parseSources back-compat with new object form", () => {
   it("projects new-format object entries down to filenames only", () => {
-    // Legacy callers (e.g. sources-view's source-delete flow) should
+    // Legacy callers (e.g. the source-delete flow) should
     // continue to work even when reading a Stage-3 page whose
     // frontmatter uses the object form.
     const fm = [

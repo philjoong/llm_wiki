@@ -26,6 +26,7 @@ import {
   counterexampleModification,
 } from "@/lib/modification-resolve"
 import { approveSchemaChange, rejectSchemaChange } from "@/lib/schema-resolve"
+import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
 import { PendingView } from "@/components/review/pending-view"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
@@ -134,6 +135,37 @@ export function ReviewView() {
       } catch (err) {
         console.error("[review] modification action failed:", err)
         resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return
+    }
+
+    // overflow:create:{sourceGraph}:{newGraph}:{type1,type2,...}
+    if (action.startsWith("overflow:create:") && project) {
+      const parts = action.slice("overflow:create:".length).split(":")
+      // parts = [sourceGraph, newGraph, "type1,type2,..."]
+      if (parts.length >= 3) {
+        const [, newGraph, typesStr] = parts
+        const newTypes = typesStr.split(",").map((t) => t.trim()).filter(Boolean)
+        try {
+          const policy = await loadGraphPolicy(pp)
+          if (!policy.managedGraphs.includes(newGraph)) {
+            const updatedPolicy = {
+              ...policy,
+              managedGraphs: [...policy.managedGraphs, newGraph],
+              graphRelationTypes: {
+                ...policy.graphRelationTypes,
+                [newGraph]: newTypes.slice(0, 4),
+              },
+            }
+            await saveGraphPolicy(pp, updatedPolicy)
+          }
+          resolveItem(id, `Created graph "${newGraph}"`)
+        } catch (err) {
+          console.error("[review] overflow:create failed:", err)
+          resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      } else {
+        resolveItem(id, action)
       }
       return
     }
@@ -414,6 +446,20 @@ function ReviewCard({
 
       {item.type === "schema" && item.schemaProposal && (
         <SchemaProposalView proposal={item.schemaProposal} />
+      )}
+
+      {item.overflowEntries && item.overflowEntries.length > 0 && (
+        <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-1.5">
+          {item.overflowEntries.map((e) => (
+            <div key={e.graph}>
+              <span className="font-mono font-semibold">{e.graph}</span>
+              <span className="text-muted-foreground"> is full — new types: </span>
+              <span className="font-mono">{e.newTypes.join(", ")}</span>
+              <span className="text-muted-foreground"> → suggest graph: </span>
+              <span className="font-mono font-medium">{e.suggestedGraph}</span>
+            </div>
+          ))}
+        </div>
       )}
 
       {!item.resolved ? (

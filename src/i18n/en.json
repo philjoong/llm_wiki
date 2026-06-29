@@ -5,7 +5,6 @@
   },
   "nav": {
     "wiki": "Chat",
-    "sources": "Raw",
     "graph": "Graph",
     "review": "Modifications",
     "history": "History",
@@ -42,19 +41,6 @@
       "nameAndPath": "Please enter both a name and a path.",
       "schemaRequired": "Please choose a schema file."
     }
-  },
-  "sources": {
-    "title": "Raw Sources",
-    "import": "Import",
-    "importing": "Importing...",
-    "noSources": "No sources yet",
-    "importHint": "Import documents to start building your wiki",
-    "importFiles": "Import Files",
-    "ingest": "Ingest",
-    "delete": "Delete source and related wiki pages",
-    "deleteConfirm": "Delete \"{{name}}\" and its related wiki pages?\n\nThis will:\n- Delete the source file\n- Delete wiki pages generated from this source\n- Update index.md",
-    "sourceCount": "{{count}} source",
-    "sourceCount_plural": "{{count}} sources"
   },
   "chat": {
     "placeholder": "Ask about your wiki...",
@@ -114,6 +100,7 @@
       "output": "Output",
       "interface": "Interface",
       "questionTypes": "Question Types",
+      "dataTypes": "Data Types",
       "falkordb": "FalkorDB",
       "about": "About"
     },

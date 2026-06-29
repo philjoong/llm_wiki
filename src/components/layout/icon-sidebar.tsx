@@ -18,8 +18,10 @@ import { normalizePath, getFileName } from "@/lib/path-utils"
 import { writeFile, fileExists } from "@/commands/fs"
 import { gitCommit } from "@/commands/git"
 import { fetchUrlAsMarkdown } from "@/lib/url-import"
+import { loadDataTypes, type DataType } from "@/lib/data-types"
 
 type NavView = WikiState["activeView"]
+type PendingInjection = { rels: string[]; source: "file" | "url" }
 
 const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = [
   { view: "wiki", icon: FileText, labelKey: "nav.wiki" },
@@ -45,6 +47,55 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const [injectingUrl, setInjectingUrl] = useState(false)
   const [urlDialogOpen, setUrlDialogOpen] = useState(false)
   const [urlValue, setUrlValue] = useState("")
+  const [dataTypes, setDataTypes] = useState<DataType[]>([])
+  const [selectedDataTypeId, setSelectedDataTypeId] = useState("")
+  const [pendingInjection, setPendingInjection] = useState<PendingInjection | null>(null)
+  const [dataTypeDialogOpen, setDataTypeDialogOpen] = useState(false)
+
+  async function enqueueWithOptionalDataType(rels: string[], source: PendingInjection["source"]) {
+    if (!project) return
+    let available: DataType[] = []
+    try {
+      available = await loadDataTypes(normalizePath(project.path))
+    } catch (err) {
+      console.warn("Failed to load data types:", err)
+    }
+
+    if (available.length === 0) {
+      for (const rel of rels) {
+        await enqueueIngest(project.id, rel)
+      }
+      return
+    }
+
+    setDataTypes(available)
+    setSelectedDataTypeId("")
+    setPendingInjection({ rels, source })
+    setDataTypeDialogOpen(true)
+  }
+
+  async function confirmDataTypeInjection() {
+    if (!project || !pendingInjection) return
+    const rels = pendingInjection.rels
+    const dataTypeId = selectedDataTypeId || undefined
+    setInjecting(pendingInjection.source === "file")
+    setInjectingUrl(pendingInjection.source === "url")
+    try {
+      for (const rel of rels) {
+        await enqueueIngest(project.id, rel, "", dataTypeId)
+      }
+      setDataTypeDialogOpen(false)
+      setPendingInjection(null)
+      setSelectedDataTypeId("")
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error("Failed to enqueue ingest:", err)
+      window.alert(`Failed to enqueue ingest:\n\n${msg}`)
+    } finally {
+      setInjecting(false)
+      setInjectingUrl(false)
+    }
+  }
 
   async function handleInject() {
     if (!project || injecting) return
@@ -59,12 +110,12 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
     const paths = Array.isArray(selected) ? selected : [selected]
     setInjecting(true)
     try {
-      for (const filePath of paths) {
-        const rel = filePath.startsWith(pp)
+      const rels = paths.map((filePath) =>
+        filePath.startsWith(pp)
           ? filePath.slice(pp.length).replace(/^[\\/]/, "")
-          : filePath
-        await enqueueIngest(project.id, rel)
-      }
+          : filePath,
+      )
+      await enqueueWithOptionalDataType(rels, "file")
     } catch (err) {
       console.error("Failed to enqueue ingest:", err)
     } finally {
@@ -92,7 +143,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
       } catch (gitErr) {
         console.error("Failed to auto-commit:", gitErr)
       }
-      await enqueueIngest(project.id, rel)
+      await enqueueWithOptionalDataType([rel], "url")
       setUrlDialogOpen(false)
       setUrlValue("")
     } catch (err) {
@@ -120,6 +171,13 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
     const interval = setInterval(check, 30000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    setDataTypeDialogOpen(false)
+    setPendingInjection(null)
+    setSelectedDataTypeId("")
+    setDataTypes([])
+  }, [project?.id])
 
   return (
     <TooltipProvider delay={300}>
@@ -273,6 +331,57 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
             </Button>
             <Button onClick={handleInjectUrl} disabled={injectingUrl || !urlValue.trim()}>
               {injectingUrl ? t("fileTree.injecting") : t("fileTree.inject")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={dataTypeDialogOpen}
+        onOpenChange={(o) => {
+          setDataTypeDialogOpen(o)
+          if (!o) {
+            setPendingInjection(null)
+            setSelectedDataTypeId("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Select data type</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="inject-data-type">Data type</Label>
+            <select
+              id="inject-data-type"
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              value={selectedDataTypeId}
+              onChange={(e) => setSelectedDataTypeId(e.target.value)}
+              disabled={injecting || injectingUrl}
+            >
+              <option value="">No data type</option>
+              {dataTypes.map((dt) => (
+                <option key={dt.id} value={dt.id}>
+                  {dt.name} ({dt.id})
+                </option>
+              ))}
+            </select>
+            {selectedDataTypeId && (
+              <p className="text-xs text-muted-foreground">
+                {dataTypes.find((dt) => dt.id === selectedDataTypeId)?.description}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDataTypeDialogOpen(false)}
+              disabled={injecting || injectingUrl}
+            >
+              {t("project.cancel")}
+            </Button>
+            <Button onClick={confirmDataTypeInjection} disabled={injecting || injectingUrl}>
+              {injecting || injectingUrl ? t("fileTree.injecting") : t("fileTree.inject")}
             </Button>
           </DialogFooter>
         </DialogContent>

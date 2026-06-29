@@ -8,8 +8,8 @@
  * discards the result, wasting topK slots.
  *
  * This helper consolidates that two-step cleanup so every wiki-page
- * delete path (source-delete cascade in sources-view, orphan-page
- * delete in lint-view, cancelled-ingest cleanup in ingest-queue)
+ * delete path (source-delete cascade, orphan-page delete in lint-view,
+ * cancelled-ingest cleanup in ingest-queue)
  * uses the SAME slug derivation and order of operations. Without
  * this, each call site reinvented the slug regex slightly
  * differently (`getFileName().replace(/\.md$/, "")` vs

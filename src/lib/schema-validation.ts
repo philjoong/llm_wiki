@@ -1,4 +1,4 @@
-import { queryGraphDb } from "@/commands/graph-db"
+import { getGraphBackend } from "@/lib/graph-backend"
 import { loadGraphPolicy } from "./graph-policy"
 import type { GraphNode, GraphEdge } from "./wiki-graph"
 import type { SchemaProposal } from "@/stores/review-store"
@@ -19,31 +19,13 @@ export async function detectSchemaDrift(
 
   // 2. Fetch existing types from each graph
   const existingLabels = new Set<string>()
-  const existingRelTypes = new Set<string>()
+  const backend = await getGraphBackend(projectPath)
 
   for (const gName of managedGraphs) {
     try {
-      // Get Labels
-      const labelsRes = await queryGraphDb(projectName, gName, "CALL db.labels()")
-      // FalkorDB returns results as an array of rows. 
-      // Each row is an array of values.
-      // CALL db.labels() returns [[label1], [label2], ...]
-      if (Array.isArray(labelsRes)) {
-        labelsRes.forEach((row: any) => {
-          if (Array.isArray(row) && row[0]) {
-            existingLabels.add(String(row[0]).toLowerCase())
-          }
-        })
-      }
-
-      // Get Relationship Types
-      const relTypesRes = await queryGraphDb(projectName, gName, "CALL db.relationshipTypes()")
-      if (Array.isArray(relTypesRes)) {
-        relTypesRes.forEach((row: any) => {
-          if (Array.isArray(row) && row[0]) {
-            existingRelTypes.add(String(row[0]).toLowerCase())
-          }
-        })
+      const snapshot = await backend.exportGraph(projectName, gName)
+      for (const node of snapshot.nodes) {
+        for (const label of node.labels) existingLabels.add(label.toLowerCase())
       }
     } catch (err) {
       // Graph might not exist yet, which is fine

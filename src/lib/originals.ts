@@ -45,9 +45,8 @@ const GITIGNORE_HEADER = "# llm-wiki — keep binary originals and preprocess ca
  * `injectOriginalRef`) so the wiki can link back to it.
  *
  * If a file already exists at the natural destination, a date / counter
- * suffix is appended to the filename — same convention as
- * `getUniqueDestPath` in sources-view.tsx, so re-imports of the same
- * filename don't clobber prior copies.
+ * suffix is appended to the filename so re-imports of the same filename
+ * don't clobber prior copies.
  */
 export async function copyOriginal(
   projectPath: string,

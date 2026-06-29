@@ -37,7 +37,8 @@ export function startClipWatcher() {
 
           // Enqueue (not auto-ingest directly) so the task lands in the
           // persisted queue, shows up in the activity panel, and survives
-          // a UI refresh. Same path used by file imports from sources-view.
+          // a UI refresh. This is the same queue path used by manual raw
+          // injection from the sidebar.
           // Pass the project's stable UUID — the queue looks up the
           // current filesystem path from the registry at run time.
           const llmConfig = store.llmConfig

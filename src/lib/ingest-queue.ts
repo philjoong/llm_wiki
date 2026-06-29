@@ -15,6 +15,9 @@ export interface IngestTask {
   projectId: string
   sourcePath: string  // relative to project: "raw/sources/folder/file.pdf"
   folderContext: string  // e.g. "AI-Research > papers" or ""
+  /** Optional data type id — when set, Stage 1 is replaced by a structured
+   *  extraction pass that fills each field defined in the data type YAML. */
+  dataTypeId?: string
   status: "pending" | "processing" | "done" | "failed"
   addedAt: number
   error: string | null
@@ -116,6 +119,7 @@ export async function enqueueIngest(
   projectId: string,
   sourcePath: string,
   folderContext: string = "",
+  dataTypeId?: string,
 ): Promise<string> {
   if (!currentProjectId || currentProjectId !== projectId) {
     throw new Error(
@@ -128,6 +132,7 @@ export async function enqueueIngest(
     projectId,
     sourcePath,
     folderContext,
+    dataTypeId,
     status: "pending",
     addedAt: Date.now(),
     error: null,
@@ -148,7 +153,7 @@ export async function enqueueIngest(
  */
 export async function enqueueBatch(
   projectId: string,
-  files: Array<{ sourcePath: string; folderContext: string }>,
+  files: Array<{ sourcePath: string; folderContext: string; dataTypeId?: string }>,
 ): Promise<string[]> {
   if (!currentProjectId || currentProjectId !== projectId) {
     throw new Error(
@@ -163,6 +168,7 @@ export async function enqueueBatch(
       projectId,
       sourcePath: file.sourcePath,
       folderContext: file.folderContext,
+      dataTypeId: file.dataTypeId,
       status: "pending",
       addedAt: Date.now(),
       error: null,
@@ -496,7 +502,7 @@ async function processNext(projectId: string): Promise<void> {
   lastWrittenFiles = []
 
   try {
-    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, currentAbortController.signal, next.folderContext)
+    const writtenFiles = await autoIngest(pp, fullSourcePath, llmConfig, currentAbortController.signal, next.folderContext, next.dataTypeId)
     // Stale-context guard: project switched during the long LLM call.
     // Bail without mutating queue or writing to disk — pauseQueue has
     // already persisted the correct state to the old project's file,

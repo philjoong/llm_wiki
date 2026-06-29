@@ -7,7 +7,7 @@ import {
   type GraphPolicy,
 } from "@/lib/graph-policy"
 import { loadPageGraphIndex, findPagesByGraph } from "@/lib/page-graph-index"
-import { deleteGraphDb, queryGraphDb } from "@/commands/graph-db"
+import { getGraphBackend } from "@/lib/graph-backend"
 
 interface GraphsTabProps {
   onPolicySaved?: (managedGraphs: string[]) => void
@@ -162,7 +162,8 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
 
     // Delete from FalkorDB (best-effort — graph may not exist yet)
     try {
-      await deleteGraphDb(projectName, graphName)
+      const backend = await getGraphBackend(projectPath)
+      await backend.deleteGraph(projectName, graphName)
     } catch {
       // Graph may not exist in FalkorDB yet; proceed with policy cleanup
     }
@@ -211,11 +212,8 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
 
     // Rename edges in FalkorDB: copy old edges as new type, then delete old
     try {
-      await queryGraphDb(
-        projectName,
-        graphName,
-        `MATCH (a)-[r:${oldValue}]->(b) MERGE (a)-[:${newValue}]->(b) DELETE r`,
-      )
+      const backend = await getGraphBackend(projectPath)
+      await backend.renameRelationType(projectName, graphName, oldValue, newValue)
     } catch {
       // Graph may not exist yet in FalkorDB; proceed with policy update
     }
@@ -249,11 +247,8 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
 
     // Delete edges of this type from FalkorDB
     try {
-      await queryGraphDb(
-        projectName,
-        graphName,
-        `MATCH ()-[r:${typeName}]->() DELETE r`,
-      )
+      const backend = await getGraphBackend(projectPath)
+      await backend.deleteRelationType(projectName, graphName, typeName)
     } catch {
       // Graph may not exist yet in FalkorDB; proceed with policy update
     }

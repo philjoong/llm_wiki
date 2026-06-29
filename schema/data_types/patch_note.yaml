@@ -1,0 +1,8 @@
+name: "Patch Note"
+description: "Extracts version, release date, balance changes, fixes, and new content from game patch notes."
+fields:
+  version: "Patch version number"
+  release_date: "Release or effective date"
+  balance_changes: "Balance changes by character, skill, item, system, or mode"
+  bug_fixes: "Bug fixes"
+  new_content: "Newly added content"

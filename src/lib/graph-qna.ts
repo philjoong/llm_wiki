@@ -1,4 +1,4 @@
-import { queryGraphDb } from "@/commands/graph-db"
+import { getGraphBackend, type GraphSnapshot } from "@/lib/graph-backend"
 import { loadGraphPolicy } from "@/lib/graph-policy"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { streamChat } from "./llm-client"
@@ -7,21 +7,13 @@ import { extractJsonObject } from "./sweep-reviews"
 export interface CypherQueryResult {
   graphName: string
   query: string
-  result: any
+  result: GraphSnapshot
   reasoning: string
 }
 
 export interface GraphSelectionResponse {
   relevantGraphs: string[]
   reasoning: string
-}
-
-export interface CypherGenerationResponse {
-  queries: Array<{
-    graphName: string
-    cypher: string
-    reasoning: string
-  }>
 }
 
 /**
@@ -40,22 +32,19 @@ export async function getGraphContext(
   const selectedGraphs = await selectRelevantGraphs(question, policy.managedGraphs, llmConfig)
   if (selectedGraphs.length === 0) return []
 
-  // 2. Generate Cypher queries
-  const queryPlan = await generateCypherQueries(question, selectedGraphs, llmConfig)
-  
-  // 3. Execute queries
+  const backend = await getGraphBackend(projectPath)
   const results: CypherQueryResult[] = []
-  for (const plan of queryPlan.queries) {
+  for (const graphName of selectedGraphs) {
     try {
-      const result = await queryGraphDb(projectName, plan.graphName, plan.cypher)
+      const result = await backend.queryGraph(projectName, graphName, { type: "node", nodeName: question })
       results.push({
-        graphName: plan.graphName,
-        query: plan.cypher,
+        graphName,
+        query: `GraphQuery.node(${question})`,
         result,
-        reasoning: plan.reasoning,
+        reasoning: "Selected by graph relevance prompt; queried through the active graph backend.",
       })
     } catch (err) {
-      console.warn(`[GraphQna] Cypher execution failed for graph ${plan.graphName}:`, err)
+      console.warn(`[GraphQna] graph query failed for graph ${graphName}:`, err)
     }
   }
 
@@ -83,30 +72,6 @@ async function selectRelevantGraphs(
 
   const response = await callLlmJson<GraphSelectionResponse>(llmConfig, prompt)
   return response?.relevantGraphs ?? []
-}
-
-async function generateCypherQueries(
-  question: string,
-  selectedGraphs: string[],
-  llmConfig: LlmConfig,
-): Promise<CypherGenerationResponse> {
-  const prompt = [
-    "You are a Cypher query generator for FalkorDB.",
-    "Generate Cypher queries to answer the user's question using the selected graphs.",
-    "The graphs use standard knowledge graph nodes (Page, Entity, Concept) and relationships.",
-    `Selected graphs: ${selectedGraphs.join(", ")}`,
-    "",
-    "User question:",
-    question,
-    "",
-    "Respond with ONLY a JSON object in this shape:",
-    '{"queries": [{"graphName": "name", "cypher": "MATCH ... RETURN ...", "reasoning": "..."}]}',
-    "Do NOT prefix graph names in the Cypher query itself; the system handles isolation.",
-    "Do not wrap in markdown fences.",
-  ].join("\n")
-
-  const response = await callLlmJson<CypherGenerationResponse>(llmConfig, prompt)
-  return response ?? { queries: [] }
 }
 
 async function callLlmJson<T>(llmConfig: LlmConfig, prompt: string): Promise<T | null> {

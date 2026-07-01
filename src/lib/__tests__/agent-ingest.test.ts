@@ -55,14 +55,6 @@ vi.mock("@/lib/ingest-cache", () => ({
   saveIngestCache: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock("@/commands/git", () => ({
-  gitCommit: vi.fn().mockResolvedValue({}),
-}))
-
-vi.mock("@/lib/auto-commit", () => ({
-  formatIngestMessage: vi.fn().mockReturnValue("ingest commit"),
-}))
-
 vi.mock("@/stores/review-store", () => ({
   useReviewStore: {
     getState: vi.fn().mockReturnValue({ addItems: vi.fn() }),

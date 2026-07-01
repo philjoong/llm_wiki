@@ -45,3 +45,13 @@ export function findPagesByGraph(index: PageGraphIndex, graphName: string): stri
     .filter(([, graphs]) => graphs.includes(graphName))
     .map(([pagePath]) => pagePath)
 }
+
+/** Remove a page_path entry entirely from the index and persist. */
+export async function removePageFromIndex(projectPath: string, pagePath: string): Promise<void> {
+  const pp = normalizePath(projectPath)
+  const current = await loadPageGraphIndex(pp)
+  if (!(pagePath in current)) return
+  delete current[pagePath]
+  await createDirectory(`${pp}/.llm-wiki`)
+  await writeFile(`${pp}/${INDEX_PATH}`, JSON.stringify(current, null, 2))
+}

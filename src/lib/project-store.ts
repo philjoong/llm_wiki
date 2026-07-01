@@ -166,7 +166,11 @@ const FALKORDB_URL_KEY = "falkordbUrl"
 
 export async function saveFalkordbUrl(url: string): Promise<void> {
   const store = await getStore()
-  await store.set(FALKORDB_URL_KEY, url)
+  if (url) {
+    await store.set(FALKORDB_URL_KEY, url)
+  } else {
+    await store.delete(FALKORDB_URL_KEY)
+  }
 }
 
 export async function loadFalkordbUrl(): Promise<string | null> {

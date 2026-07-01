@@ -117,6 +117,8 @@ export interface WikiState {
   pendingGraphRestore: { graphTab: "knowledge" | "files"; graphDbFile: string | null } | null
   /** Inline reference preview shown to the right of the Chat panel. */
   chatReferencePreview: { path: string; highlightSection?: string } | null
+  /** Absolute path of the file shown in the "Edit in Wiki" modal editor; null = closed. */
+  editingFile: string | null
 
   setProject: (project: WikiProject | null) => void
   setFileTree: (tree: FileNode[]) => void
@@ -136,6 +138,7 @@ export interface WikiState {
   setPendingOpenFile: (path: string | null) => void
   setPendingGraphRestore: (v: WikiState["pendingGraphRestore"]) => void
   setChatReferencePreview: (preview: WikiState["chatReferencePreview"]) => void
+  setEditingFile: (path: string | null) => void
   goBack: () => void
 }
 
@@ -165,6 +168,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   navHistory: [],
   pendingGraphRestore: null,
   chatReferencePreview: null,
+  editingFile: null,
 
   setProject: (project) => set({ project }),
   setFileTree: (fileTree) => set({ fileTree }),
@@ -202,6 +206,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   setPendingOpenFile: (pendingOpenFile) => set({ pendingOpenFile }),
   setPendingGraphRestore: (pendingGraphRestore) => set({ pendingGraphRestore }),
   setChatReferencePreview: (chatReferencePreview) => set({ chatReferencePreview }),
+  setEditingFile: (editingFile) => set({ editingFile }),
   goBack: () => set((state) => {
     if (state.navHistory.length === 0) return {}
     const prev = state.navHistory[state.navHistory.length - 1]

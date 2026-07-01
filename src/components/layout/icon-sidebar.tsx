@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, Settings, ClipboardList, History, Network, DatabaseZap, Link2, ChevronLeft, FolderOpen,
+  FileText, Settings, ClipboardList, History, Network, DatabaseZap, Link2, ChevronLeft, FolderOpen, Upload,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
@@ -14,11 +14,11 @@ import { useTranslation } from "react-i18next"
 import type { WikiState } from "@/stores/wiki-store"
 import { open } from "@tauri-apps/plugin-dialog"
 import { enqueueIngest } from "@/lib/ingest-queue"
-import { normalizePath, getFileName } from "@/lib/path-utils"
+import { normalizePath } from "@/lib/path-utils"
 import { writeFile, fileExists } from "@/commands/fs"
-import { gitCommit } from "@/commands/git"
 import { fetchUrlAsMarkdown } from "@/lib/url-import"
 import { loadDataTypes, type DataType } from "@/lib/data-types"
+import { SyncConflictDialog } from "@/components/project/sync-conflict-dialog"
 
 type NavView = WikiState["activeView"]
 type PendingInjection = { rels: string[]; source: "file" | "url" }
@@ -32,9 +32,11 @@ const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = 
 
 interface IconSidebarProps {
   onSwitchProject: () => void
+  onSync: () => Promise<void>
+  isLocalOnly: boolean
 }
 
-export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
+export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSidebarProps) {
   const { t } = useTranslation()
   const activeView = useWikiStore((s) => s.activeView)
   const setActiveView = useWikiStore((s) => s.setActiveView)
@@ -51,6 +53,9 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   const [selectedDataTypeId, setSelectedDataTypeId] = useState("")
   const [pendingInjection, setPendingInjection] = useState<PendingInjection | null>(null)
   const [dataTypeDialogOpen, setDataTypeDialogOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [conflictFiles, setConflictFiles] = useState<string[]>([])
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
 
   async function enqueueWithOptionalDataType(rels: string[], source: PendingInjection["source"]) {
     if (!project) return
@@ -97,6 +102,24 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
     }
   }
 
+  async function handleSyncToRemote() {
+    if (!project || syncing || isLocalOnly) return
+    setSyncing(true)
+    try {
+      await onSync()
+    } catch (err) {
+      const e = err as Error & { conflicts?: string[] }
+      if (e.message === "rebase-conflict" && e.conflicts && e.conflicts.length > 0) {
+        setConflictFiles(e.conflicts)
+        setConflictDialogOpen(true)
+      } else {
+        window.alert(`Sync failed: ${err}`)
+      }
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   async function handleInject() {
     if (!project || injecting) return
     const pp = normalizePath(project.path)
@@ -138,11 +161,6 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
       const rel = await uniqueSourceRel(pp, baseName)
       const destPath = `${pp}/${rel}`
       await writeFile(destPath, markdown)
-      try {
-        await gitCommit(pp, `ingest: add ${getFileName(destPath)} (url)`, [rel])
-      } catch (gitErr) {
-        console.error("Failed to auto-commit:", gitErr)
-      }
       await enqueueWithOptionalDataType([rel], "url")
       setUrlDialogOpen(false)
       setUrlValue("")
@@ -180,6 +198,7 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
   }, [project?.id])
 
   return (
+    <>
     <TooltipProvider delay={300}>
       <div className="flex h-full w-12 flex-col items-center border-r bg-muted/50 py-2">
         {/* Back button */}
@@ -287,6 +306,20 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
               {updateBannerVisible ? t("nav.updateAvailableSuffix") : ""}
             </TooltipContent>
           </Tooltip>
+          {project && !isLocalOnly && (
+            <Tooltip>
+              <TooltipTrigger
+                onClick={handleSyncToRemote}
+                disabled={syncing}
+                className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors text-muted-foreground hover:bg-accent/50 hover:text-accent-foreground disabled:opacity-50 disabled:cursor-default ${syncing ? "animate-pulse" : ""}`}
+              >
+                <Upload className="h-5 w-5" />
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                {syncing ? "Syncing..." : "Sync to Remote"}
+              </TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger
               onClick={onSwitchProject}
@@ -387,6 +420,27 @@ export function IconSidebar({ onSwitchProject }: IconSidebarProps) {
         </DialogContent>
       </Dialog>
     </TooltipProvider>
+
+    {conflictDialogOpen && project && (
+      <SyncConflictDialog
+        open={conflictDialogOpen}
+        onDone={(aborted) => {
+          setConflictDialogOpen(false)
+          setConflictFiles([])
+          if (!aborted) {
+            // Push succeeded — nothing else needed, just close
+          }
+        }}
+        projectPath={project.path}
+        initialConflicts={conflictFiles}
+        remoteUrl={(() => {
+          const base = (import.meta as { env: Record<string, string> }).env.VITE_GIT_REPO_URL || ""
+          const token = (import.meta as { env: Record<string, string> }).env.VITE_GIT_TOKEN
+          return token ? `https://oauth2:${encodeURIComponent(token)}@${base}` : `https://${base}`
+        })()}
+      />
+    )}
+    </>
   )
 }
 

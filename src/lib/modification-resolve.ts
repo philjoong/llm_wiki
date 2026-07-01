@@ -20,15 +20,12 @@
  *   - Counterexample — move the proposal to `counterexamples/<slug>.md`,
  *                commit. Stage 5 will inject these back into the prompt.
  *
- * Every handler ends in a single git commit. We rely on `commitModification`
- * (auto-commit.ts) to take the per-project lock so concurrent ingest /
- * modification commits serialize safely.
+ * File moves are handled here; git commits are deferred to Sync to Remote.
  */
 
 import { readFile, writeFile, deleteFile, fileExists } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 import { mergeSourceRefsIntoContent } from "@/lib/sources-merge"
-import { commitModification } from "@/lib/auto-commit"
 import type { ModificationProposal } from "@/stores/review-store"
 import type { SourceRef } from "@/lib/source-ref"
 
@@ -58,11 +55,6 @@ function primarySourceRef(proposal: ModificationProposal): SourceRef {
   return proposal.sourceRefs[0] ?? { file: "(unknown)" }
 }
 
-/**
- * Approve: write the parked draft into the real target, source-merge with
- * whatever's currently on disk so older sources aren't lost, then drop
- * the draft and commit.
- */
 export async function approveModification(
   projectPath: string,
   proposal: ModificationProposal,
@@ -77,15 +69,8 @@ export async function approveModification(
 
   await writeFile(targetAbs, merged)
   await deleteFile(draftAbs)
-
-  await commitModification(pp, "approve", proposal.targetPath, primarySourceRef(proposal))
 }
 
-/**
- * Discard: the existing page is correct, the proposal is wrong. Drop the
- * draft, append a one-line JSONL entry to `.llm-wiki/rejection-log.jsonl`
- * for Stage 5's prompt-context injection, and commit.
- */
 export async function discardModification(
   projectPath: string,
   proposal: ModificationProposal,
@@ -111,15 +96,8 @@ export async function discardModification(
   if (await fileExists(draftAbs)) {
     await deleteFile(draftAbs)
   }
-
-  await commitModification(pp, "discard", proposal.targetPath, sr)
 }
 
-/**
- * Pending: park the proposal under `pending/<slug>.md` for the user to
- * triage later (Stage 5 will surface a pending-view sidebar). Commits
- * the move.
- */
 export async function pendingModification(
   projectPath: string,
   proposal: ModificationProposal,
@@ -133,16 +111,8 @@ export async function pendingModification(
   const content = await readFile(draftAbs)
   await writeFile(destAbs, content)
   await deleteFile(draftAbs)
-
-  await commitModification(pp, "pending", proposal.targetPath, primarySourceRef(proposal))
 }
 
-/**
- * Counterexample: park the proposal under `counterexamples/<slug>.md` to
- * mark it as "this is the wrong answer for this raw range". Stage 5's
- * ingest prompt will inject these back so the same raw section doesn't
- * keep re-triggering the same modification card.
- */
 export async function counterexampleModification(
   projectPath: string,
   proposal: ModificationProposal,
@@ -156,11 +126,4 @@ export async function counterexampleModification(
   const content = await readFile(draftAbs)
   await writeFile(destAbs, content)
   await deleteFile(draftAbs)
-
-  await commitModification(
-    pp,
-    "counterexample",
-    proposal.targetPath,
-    primarySourceRef(proposal),
-  )
 }

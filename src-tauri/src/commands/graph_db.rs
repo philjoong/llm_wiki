@@ -1,14 +1,11 @@
-const DEFAULT_FALKORDB_URL: &str = "redis://10.246.42.51:6379/";
-
-fn resolve_url(url: Option<&str>) -> String {
-    // Explicit parameter > env var > compile-time default.
+fn resolve_url(url: Option<&str>) -> Option<String> {
     if let Some(u) = url {
         let u = u.trim();
         if !u.is_empty() {
-            return u.to_string();
+            return Some(u.to_string());
         }
     }
-    std::env::var("FALKORDB_URL").unwrap_or_else(|_| DEFAULT_FALKORDB_URL.to_string())
+    std::env::var("FALKORDB_URL").ok().filter(|s| !s.trim().is_empty())
 }
 
 fn validate_graph_name(name: &str) -> Result<(), String> {
@@ -40,7 +37,7 @@ async fn connect(url: &str) -> Result<redis::aio::MultiplexedConnection, String>
 #[tauri::command]
 pub async fn graph_db_create(graph_name: String, url: Option<String>) -> Result<(), String> {
     validate_graph_name(&graph_name)?;
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     let mut conn = connect(&resolved).await?;
     let _: redis::Value = redis::cmd("GRAPH.QUERY")
         .arg(graph_name.trim())
@@ -54,7 +51,7 @@ pub async fn graph_db_create(graph_name: String, url: Option<String>) -> Result<
 #[tauri::command]
 pub async fn graph_db_delete(graph_name: String, url: Option<String>) -> Result<(), String> {
     validate_graph_name(&graph_name)?;
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     let mut conn = connect(&resolved).await?;
     let _: String = redis::cmd("GRAPH.DELETE")
         .arg(graph_name.trim())
@@ -66,7 +63,7 @@ pub async fn graph_db_delete(graph_name: String, url: Option<String>) -> Result<
 
 #[tauri::command]
 pub async fn graph_db_list(url: Option<String>) -> Result<Vec<String>, String> {
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     let mut conn = connect(&resolved).await?;
     // GRAPH.LIST returns only graph names, not internal metadata keys.
     let names: Vec<String> = redis::cmd("GRAPH.LIST")
@@ -103,7 +100,7 @@ pub async fn graph_db_query(
     url: Option<String>,
 ) -> Result<serde_json::Value, String> {
     validate_graph_name(&graph_name)?;
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     let mut conn = connect(&resolved).await?;
     let res: redis::Value = redis::cmd("GRAPH.QUERY")
         .arg(graph_name.trim())
@@ -117,7 +114,7 @@ pub async fn graph_db_query(
 
 #[tauri::command]
 pub async fn graph_db_ping(url: Option<String>) -> Result<(), String> {
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     connect(&resolved).await?;
     Ok(())
 }
@@ -133,7 +130,7 @@ pub async fn graph_db_import(
     url: Option<String>,
 ) -> Result<u32, String> {
     validate_graph_name(&graph_name)?;
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     let mut conn = connect(&resolved).await?;
 
     // Ensure graph exists
@@ -251,7 +248,7 @@ pub async fn graph_db_import(
 #[tauri::command]
 pub async fn graph_db_export(graph_name: String, url: Option<String>) -> Result<serde_json::Value, String> {
     validate_graph_name(&graph_name)?;
-    let resolved = resolve_url(url.as_deref());
+    let resolved = resolve_url(url.as_deref()).ok_or("FalkorDB URL is not configured")?;
     let mut conn = connect(&resolved).await?;
 
     // Export nodes

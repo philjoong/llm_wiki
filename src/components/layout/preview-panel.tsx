@@ -1,17 +1,18 @@
-import { useEffect, useCallback, useRef } from "react"
+import { useEffect, useCallback, useRef, useState } from "react"
 import { X } from "lucide-react"
-import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile } from "@/commands/fs"
 import { getFileCategory, isBinary } from "@/lib/file-types"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
 import { getFileName } from "@/lib/path-utils"
 
-export function PreviewPanel() {
-  const selectedFile = useWikiStore((s) => s.selectedFile)
-  const fileContent = useWikiStore((s) => s.fileContent)
-  const setFileContent = useWikiStore((s) => s.setFileContent)
-  const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
+interface PreviewPanelProps {
+  filePath: string
+  onClose: () => void
+}
+
+export function PreviewPanel({ filePath: selectedFile, onClose }: PreviewPanelProps) {
+  const [fileContent, setFileContent] = useState("")
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Snapshot of what was most recently loaded from disk. Milkdown re-emits
   // `markdownUpdated` on initial parse (before the user types anything),
@@ -21,12 +22,6 @@ export function PreviewPanel() {
   const lastLoadedRef = useRef<string>("")
 
   useEffect(() => {
-    if (!selectedFile) {
-      setFileContent("")
-      lastLoadedRef.current = ""
-      return
-    }
-
     const category = getFileCategory(selectedFile)
 
     if (isBinary(category)) {
@@ -44,11 +39,10 @@ export function PreviewPanel() {
         lastLoadedRef.current = ""
         setFileContent(`Error loading file: ${err}`)
       })
-  }, [selectedFile, setFileContent])
+  }, [selectedFile])
 
   const handleSave = useCallback(
     (markdown: string) => {
-      if (!selectedFile) return
       // Ignore no-op saves from the editor's initial re-emit. Only write
       // when the user has actually changed the content relative to the
       // last disk read.
@@ -74,14 +68,6 @@ export function PreviewPanel() {
     }
   }, [])
 
-  if (!selectedFile) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Select a file to preview
-      </div>
-    )
-  }
-
   const category = getFileCategory(selectedFile)
   const fileName = getFileName(selectedFile)
 
@@ -92,7 +78,7 @@ export function PreviewPanel() {
           {fileName}
         </span>
         <button
-          onClick={() => setSelectedFile(null)}
+          onClick={onClose}
           className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent"
         >
           <X className="h-3.5 w-3.5" />

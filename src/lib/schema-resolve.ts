@@ -18,16 +18,3 @@ export async function approveSchemaChange(
   await saveGraphPolicy(projectPath, policy)
   // Re-sync happens naturally on next ingest with the updated policy.
 }
-
-export async function rejectSchemaChange(
-  projectPath: string,
-  proposal: SchemaProposal
-): Promise<void> {
-  const policy = await loadGraphPolicy(projectPath)
-
-  if (!policy.forbiddenTypes.includes(proposal.name)) {
-    policy.forbiddenTypes.push(proposal.name)
-  }
-
-  await saveGraphPolicy(projectPath, policy)
-}

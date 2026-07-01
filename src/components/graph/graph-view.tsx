@@ -1,17 +1,21 @@
 import { useEffect, useCallback, useState, useRef, useMemo } from "react"
-import { Network, RefreshCw, X, Info, FileText, ChevronRight, ChevronDown, Folder } from "lucide-react"
+import { Network, RefreshCw, X, Info, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, Trash2, Pencil, Plus } from "lucide-react"
+import { openPath } from "@tauri-apps/plugin-opener"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
 import { useWikiStore, type NavSnapshot } from "@/stores/wiki-store"
-import { readFile, listDirectory } from "@/commands/fs"
+import { readFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 import { loadPageGraphIndex, lookupPageGraphs } from "@/lib/page-graph-index"
 import { listDbFiles } from "@/lib/wiki-graph"
 import type { FileNode } from "@/types/wiki"
 import { FalkorCanvas } from "./falkor-canvas"
 import { assignColors, type CanvasData } from "@/lib/falkor-visualization"
-import { getGraphBackend } from "@/lib/graph-backend"
+import { getGraphBackend, type GraphBackend } from "@/lib/graph-backend"
 import { graphSnapshotToCanvas } from "@/lib/graph-backend/graph-result-mappers"
+import { cleanupOrphanGraphs } from "@/lib/graph-sync"
+import { loadGraphPolicy, type GraphPolicy } from "@/lib/graph-policy"
+import { removePageFromIndex } from "@/lib/page-graph-index"
 import { cn } from "@/lib/utils"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { GraphsTab } from "@/components/layout/graphs-tab"
@@ -45,8 +49,6 @@ export function GraphView() {
   const setFileContent = useWikiStore((s) => s.setFileContent)
   const selectedGraph = useWikiStore((s) => s.selectedGraph)
   const setSelectedGraph = useWikiStore((s) => s.setSelectedGraph)
-  const setFileTree = useWikiStore((s) => s.setFileTree)
-  const bumpDataVersion = useWikiStore((s) => s.bumpDataVersion)
   const pendingOpenFile = useWikiStore((s) => s.pendingOpenFile)
   const setPendingOpenFile = useWikiStore((s) => s.setPendingOpenFile)
   const pendingGraphRestore = useWikiStore((s) => s.pendingGraphRestore)
@@ -65,6 +67,7 @@ export function GraphView() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedElement, setSelectedElement] = useState<any>(null)
+  const [graphPolicy, setGraphPolicy] = useState<GraphPolicy | null>(null)
   const lastLoadedVersion = useRef(-1)
 
   // Live graphs from FalkorDB (only graphs that actually have nodes)
@@ -97,12 +100,16 @@ export function GraphView() {
     setLoading(true)
     setError(null)
     try {
-      const backend = await getGraphBackend(project.path)
+      const [backend, policy] = await Promise.all([
+        getGraphBackend(project.path),
+        loadGraphPolicy(project.path),
+      ])
       const parsed = graphSnapshotToCanvas(await backend.queryGraph(project.name, target, { type: "all" }))
       const { data: colored, relationColorMap: colorMap } = assignColors(parsed)
       setGraphData(colored)
       setRelationColorMap(colorMap)
       setSelectedRelationType("all")
+      setGraphPolicy(policy)
       lastLoadedVersion.current = useWikiStore.getState().dataVersion
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load graph from FalkorDB")
@@ -200,18 +207,13 @@ export function GraphView() {
     void refreshLiveGraphs()
   }, [project, dataVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleFullRefresh = useCallback(async () => {
+  const handleCleanupOrphans = useCallback(async () => {
     if (!project) return
-    try {
-      const tree = await listDirectory(normalizePath(project.path))
-      setFileTree(tree)
-    } catch (err) {
-      console.error("Failed to refresh file tree:", err)
-    }
-    bumpDataVersion()
+    const policy = await loadGraphPolicy(project.path)
+    await cleanupOrphanGraphs(project.path, project.name, policy.managedGraphs)
     await refreshLiveGraphs(true)
     await loadGraph()
-  }, [project, setFileTree, bumpDataVersion, refreshLiveGraphs, loadGraph])
+  }, [project, refreshLiveGraphs, loadGraph])
 
   // Files tab handlers
   const loadDbFiles = useCallback(async () => {
@@ -352,9 +354,9 @@ export function GraphView() {
             {tab === "knowledge" ? "Knowledge" : tab === "files" ? "Files" : "Graphs"}
           </button>
         ))}
-        <div className="ml-auto pr-2">
-          <Button variant="ghost" size="sm" onClick={() => { void handleFullRefresh() }} disabled={loading} className="h-7 gap-1 text-xs" title="Refresh">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+        <div className="ml-auto flex items-center gap-1 pr-2">
+          <Button variant="ghost" size="sm" onClick={() => { void handleCleanupOrphans() }} disabled={loading} className="h-7 gap-1 text-xs" title="Cleanup orphan graphs">
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -398,7 +400,14 @@ export function GraphView() {
                 <FalkorCanvas data={filteredGraphData} onNodeClick={handleNodeClick} onLinkClick={handleLinkClick} />
               </ErrorBoundary>
             )}
-            <SelectionOverlay element={selectedElement} onClose={() => setSelectedElement(null)} />
+            <SelectionOverlay
+              element={selectedElement}
+              onClose={() => setSelectedElement(null)}
+              project={project}
+              graphName={activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? selectedGraph)}
+              graphPolicy={graphPolicy}
+              onGraphChanged={() => { void loadGraph(activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? undefined)) }}
+            />
             {relationColorMap.size > 1 && (
               <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">
                 <button
@@ -427,8 +436,15 @@ export function GraphView() {
         <div className="flex h-full min-h-0">
           {/* File list */}
           <div className="flex w-56 shrink-0 flex-col border-r">
-            <div className="shrink-0 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-              db/ files
+            <div className="flex shrink-0 items-center justify-between border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+              <span>db/ files</span>
+              <button
+                onClick={() => { void openPath(`${normalizePath(project.path)}/db`) }}
+                title="Reveal in Explorer"
+                className="text-muted-foreground hover:text-accent-foreground"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto">
               {dbFiles.length === 0 ? (
@@ -500,7 +516,14 @@ export function GraphView() {
                         <FalkorCanvas data={filteredGraphData} onNodeClick={handleNodeClick} onLinkClick={handleLinkClick} />
                       </ErrorBoundary>
                     )}
-                    <SelectionOverlay element={selectedElement} onClose={() => setSelectedElement(null)} />
+                    <SelectionOverlay
+              element={selectedElement}
+              onClose={() => setSelectedElement(null)}
+              project={project}
+              graphName={activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? selectedGraph)}
+              graphPolicy={graphPolicy}
+              onGraphChanged={() => { void loadGraph(activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? undefined)) }}
+            />
                     {relationColorMap.size > 1 && (
                       <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">
                         <button
@@ -526,8 +549,21 @@ export function GraphView() {
 
                   {/* Markdown preview */}
                   <div className="w-80 shrink-0 border-l flex flex-col overflow-hidden">
-                    <div className="shrink-0 border-b px-3 py-1.5 text-xs font-medium text-muted-foreground truncate" title={selectedDbFile.name}>
-                      {selectedDbFile.name}
+                    <div className="shrink-0 flex items-center justify-between border-b px-3 py-1.5">
+                      <span className="text-xs font-medium text-muted-foreground truncate" title={selectedDbFile.name}>
+                        {selectedDbFile.name}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="ml-2 h-6 shrink-0 px-2 text-xs"
+                        onClick={() => {
+                          if (!selectedDbFile) return
+                          useWikiStore.getState().setEditingFile(selectedDbFile.path)
+                        }}
+                      >
+                        Edit in Wiki
+                      </Button>
                     </div>
                     <div className="flex-1 overflow-auto">
                       <WikiEditor
@@ -547,46 +583,195 @@ export function GraphView() {
   )
 }
 
-function SelectionOverlay({ element, onClose }: { element: any; onClose: () => void }) {
+interface SelectionOverlayProps {
+  element: any
+  onClose: () => void
+  project: { path: string; name: string } | null
+  graphName: string
+  graphPolicy: GraphPolicy | null
+  onGraphChanged: () => void
+}
+
+function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, onGraphChanged }: SelectionOverlayProps) {
+  const isNode = Boolean(element?.labels)
+  const [editMode, setEditMode] = useState(false)
+  const [nodeName, setNodeName] = useState("")
+  const [edgeRelType, setEdgeRelType] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Reset edit state when selection changes
+  useEffect(() => {
+    setEditMode(false)
+    setError(null)
+    if (element) {
+      setNodeName(element.data?.label ?? element.label ?? "")
+      setEdgeRelType(element.relationship ?? "")
+    }
+  }, [element])
+
   if (!element) return null
+
+  const allowedRelTypes: string[] = graphPolicy?.graphRelationTypes?.[graphName] ?? []
+
+  async function handleDelete() {
+    if (!project) return
+    setSaving(true)
+    setError(null)
+    try {
+      const pagePath = element.data?.page_path as string | undefined
+      const backend = await getGraphBackend(project.path)
+      if (isNode) {
+        await backend.deleteNode(project.name, graphName, String(element.id))
+      } else {
+        await backend.deleteEdge(project.name, graphName, String(element.id))
+      }
+      // Disconnect from page-graph-index if this edge had a page_path
+      if (pagePath) {
+        const remaining = await backend.deleteEdgesByPagePath(project.name, pagePath)
+        if (remaining === 0) {
+          await removePageFromIndex(project.path, pagePath)
+        }
+      }
+      onClose()
+      onGraphChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleSave() {
+    if (!project) return
+    setSaving(true)
+    setError(null)
+    try {
+      const pagePath = element.data?.page_path as string | undefined
+      const backend = await getGraphBackend(project.path)
+      if (isNode) {
+        await backend.updateNodeName(project.name, graphName, String(element.id), nodeName.trim())
+      } else {
+        await backend.updateEdge(project.name, graphName, String(element.id), edgeRelType)
+      }
+      // Manual edit severs the document link — remove from page-graph-index
+      if (pagePath) {
+        await removePageFromIndex(project.path, pagePath)
+      }
+      setEditMode(false)
+      onGraphChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save")
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="absolute left-3 top-3 flex max-h-[80%] w-64 flex-col overflow-hidden rounded-lg border bg-background/90 shadow-lg backdrop-blur-sm">
       <div className="flex items-center justify-between border-b bg-muted/50 px-3 py-2">
         <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-muted-foreground">
           <Info className="h-3 w-3" />
-          {element.labels ? "Node Info" : "Edge Info"}
+          {isNode ? "Node" : "Edge"}
         </span>
-        <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted">
-          <X className="h-3 w-3" />
-        </button>
-      </div>
-      <div className="overflow-y-auto p-3">
-        <div className="mb-3">
-          <div className="mb-1 text-[10px] font-bold uppercase text-muted-foreground">
-            {element.labels ? "Labels" : "Type"}
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {element.labels ? (
-              element.labels.map((l: string) => (
-                <span key={l} className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{l}</span>
-              ))
-            ) : (
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">{element.relationship}</span>
-            )}
-          </div>
+        <div className="flex items-center gap-1">
+          {!editMode && (
+            <button onClick={() => setEditMode(true)} className="rounded p-1 text-muted-foreground hover:bg-muted" title="Edit">
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+          <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted">
+            <X className="h-3 w-3" />
+          </button>
         </div>
-        {element.data && Object.keys(element.data).length > 0 && (
-          <div>
-            <div className="mb-1 text-[10px] font-bold uppercase text-muted-foreground">Properties</div>
-            <div className="space-y-2">
-              {Object.entries(element.data).map(([key, value]: [string, any]) => (
-                <div key={key} className="text-xs">
-                  <div className="font-medium text-muted-foreground">{key}</div>
-                  <div className="break-words text-foreground">{String(value)}</div>
-                </div>
-              ))}
+      </div>
+
+      <div className="overflow-y-auto p-3">
+        {editMode ? (
+          <div className="space-y-3">
+            {isNode ? (
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">Name</label>
+                <input
+                  className="w-full rounded border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={nodeName}
+                  onChange={(e) => setNodeName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { void handleSave() } }}
+                  autoFocus
+                />
+              </div>
+            ) : (
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase text-muted-foreground">Relation Type</label>
+                {allowedRelTypes.length > 0 ? (
+                  <select
+                    className="w-full rounded border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                    value={edgeRelType}
+                    onChange={(e) => setEdgeRelType(e.target.value)}
+                  >
+                    {allowedRelTypes.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="w-full rounded border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                    value={edgeRelType}
+                    onChange={(e) => setEdgeRelType(e.target.value)}
+                  />
+                )}
+              </div>
+            )}
+            {error && <p className="text-[10px] text-destructive">{error}</p>}
+            <div className="flex gap-2">
+              <Button size="sm" className="h-6 flex-1 text-xs" onClick={() => { void handleSave() }} disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button size="sm" variant="outline" className="h-6 flex-1 text-xs" onClick={() => { setEditMode(false); setError(null) }} disabled={saving}>
+                Cancel
+              </Button>
             </div>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-6 w-full text-xs"
+              onClick={() => { void handleDelete() }}
+              disabled={saving}
+            >
+              <Trash2 className="mr-1 h-3 w-3" />
+              Delete {isNode ? "Node" : "Edge"}
+            </Button>
           </div>
+        ) : (
+          <>
+            <div className="mb-3">
+              <div className="mb-1 text-[10px] font-bold uppercase text-muted-foreground">
+                {isNode ? "Labels" : "Type"}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {isNode ? (
+                  element.labels.map((l: string) => (
+                    <span key={l} className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{l}</span>
+                  ))
+                ) : (
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">{element.relationship}</span>
+                )}
+              </div>
+            </div>
+            {element.data && Object.keys(element.data).length > 0 && (
+              <div>
+                <div className="mb-1 text-[10px] font-bold uppercase text-muted-foreground">Properties</div>
+                <div className="space-y-2">
+                  {Object.entries(element.data).map(([key, value]: [string, any]) => (
+                    <div key={key} className="text-xs">
+                      <div className="font-medium text-muted-foreground">{key}</div>
+                      <div className="break-words text-foreground">{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

@@ -112,3 +112,25 @@ export async function gitPull(project_path: string, remote: string, branch: stri
 export async function gitSetupFromRemote(projectPath: string, remoteUrl: string, branch: string): Promise<void> {
   return invoke<void>("git_setup_from_remote", { projectPath, remoteUrl, branch })
 }
+
+export interface PullRebaseResult {
+  success: boolean
+  /** Non-empty when rebase produced merge conflicts the user must resolve. */
+  conflicts: string[]
+}
+
+export async function gitSyncCommit(projectPath: string, message: string): Promise<CommitResult> {
+  return invoke<CommitResult>("git_sync_commit", { projectPath, message })
+}
+
+export async function gitPullRebase(projectPath: string, remote: string, branch: string): Promise<PullRebaseResult> {
+  return invoke<PullRebaseResult>("git_pull_rebase", { projectPath, remote, branch })
+}
+
+export async function gitRebaseContinue(projectPath: string): Promise<PullRebaseResult> {
+  return invoke<PullRebaseResult>("git_rebase_continue", { projectPath })
+}
+
+export async function gitRebaseAbort(projectPath: string): Promise<void> {
+  return invoke<void>("git_rebase_abort", { projectPath })
+}

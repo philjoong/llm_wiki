@@ -247,13 +247,36 @@ function App() {
         }
         // No valid mapping — open folder picker directly
         debug("branch-auto-resolve: no mapping, opening folder picker")
-        const selected = await open({
-          directory: true,
-          multiple: false,
-          title: "Select local folder for this branch",
-        })
-        if (!selected) return
-        await openOrSyncFolder(selected, selectedBranch!)
+        const repoBaseUrl = (await loadGitRemoteUrl()) || import.meta.env.VITE_GIT_REPO_URL || ""
+
+        let selected: string | null = null
+        let validSelection = false
+        while (!validSelection) {
+          selected = await open({
+            directory: true,
+            multiple: false,
+            title: "Select local folder for this branch",
+          })
+          if (!selected) return
+
+          if (!repoBaseUrl) {
+            validSelection = true
+            break
+          }
+
+          // Remote URL configured: require a folder with no existing project (no db/)
+          try {
+            await openProject(selected)
+            window.alert(
+              "This folder already contains a project (db/ directory found).\n" +
+              "When a remote URL is configured, please select an empty folder."
+            )
+          } catch {
+            validSelection = true
+          }
+        }
+
+        await openOrSyncFolder(selected!, selectedBranch!)
       } finally {
         setBranchAutoLoading(false)
       }
@@ -269,7 +292,7 @@ function App() {
   async function openOrSyncFolder(folderPath: string, branch: string): Promise<boolean> {
     try {
       const proj = await openProject(folderPath)
-      await handleProjectOpened(proj)
+      await handleProjectOpened(proj, branch)
       return true
     } catch {
       debug("branch-auto-resolve: openProject failed, attempting init", { folderPath, branch })
@@ -281,7 +304,7 @@ function App() {
       const { initProject } = await import("@/lib/project-init")
       await initProject({ projectPath: folderPath })
       const proj = await openProject(folderPath)
-      await handleProjectOpened(proj)
+      await handleProjectOpened(proj, branch)
     }
 
     if (!repoBaseUrl) {
@@ -320,7 +343,7 @@ function App() {
       const { gitSetupFromRemote } = await import("@/commands/git")
       await gitSetupFromRemote(folderPath, remoteUrl, branch)
       const proj = await openProject(folderPath)
-      await handleProjectOpened(proj)
+      await handleProjectOpened(proj, branch)
       return true
     } catch (err) {
       debug("branch-auto-resolve: git sync failed", err)
@@ -329,7 +352,13 @@ function App() {
     }
   }
 
-  async function handleProjectOpened(proj: WikiProject) {
+  // `displayName` is the name the user typed when creating/selecting this
+  // project (the branch name). It may differ from the folder name they
+  // picked (e.g. typed "kopop", chose a folder called "koko") — the typed
+  // name is what should show up in the "Select Project" list and key the
+  // branch→folder mapping, not the folder name.
+  async function handleProjectOpened(rawProj: WikiProject, displayName: string) {
+    const proj: WikiProject = { ...rawProj, name: displayName }
     debug("project-open: start", { name: proj.name, path: proj.path })
     // Clear all per-project state BEFORE loading new project data
     // to prevent cross-project contamination. MUST be awaited so the
@@ -352,10 +381,7 @@ function App() {
     debug("project-open: after saveLastProject")
 
     // Save branch → folder mapping so next launch auto-resolves
-    const currentBranch = useWikiStore.getState().selectedBranch
-    if (currentBranch) {
-      await saveBranchFolderMapping(currentBranch, proj.path)
-    }
+    await saveBranchFolderMapping(displayName, proj.path)
 
     // Restore ingest queue (resume interrupted tasks). Keyed by the
     // project's stable UUID so the queue still finds the right project
@@ -396,37 +422,15 @@ function App() {
       debug("project-open: listDirectory failed", err)
     }
 
-    // Initialize local VC database and sync with remote
+    // Initialize local VC database
     try {
-      debug("project-open: before import vc/git commands")
-      const { vcDbInit } = await import("@/commands/vc-db")
-      const { gitPull } = await import("@/commands/git")
       debug("project-open: before vcDbInit", { path: proj.path })
+      const { vcDbInit } = await import("@/commands/vc-db")
       await vcDbInit(proj.path)
       debug("project-open: after vcDbInit")
-      
-      const branch = useWikiStore.getState().selectedBranch || "main"
-      // Attempt to pull from origin. Fail silently if remote is not set up yet.
-      try {
-        const { gitRemoteAdd: ensureRemote } = await import("@/commands/git")
-        const repoBaseUrl = import.meta.env.VITE_GIT_REPO_URL || ""
-        const gitToken = import.meta.env.VITE_GIT_TOKEN
-        if (repoBaseUrl) {
-          const remoteUrl = gitToken
-            ? `https://oauth2:${encodeURIComponent(gitToken)}@${repoBaseUrl}`
-            : `https://${repoBaseUrl}`
-          await ensureRemote(proj.path, "origin", remoteUrl)
-        }
-        debug("project-open: before gitPull", { remote: "origin", branch })
-        await gitPull(proj.path, "origin", branch)
-        debug("project-open: after gitPull")
-      } catch (err) {
-        // origin may not exist yet, skip
-        debug("project-open: gitPull skipped/failed", err)
-      }
     } catch (err) {
-      console.error("Failed to initialize VC or sync:", err)
-      debug("project-open: VC init or sync failed", err)
+      console.error("Failed to initialize VC:", err)
+      debug("project-open: vcDbInit failed", err)
     }
 
     // Load persisted review items
@@ -473,13 +477,14 @@ function App() {
     setProject(null)
     setFileTree([])
     setSelectedFile(null)
+    useWikiStore.getState().setSelectedBranch(null)
   }
 
   async function handleSync() {
     if (!project) return
     const { exportGraphDb } = await import("@/commands/graph-db")
     const { writeFile } = await import("@/commands/fs")
-    const { gitCommit, gitPush, gitRemoteAdd } = await import("@/commands/git")
+    const { gitSyncCommit, gitPullRebase, gitPush, gitRemoteAdd } = await import("@/commands/git")
     const { vcDbSaveSnapshot } = await import("@/commands/vc-db")
 
     // 1. Export graph to JSON
@@ -489,16 +494,15 @@ function App() {
     // 2. Write to graph.json
     await writeFile(`${project.path}/graph.json`, graphJson)
 
-    // 3. Commit graph.json
-    const commitRes = await gitCommit(project.path, "sync: update graph snapshot", ["graph.json"])
+    // 3. Stage all changes (db/, pending/, graph.json, etc.) and commit
+    const commitRes = await gitSyncCommit(project.path, "sync: update graph snapshot")
 
     // 4. Save to SQLite if committed
     if (commitRes.committed && commitRes.commitHash) {
       await vcDbSaveSnapshot(project.path, commitRes.commitHash, graphJson)
     }
 
-    // 5. Ensure remote origin is registered (handles case where project creation
-    //    failed mid-way and gitRemoteAdd was never called or succeeded).
+    // 5. Ensure remote origin is registered
     const repoBaseUrl = import.meta.env.VITE_GIT_REPO_URL || ""
     const gitToken = import.meta.env.VITE_GIT_TOKEN
     const remoteUrl = gitToken
@@ -506,8 +510,18 @@ function App() {
       : `https://${repoBaseUrl}`
     await gitRemoteAdd(project.path, "origin", remoteUrl)
 
-    // 6. Push to remote — git push -u creates the branch on remote if absent
+    // 6. Pull --rebase so remote changes are integrated before push
     const branch = useWikiStore.getState().selectedBranch || "main"
+    const rebaseResult = await gitPullRebase(project.path, "origin", branch)
+    if (!rebaseResult.success) {
+      // Throw a typed error so the caller (dialog / sidebar button) can open
+      // the conflict resolution UI without showing a generic alert.
+      const err = new Error("rebase-conflict") as Error & { conflicts: string[] }
+      err.conflicts = rebaseResult.conflicts
+      throw err
+    }
+
+    // 7. Push — git push -u creates the branch on remote if absent
     await gitPush(project.path, "origin", branch)
   }
 
@@ -533,13 +547,23 @@ function App() {
 
   return (
     <>
-      <AppLayout onSwitchProject={handleSwitchProject} />
+      <AppLayout
+        onSwitchProject={handleSwitchProject}
+        onSync={handleSync}
+        isLocalOnly={isLocalOnly}
+      />
       <SyncOnExitDialog
         open={showSyncExitDialog}
         onOpenChange={setShowSyncExitDialog}
         onSync={handleSync}
         onExit={handleExit}
         isLocalOnly={isLocalOnly}
+        projectPath={project?.path ?? ""}
+        remoteUrl={(() => {
+          const base = import.meta.env.VITE_GIT_REPO_URL || ""
+          const token = import.meta.env.VITE_GIT_TOKEN
+          return token ? `https://oauth2:${encodeURIComponent(token)}@${base}` : `https://${base}`
+        })()}
       />
     </>
   )

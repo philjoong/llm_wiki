@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
 import type { SourceRef } from "@/lib/source-ref"
+import type { Stage1Section } from "@/lib/ingest"
 
 export interface ReviewOption {
   label: string
@@ -28,6 +29,10 @@ export interface ModificationProposal {
   incomingExcerpt: string
   incomingDraftPath: string
   sourceRefs: SourceRef[]
+  /** Stage 1 sections for this page_path, preserved so Stage 2 can run
+   *  after the user Approves the proposal. Absent on legacy proposals
+   *  (created before the pipeline reorder) and on the re-review path. */
+  pendingSections?: Stage1Section[]
 }
 
 /**
@@ -51,6 +56,8 @@ export interface OverflowEntry {
   graph: string
   /** The relation types that couldn't be added. */
   newTypes: string[]
+  /** The graph's current relation types (the ones it's full of). */
+  existingTypes: string[]
   /** Suggested new graph name (e.g. "ui_nav_graph_2"). */
   suggestedGraph: string
   /** Pages that were skipped due to this overflow. */

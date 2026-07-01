@@ -25,8 +25,9 @@ import {
   pendingModification,
   counterexampleModification,
 } from "@/lib/modification-resolve"
-import { approveSchemaChange, rejectSchemaChange } from "@/lib/schema-resolve"
+import { approveSchemaChange } from "@/lib/schema-resolve"
 import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
+import { runStage2ForApprovedDoc } from "@/lib/ingest"
 import { PendingView } from "@/components/review/pending-view"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
@@ -69,9 +70,6 @@ export function ReviewView() {
         if (action === "schema:approve") {
           await approveSchemaChange(pp, projectName, proposal)
           resolveItem(id, "Approved")
-        } else if (action === "schema:reject") {
-          await rejectSchemaChange(pp, proposal)
-          resolveItem(id, "Rejected (Forbidden)")
         } else {
           resolveItem(id, action)
         }
@@ -91,6 +89,17 @@ export function ReviewView() {
       try {
         if (action === "modification:approve") {
           await approveModification(pp, proposal)
+          // If the proposal carries Stage 1 sections, run Stage 2 now so
+          // graph sync happens on the confirmed document, not before.
+          if (proposal.pendingSections && proposal.pendingSections.length > 0) {
+            try {
+              const llmConfig = useWikiStore.getState().llmConfig
+              const graphPolicy = await loadGraphPolicy(pp)
+              await runStage2ForApprovedDoc(pp, projectName, proposal.pendingSections, graphPolicy, llmConfig)
+            } catch (err) {
+              console.warn("[review] runStage2ForApprovedDoc failed:", err)
+            }
+          }
           resolveItem(id, "Approved")
         } else if (action === "modification:merge") {
           // Open the parked draft in the editor for hand-edit. The user
@@ -449,14 +458,26 @@ function ReviewCard({
       )}
 
       {item.overflowEntries && item.overflowEntries.length > 0 && (
-        <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-1.5">
+        <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-2">
           {item.overflowEntries.map((e) => (
-            <div key={e.graph}>
-              <span className="font-mono font-semibold">{e.graph}</span>
-              <span className="text-muted-foreground"> is full — new types: </span>
-              <span className="font-mono">{e.newTypes.join(", ")}</span>
-              <span className="text-muted-foreground"> → suggest graph: </span>
-              <span className="font-mono font-medium">{e.suggestedGraph}</span>
+            <div key={e.graph} className="space-y-0.5">
+              <div>
+                <span className="font-mono font-semibold">{e.graph}</span>
+                <span className="text-muted-foreground"> is full — new types: </span>
+                <span className="font-mono">{e.newTypes.join(", ")}</span>
+                <span className="text-muted-foreground"> → suggest graph: </span>
+                <span className="font-mono font-medium">{e.suggestedGraph}</span>
+              </div>
+              {e.existingTypes.length > 0 && (
+                <div className="text-muted-foreground">
+                  Existing types on <span className="font-mono">{e.graph}</span>: <span className="font-mono">{e.existingTypes.join(", ")}</span>
+                </div>
+              )}
+              {e.affectedPaths.length > 0 && (
+                <div className="text-muted-foreground">
+                  Affected pages: {e.affectedPaths.join(", ")}
+                </div>
+              )}
             </div>
           ))}
         </div>

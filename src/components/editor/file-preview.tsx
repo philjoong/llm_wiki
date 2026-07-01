@@ -11,6 +11,7 @@ import {
   Music,
   FileSpreadsheet,
   FileQuestion,
+  Pencil,
 } from "lucide-react"
 import { getFileCategory, getCodeLanguage } from "@/lib/file-types"
 import type { FileCategory } from "@/lib/file-types"
@@ -19,9 +20,10 @@ import { getFileName } from "@/lib/path-utils"
 interface FilePreviewProps {
   filePath: string
   textContent: string
+  onEditRequest?: () => void
 }
 
-export function FilePreview({ filePath, textContent }: FilePreviewProps) {
+export function FilePreview({ filePath, textContent, onEditRequest }: FilePreviewProps) {
   const category = getFileCategory(filePath)
   const fileName = getFileName(filePath)
 
@@ -33,13 +35,13 @@ export function FilePreview({ filePath, textContent }: FilePreviewProps) {
     case "audio":
       return <AudioPreview filePath={filePath} fileName={fileName} />
     case "pdf":
-      return <TextPreview filePath={filePath} content={textContent} label="PDF (extracted text)" />
+      return <TextPreview filePath={filePath} content={textContent} label="PDF (extracted text)" onEditRequest={onEditRequest} />
     case "code":
       return <CodePreview filePath={filePath} content={textContent} />
     case "data":
       return <CodePreview filePath={filePath} content={textContent} />
     case "text":
-      return <TextPreview filePath={filePath} content={textContent} label="Text" />
+      return <TextPreview filePath={filePath} content={textContent} label="Text" onEditRequest={onEditRequest} />
     case "document":
       return <BinaryPlaceholder filePath={filePath} fileName={fileName} category={category} />
     default:
@@ -110,12 +112,21 @@ function CodePreview({ filePath, content }: { filePath: string; content: string 
   )
 }
 
-function TextPreview({ filePath, content, label }: { filePath: string; content: string; label: string }) {
+function TextPreview({ filePath, content, label, onEditRequest }: { filePath: string; content: string; label: string; onEditRequest?: () => void }) {
   return (
     <div className="h-full overflow-auto p-6">
       <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
         <span>{filePath}</span>
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">{label}</span>
+        {onEditRequest && (
+          <button
+            onClick={onEditRequest}
+            className="ml-auto flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] text-foreground hover:bg-accent transition-colors"
+          >
+            <Pencil className="h-3 w-3" />
+            Edit
+          </button>
+        )}
       </div>
       <div className="prose prose-sm max-w-none dark:prose-invert">
         <ReactMarkdown

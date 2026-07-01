@@ -57,6 +57,9 @@ export async function fetchUrlAsMarkdown(rawUrl: string): Promise<FetchedPage> {
       headers: { Accept: "text/html,application/xhtml+xml" },
     })
     if (!resp.ok) {
+      if (resp.status === 403) {
+        throw new Error(`Access denied (HTTP 403). The site blocks automated requests. Try saving the page manually and importing it as a file.`)
+      }
       throw new Error(`Server returned HTTP ${resp.status}.`)
     }
     html = await resp.text()

@@ -118,5 +118,12 @@ export function createFalkorDbBackend(): GraphBackend {
       await queryGraphDb(projectName, graphName, `MATCH ()-[r:${safeRelation(relationType)}]->() DELETE r`)
       return 0
     },
+    addNode: (_projectName, _graphName, _name) => Promise.reject(new Error("Not implemented for FalkorDB")),
+    deleteNode: (_projectName, _graphName, _nodeId) => Promise.reject(new Error("Not implemented for FalkorDB")),
+    updateNodeName: (_projectName, _graphName, _nodeId, _newName) => Promise.reject(new Error("Not implemented for FalkorDB")),
+    addEdge: (_projectName, _graphName, _sourceNodeId, _targetNodeId, _relationType) => Promise.reject(new Error("Not implemented for FalkorDB")),
+    deleteEdge: (_projectName, _graphName, _edgeId) => Promise.reject(new Error("Not implemented for FalkorDB")),
+    updateEdge: (_projectName, _graphName, _edgeId, _newRelationType, _newTargetNodeId) => Promise.reject(new Error("Not implemented for FalkorDB")),
+    deleteEdgesByPagePath: (_projectName, _pagePath) => Promise.reject(new Error("Not implemented for FalkorDB")),
   }
 }

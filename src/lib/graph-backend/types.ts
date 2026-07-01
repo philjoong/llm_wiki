@@ -43,4 +43,14 @@ export interface GraphBackend {
 
   renameRelationType(projectName: string, graphName: string, oldType: string, newType: string): Promise<number>
   deleteRelationType(projectName: string, graphName: string, relationType: string): Promise<number>
+
+  addNode(projectName: string, graphName: string, name: string): Promise<number>
+  deleteNode(projectName: string, graphName: string, nodeId: string): Promise<void>
+  updateNodeName(projectName: string, graphName: string, nodeId: string, newName: string): Promise<void>
+
+  addEdge(projectName: string, graphName: string, sourceNodeId: string, targetNodeId: string, relationType: string): Promise<number>
+  deleteEdge(projectName: string, graphName: string, edgeId: string): Promise<void>
+  updateEdge(projectName: string, graphName: string, edgeId: string, newRelationType: string, newTargetNodeId?: string): Promise<void>
+
+  deleteEdgesByPagePath(projectName: string, pagePath: string): Promise<number>
 }

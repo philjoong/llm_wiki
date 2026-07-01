@@ -7,13 +7,10 @@
  *
  *   - Re-review        — move the pending file back to
  *                        `pending/_proposals/...` and queue a new
- *                        modification review card. No commit (the next
- *                        user action records the outcome).
+ *                        modification review card.
  *   - Promote to db/   — write the pending content to its db/ target
- *                        with source-merge, delete the pending file,
- *                        commit both.
- *   - Discard          — append a rejection-log entry, delete the file,
- *                        commit.
+ *                        with source-merge, delete the pending file.
+ *   - Discard          — append a rejection-log entry, delete the file.
  *
  * Recovering the db/ target: the slug we used when sending to pending
  * (`pathToSlug`) is lossy in principle (path components with internal
@@ -32,9 +29,6 @@ import {
   fileExists,
 } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { gitCommit } from "@/commands/git"
-import { formatModificationMessage } from "@/lib/auto-commit"
-import { withProjectLock } from "@/lib/project-mutex"
 import {
   mergeSourceRefsIntoContent,
   parseSourceRefs,
@@ -166,15 +160,6 @@ export async function discardPending(
   if (await fileExists(fileAbs)) {
     await deleteFile(fileAbs)
   }
-
-  const message = formatModificationMessage(
-    "discard-pending",
-    item.targetPath,
-    sr,
-  )
-  await withProjectLock(pp, () =>
-    gitCommit(pp, message, [item.path, REJECTION_LOG_REL]),
-  )
 }
 
 /**
@@ -198,17 +183,6 @@ export async function promotePending(
 
   await writeFile(targetAbs, merged)
   await deleteFile(fileAbs)
-
-  const refs = parseSourceRefs(incoming)
-  const sr = refs[0] ?? { file: "(unknown)" }
-  const message = formatModificationMessage(
-    "promote",
-    item.targetPath,
-    sr,
-  )
-  await withProjectLock(pp, () =>
-    gitCommit(pp, message, [item.targetPath, item.path]),
-  )
 }
 
 /**

@@ -508,3 +508,180 @@ pub async fn graph_sqlite_delete_relation_type(
         .map_err(|e| format!("Failed to delete relation type: {e}"))?;
     Ok(changed as u32)
 }
+
+#[tauri::command]
+pub async fn graph_sqlite_delete_node(
+    project_path: String,
+    project_name: String,
+    graph_name: String,
+    node_id: i64,
+) -> Result<(), String> {
+    let conn = open_db(&project_path)?;
+    let Some(gid) = existing_graph_id(&conn, &project_name, &graph_name)? else { return Ok(()) };
+    // Delete edges where this node is source (cascade doesn't cover source side)
+    conn.execute(
+        "DELETE FROM edges WHERE graph_id = ?1 AND source_node_id = ?2",
+        params![gid, node_id],
+    )
+    .map_err(|e| format!("Failed to delete edges for node: {e}"))?;
+    // Delete the node itself (ON DELETE CASCADE removes edges where it's target)
+    conn.execute(
+        "DELETE FROM nodes WHERE graph_id = ?1 AND id = ?2",
+        params![gid, node_id],
+    )
+    .map_err(|e| format!("Failed to delete node: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn graph_sqlite_delete_edge(
+    project_path: String,
+    project_name: String,
+    graph_name: String,
+    edge_id: i64,
+) -> Result<(), String> {
+    let conn = open_db(&project_path)?;
+    let Some(gid) = existing_graph_id(&conn, &project_name, &graph_name)? else { return Ok(()) };
+    conn.execute(
+        "DELETE FROM edges WHERE graph_id = ?1 AND id = ?2",
+        params![gid, edge_id],
+    )
+    .map_err(|e| format!("Failed to delete edge: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn graph_sqlite_update_node_name(
+    project_path: String,
+    project_name: String,
+    graph_name: String,
+    node_id: i64,
+    new_name: String,
+) -> Result<(), String> {
+    let conn = open_db(&project_path)?;
+    let Some(gid) = existing_graph_id(&conn, &project_name, &graph_name)? else { return Ok(()) };
+    let new_stable_key = format!("name:{}", new_name.trim().to_lowercase());
+    // Check for conflict with another node
+    let conflict: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM nodes WHERE graph_id = ?1 AND stable_key = ?2 AND id != ?3",
+            params![gid, new_stable_key, node_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to check name conflict: {e}"))?;
+    if conflict.is_some() {
+        return Err(format!("A node named '{}' already exists in this graph", new_name.trim()));
+    }
+    conn.execute(
+        "UPDATE nodes SET name = ?1, stable_key = ?2 WHERE graph_id = ?3 AND id = ?4",
+        params![new_name.trim(), new_stable_key, gid, node_id],
+    )
+    .map_err(|e| format!("Failed to update node name: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn graph_sqlite_update_edge(
+    project_path: String,
+    project_name: String,
+    graph_name: String,
+    edge_id: i64,
+    new_relation_type: String,
+    new_target_node_id: Option<i64>,
+) -> Result<(), String> {
+    let conn = open_db(&project_path)?;
+    let Some(gid) = existing_graph_id(&conn, &project_name, &graph_name)? else { return Ok(()) };
+    let rel = relation_type(&new_relation_type);
+    // Fetch current edge to get source/target for UNIQUE constraint check
+    let (source_id, current_target_id): (i64, i64) = conn
+        .query_row(
+            "SELECT source_node_id, target_node_id FROM edges WHERE graph_id = ?1 AND id = ?2",
+            params![gid, edge_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| format!("Edge not found: {e}"))?;
+    let target_id = new_target_node_id.unwrap_or(current_target_id);
+    // Check UNIQUE conflict with a different edge
+    let conflict: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM edges WHERE graph_id = ?1 AND source_node_id = ?2 AND target_node_id = ?3 AND relation_type = ?4 AND id != ?5",
+            params![gid, source_id, target_id, rel, edge_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("Failed to check edge conflict: {e}"))?;
+    if conflict.is_some() {
+        return Err("An identical edge already exists".to_string());
+    }
+    conn.execute(
+        "UPDATE edges SET relation_type = ?1, target_node_id = ?2 WHERE graph_id = ?3 AND id = ?4",
+        params![rel, target_id, gid, edge_id],
+    )
+    .map_err(|e| format!("Failed to update edge: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn graph_sqlite_add_edge(
+    project_path: String,
+    project_name: String,
+    graph_name: String,
+    source_node_id: i64,
+    target_node_id: i64,
+    new_relation_type: String,
+) -> Result<i64, String> {
+    let conn = open_db(&project_path)?;
+    let Some(gid) = existing_graph_id(&conn, &project_name, &graph_name)? else {
+        return Err("Graph not found".to_string());
+    };
+    let rel = relation_type(&new_relation_type);
+    let props = serde_json::to_string(&json!({})).unwrap_or_else(|_| "{}".to_string());
+    conn.execute(
+        "INSERT INTO edges (graph_id, source_node_id, target_node_id, relation_type, properties_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![gid, source_node_id, target_node_id, rel, props],
+    )
+    .map_err(|e| format!("Failed to add edge (may already exist): {e}"))?;
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub async fn graph_sqlite_delete_edges_by_page_path(
+    project_path: String,
+    project_name: String,
+    page_path: String,
+) -> Result<u32, String> {
+    let conn = open_db(&project_path)?;
+    // Delete all edges across all graphs for this project where page_path matches
+    let changed = conn
+        .execute(
+            "
+            DELETE FROM edges
+            WHERE id IN (
+              SELECT e.id FROM edges e
+              JOIN graphs g ON g.id = e.graph_id
+              WHERE g.project_name = ?1
+                AND json_extract(e.properties_json, '$.page_path') = ?2
+            )
+            ",
+            params![project_name, page_path],
+        )
+        .map_err(|e| format!("Failed to delete edges by page_path: {e}"))?;
+    Ok(changed as u32)
+}
+
+#[tauri::command]
+pub async fn graph_sqlite_add_node(
+    project_path: String,
+    project_name: String,
+    graph_name: String,
+    name: String,
+) -> Result<i64, String> {
+    let conn = open_db(&project_path)?;
+    let Some(gid) = existing_graph_id(&conn, &project_name, &graph_name)? else {
+        return Err("Graph not found".to_string());
+    };
+    let props = json!({ "label": name.trim() });
+    let id = upsert_node(&conn, gid, name.trim(), None, props)?;
+    Ok(id)
+}

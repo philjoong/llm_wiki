@@ -6,8 +6,6 @@ import { loadFalkordbUrl, saveFalkordbUrl } from "@/lib/project-store"
 
 type PingStatus = "idle" | "checking" | "ok" | "error"
 
-const DEFAULT_URL = "redis://10.246.42.51:6379/"
-
 export function FalkordbSection() {
   const [urlDraft, setUrlDraft] = useState("")
   const [pingStatus, setPingStatus] = useState<PingStatus>("idle")
@@ -16,12 +14,12 @@ export function FalkordbSection() {
 
   useEffect(() => {
     loadFalkordbUrl().then((url) => {
-      setUrlDraft(url ?? DEFAULT_URL)
+      setUrlDraft(url ?? "")
     })
   }, [])
 
   const handleSave = useCallback(async () => {
-    const url = urlDraft.trim() || DEFAULT_URL
+    const url = urlDraft.trim()
     await saveFalkordbUrl(url)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -59,7 +57,7 @@ export function FalkordbSection() {
               value={urlDraft}
               onChange={(e) => setUrlDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void handleSave() }}
-              placeholder={DEFAULT_URL}
+              placeholder="redis://..."
               spellCheck={false}
               className="flex-1 rounded-md border bg-background px-2.5 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring"
             />
@@ -68,7 +66,7 @@ export function FalkordbSection() {
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            기본값: {DEFAULT_URL}
+            비워두면 SQLite 로컬 모드로 동작합니다.
           </p>
         </div>
 

@@ -37,7 +37,7 @@ export async function detectSchemaDrift(
   const incomingLabels = new Set(nodes.map(n => n.type.toLowerCase()))
   for (const label of incomingLabels) {
     if (label === "other" || label === "page") continue // skip default/base types
-    if (!existingLabels.has(label) && !policy.forbiddenTypes.map(t => t.toLowerCase()).includes(label)) {
+    if (!existingLabels.has(label)) {
       proposals.push({
         type: "node_type",
         name: label,

@@ -739,6 +739,148 @@ pub async fn git_ls_remote(url: String) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
+/// Collect unmerged ('u') paths from porcelain v2 -z output.
+fn collect_conflict_paths(stdout: &str) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    for record in stdout.split('\0') {
+        if record.starts_with('u') {
+            let parts: Vec<&str> = record.splitn(11, ' ').collect();
+            if parts.len() == 11 {
+                conflicts.push(parts[10].to_string());
+            }
+        }
+    }
+    conflicts
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRebaseResult {
+    pub success: bool,
+    /// Non-empty when rebase produced merge conflicts the user must resolve.
+    pub conflicts: Vec<String>,
+}
+
+/// Stage all working-tree changes (`git add -A`) and commit with `message`.
+/// Returns `{ committed: false }` when there is nothing to stage — never
+/// uses `--allow-empty`.
+#[tauri::command]
+pub async fn git_sync_commit(
+    project_path: String,
+    message: String,
+) -> Result<CommitResult, String> {
+    let add_out = run_git(&project_path, &["add", "-A"]).await?;
+    if !add_out.status.success() {
+        let err = String::from_utf8_lossy(&add_out.stderr).to_string();
+        return Err(format!("git add -A 실패: {}", err.trim()));
+    }
+
+    let diff_out = run_git(&project_path, &["diff", "--cached", "--quiet"]).await?;
+    let exit_code = diff_out.status.code().unwrap_or(-1);
+    match exit_code {
+        0 => return Ok(CommitResult { committed: false, commit_hash: None }),
+        1 => {}
+        _ => {
+            let err = String::from_utf8_lossy(&diff_out.stderr).to_string();
+            return Err(format!("git diff --cached 실패 (code {}): {}", exit_code, err.trim()));
+        }
+    }
+
+    let commit_out = run_git(&project_path, &["commit", "-m", &message]).await?;
+    if !commit_out.status.success() {
+        let err = String::from_utf8_lossy(&commit_out.stderr).to_string();
+        return Err(format!("git commit 실패: {}", err.trim()));
+    }
+
+    let rev_out = run_git(&project_path, &["rev-parse", "HEAD"]).await?;
+    let hash = if rev_out.status.success() {
+        let s = String::from_utf8_lossy(&rev_out.stdout).trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    } else {
+        None
+    };
+
+    Ok(CommitResult { committed: true, commit_hash: hash })
+}
+
+/// Run `git pull --rebase <remote> <branch>`. On success returns
+/// `{ success: true, conflicts: [] }`. On conflict returns
+/// `{ success: false, conflicts: [...] }` without aborting — the caller
+/// drives the resolution loop via `git_rebase_continue` / `git_rebase_abort`.
+#[tauri::command]
+pub async fn git_pull_rebase(
+    project_path: String,
+    remote: String,
+    branch: String,
+) -> Result<PullRebaseResult, String> {
+    let out = run_git(&project_path, &["pull", "--rebase", &remote, &branch]).await?;
+    if out.status.success() {
+        return Ok(PullRebaseResult { success: true, conflicts: Vec::new() });
+    }
+
+    let status = run_git(&project_path, &["status", "--porcelain=v2", "-z"]).await?;
+    if status.status.success() {
+        let stdout = String::from_utf8_lossy(&status.stdout);
+        let conflicts = collect_conflict_paths(&stdout);
+        if !conflicts.is_empty() {
+            return Ok(PullRebaseResult { success: false, conflicts });
+        }
+    }
+
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Err(format!("git pull --rebase 실패: {}", err.trim()))
+}
+
+/// Stage all resolved files and run `git rebase --continue`. Returns the
+/// same `PullRebaseResult` shape so the UI can loop until `success: true`.
+#[tauri::command]
+pub async fn git_rebase_continue(project_path: String) -> Result<PullRebaseResult, String> {
+    // Stage everything the user resolved.
+    let add_out = run_git(&project_path, &["add", "-A"]).await?;
+    if !add_out.status.success() {
+        let err = String::from_utf8_lossy(&add_out.stderr).to_string();
+        return Err(format!("git add -A 실패: {}", err.trim()));
+    }
+
+    // GIT_EDITOR=true prevents the editor from opening for the commit message.
+    let git = locate_git()?;
+    let mut cmd = tokio::process::Command::new(&git);
+    cmd.current_dir(&project_path)
+        .args(&["rebase", "--continue"])
+        .env("GIT_EDITOR", "true")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let out = cmd.output().await.map_err(|e| format!("git rebase --continue 실패: {}", e))?;
+
+    if out.status.success() {
+        return Ok(PullRebaseResult { success: true, conflicts: Vec::new() });
+    }
+
+    let status = run_git(&project_path, &["status", "--porcelain=v2", "-z"]).await?;
+    if status.status.success() {
+        let stdout = String::from_utf8_lossy(&status.stdout);
+        let conflicts = collect_conflict_paths(&stdout);
+        if !conflicts.is_empty() {
+            return Ok(PullRebaseResult { success: false, conflicts });
+        }
+    }
+
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    Err(format!("git rebase --continue 실패: {}", err.trim()))
+}
+
+/// Abort an in-progress rebase, restoring the branch to its pre-rebase state.
+#[tauri::command]
+pub async fn git_rebase_abort(project_path: String) -> Result<(), String> {
+    let out = run_git(&project_path, &["rebase", "--abort"]).await?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        return Err(format!("git rebase --abort 실패: {}", err.trim()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

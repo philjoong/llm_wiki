@@ -157,15 +157,15 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
       pages.length > 0
         ? `\n\n다음 문서가 이 graph에 연결되어 있습니다. 삭제하면 해당 문서의 graph 연결이 끊깁니다:\n${buildPageListText(pages)}\n`
         : "\n"
-    const ok = await confirm(`Graph "${graphName}"을 삭제하시겠습니까?${pageNote}FalkorDB의 graph 데이터도 함께 삭제됩니다. 계속하시겠습니까?`)
+    const ok = await confirm(`Graph "${graphName}"을 삭제하시겠습니까?${pageNote}저장된 graph 데이터도 함께 삭제됩니다. 계속하시겠습니까?`)
     if (!ok) return
 
-    // Delete from FalkorDB (best-effort — graph may not exist yet)
+    // Delete from the graph backend (best-effort — graph may not exist yet)
     try {
       const backend = await getGraphBackend(projectPath)
       await backend.deleteGraph(projectName, graphName)
     } catch {
-      // Graph may not exist in FalkorDB yet; proceed with policy cleanup
+      // Graph may not exist yet; proceed with policy cleanup
     }
 
     if (!policy) return
@@ -203,19 +203,19 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     const pages = await getAffectedPages(graphName)
     const pageNote = pages.length > 0 ? `\n\n영향 문서:\n${buildPageListText(pages)}\n` : "\n"
     const ok = await confirm(
-      `FalkorDB의 "${graphName}" graph에서 "${oldValue}" 엣지를 "${newValue}"로 변경합니다.${pageNote}계속하시겠습니까?`,
+      `"${graphName}" graph에서 "${oldValue}" 엣지를 "${newValue}"로 변경합니다.${pageNote}계속하시겠습니까?`,
     )
     if (!ok) {
       setEditingRelation(null)
       return
     }
 
-    // Rename edges in FalkorDB: copy old edges as new type, then delete old
+    // Rename edges in the graph backend: copy old edges as new type, then delete old
     try {
       const backend = await getGraphBackend(projectPath)
       await backend.renameRelationType(projectName, graphName, oldValue, newValue)
     } catch {
-      // Graph may not exist yet in FalkorDB; proceed with policy update
+      // Graph may not exist yet; proceed with policy update
     }
 
     const newTypes = [...types]
@@ -241,16 +241,16 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     const pages = await getAffectedPages(graphName)
     const pageNote = pages.length > 0 ? `\n\n영향 문서:\n${buildPageListText(pages)}\n` : "\n"
     const ok = await confirm(
-      `FalkorDB의 "${graphName}" graph에서 "${typeName}" 엣지를 모두 삭제합니다.${pageNote}계속하시겠습니까?`,
+      `"${graphName}" graph에서 "${typeName}" 엣지를 모두 삭제합니다.${pageNote}계속하시겠습니까?`,
     )
     if (!ok) return
 
-    // Delete edges of this type from FalkorDB
+    // Delete edges of this type from the graph backend
     try {
       const backend = await getGraphBackend(projectPath)
       await backend.deleteRelationType(projectName, graphName, typeName)
     } catch {
-      // Graph may not exist yet in FalkorDB; proceed with policy update
+      // Graph may not exist yet; proceed with policy update
     }
 
     const newTypes = types.filter((_, i) => i !== index)

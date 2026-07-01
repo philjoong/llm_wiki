@@ -93,7 +93,7 @@ VERB_NOUN   (대문자, 언더스코어 구분)
 | 필드 | 타입 | 제약 | 설명 |
 |---|---|---|---|
 | `relationTypes` | `string[]` | 최대 4개, 중복 불가 | ingest 시 허용 edge type 목록 |
-| `managedGraphs` | `string[]` | 최대 200개, 중복 불가 | FalkorDB에 생성된 그래프 목록 |
+| `managedGraphs` | `string[]` | 최대 200개, 중복 불가 | 그래프 backend에 생성된 그래프 목록 |
 
 ---
 

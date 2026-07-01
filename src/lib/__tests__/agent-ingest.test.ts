@@ -145,13 +145,11 @@ beforeEach(() => {
     managedGraphs: ["combat_graph"],
     relationTypes: ["WEAK_AGAINST", "USES_SKILL"],
     graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL"] },
-    forbiddenTypes: [],
   })
   mockSaveGraphPolicy.mockReset().mockResolvedValue({
     managedGraphs: ["combat_graph"],
     relationTypes: ["WEAK_AGAINST", "USES_SKILL"],
     graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL"] },
-    forbiddenTypes: [],
   })
   callCount = 0
   useActivityStore.setState({ items: [] })
@@ -261,7 +259,6 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
       managedGraphs: ["combat_graph"],
       relationTypes: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"],
       graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"] },
-      forbiddenTypes: [],
     })
 
     mockSequentialResponses(
@@ -301,7 +298,6 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
       managedGraphs: ["combat_graph"],
       relationTypes: ["WEAK_AGAINST", "USES_SKILL", "RESISTS"],
       graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL", "RESISTS"] },
-      forbiddenTypes: [],
     })
 
     mockSequentialResponses(
@@ -355,7 +351,6 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
       managedGraphs: ["combat_graph"],
       relationTypes: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"],
       graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"] },
-      forbiddenTypes: [],
     })
 
     mockSequentialResponses(

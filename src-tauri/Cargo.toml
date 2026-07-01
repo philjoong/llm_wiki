@@ -44,7 +44,6 @@ futures = "0.3"
 tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt"] }
 which = "7"
 uuid = { version = "1", features = ["v4"] }
-redis = { version = "0.27", features = ["tokio-comp"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 
 [dev-dependencies]

@@ -595,6 +595,7 @@ export async function autoIngestImpl(
   for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
     const chunk = chunks[chunkIdx]
     const chunkLabel = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length} · ` : ""
+    const writtenBeforeChunk = allWrittenPaths.length
 
     // ── Stage 1: Decomposition — extract concepts + relations ────────
     // When a data type is selected, Stage 1 is replaced by a structured
@@ -866,7 +867,7 @@ export async function autoIngestImpl(
 
     // Refresh dbIndex for the next chunk so it sees what this chunk
     // just wrote. Skip on the final chunk — no consumer.
-    if (chunks.length > 1 && chunkIdx < chunks.length - 1 && writtenPaths.length > 0) {
+    if (chunks.length > 1 && chunkIdx < chunks.length - 1 && allWrittenPaths.length > writtenBeforeChunk) {
       try {
         currentDbIndex = await buildDbIndex(pp)
       } catch {
@@ -1394,6 +1395,24 @@ function summarizeStage2FailureTitle(failures: Stage2Failure[], label: string): 
   return `${topCategory} — skipped ${failures.length} concept(s): ${label}${suffix}`
 }
 
+/** LLM output is untyped JSON — coerce fields that must be strings before they reach validation or the Tauri IPC boundary. */
+function normalizeStage2StringFields(triple: Stage2Triple): Stage2Triple {
+  const toStringOrUndefined = (v: unknown): string | undefined =>
+    v === undefined || v === null ? undefined : String(v)
+
+  return {
+    ...triple,
+    subject: toStringOrUndefined(triple.subject) ?? triple.subject,
+    predicate: toStringOrUndefined(triple.predicate) ?? triple.predicate,
+    object: toStringOrUndefined(triple.object) ?? triple.object,
+    graph: toStringOrUndefined(triple.graph) ?? triple.graph,
+    page_path: toStringOrUndefined(triple.page_path) ?? triple.page_path,
+    source_id: toStringOrUndefined(triple.source_id),
+    source_range: toStringOrUndefined(triple.source_range),
+    source_text: toStringOrUndefined(triple.source_text),
+  }
+}
+
 export function hydrateStage2Assignments(
   triples: Stage2Triple[],
   sections: Stage1Section[],
@@ -1406,7 +1425,8 @@ export function hydrateStage2Assignments(
     if (section.source_range) byRange.set(section.source_range, section)
   })
 
-  return triples.map((triple) => {
+  return triples.map((raw) => {
+    const triple = normalizeStage2StringFields(raw)
     const source =
       (triple.source_id ? byId.get(triple.source_id) : undefined) ??
       (triple.source_range ? byRange.get(triple.source_range) : undefined)

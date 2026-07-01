@@ -10,7 +10,6 @@ import { Label } from "@/components/ui/label"
 import { FolderOpen } from "lucide-react"
 import { createProject } from "@/commands/fs"
 import { gitRemoteAdd, gitCreateBranch, gitPush } from "@/commands/git"
-import { createGraphDb } from "@/commands/graph-db"
 import { initProject } from "@/lib/project-init"
 import type { WikiProject } from "@/types/wiki"
 
@@ -74,9 +73,6 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
         await gitCreateBranch(project.path, projectName)
         await gitPush(project.path, "origin", projectName)
       }
-
-      // 5. FalkorDB Initialization (isolated via prefix)
-      await createGraphDb(projectName, "main")
 
       onCreated(project)
       onOpenChange(false)

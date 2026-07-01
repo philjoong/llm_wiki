@@ -13,7 +13,7 @@ import { searchWiki } from "@/lib/search"
 import { getGraphContext } from "@/lib/graph-qna"
 import { normalizePath, getRelativePath } from "@/lib/path-utils"
 import { loadPageGraphIndex, lookupPageGraphs } from "@/lib/page-graph-index"
-import { queryGraphDb } from "@/commands/graph-db"
+import { getGraphBackend } from "@/lib/graph-backend"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
@@ -254,30 +254,30 @@ export function ChatPanel() {
           }
         }
 
-        // ── Phase 2: Graph 3-hop expansion via FalkorDB ────────
+        // ── Phase 2: Graph 3-hop expansion via the graph backend ────────
         const pageGraphIndex = await loadPageGraphIndex(pp)
         const searchHitPaths = new Set(topSearchResults.map((r) => r.path))
         const graphExpansions: { title: string; path: string; relevance: number }[] = []
         const expandedPaths = new Set<string>()
+        const graphBackend = await getGraphBackend(pp)
 
         for (const result of topSearchResults) {
           const relPath = getRelativePath(result.path, pp)
           const graphs = lookupPageGraphs(pageGraphIndex, relPath)
           for (const graphName of graphs) {
-            let queryResult: any
+            let snapshot
             try {
-              queryResult = await queryGraphDb(
-                project.name,
-                graphName,
-                `MATCH (src:Page {page_path: '${relPath.replace(/'/g, "\\'")}'})--(nb:Page) WHERE nb.page_path IS NOT NULL AND nb.page_path <> '${relPath.replace(/'/g, "\\'")}' RETURN DISTINCT nb.page_path`,
-              )
+              snapshot = await graphBackend.queryGraph(project.name, graphName, {
+                type: "neighbors",
+                pagePath: relPath,
+                depth: 2,
+              })
             } catch {
               continue
             }
-            const rows: any[][] = queryResult?.rows ?? queryResult?.data?.rows ?? []
-            for (const row of rows) {
-              const nbPath = row[0]
-              if (typeof nbPath !== "string") continue
+            for (const node of snapshot.nodes) {
+              const nbPath = node.pagePath
+              if (typeof nbPath !== "string" || !nbPath || nbPath === relPath) continue
               const absPath = nbPath.startsWith("/") || nbPath.match(/^[A-Za-z]:/) ? nbPath : `${pp}/${nbPath}`
               const normalizedAbs = normalizePath(absPath)
               if (searchHitPaths.has(normalizedAbs)) continue

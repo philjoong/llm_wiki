@@ -5,7 +5,6 @@ import {
   Languages,
   Palette,
   Info,
-  Database,
   FileJson,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
@@ -20,7 +19,6 @@ import { EmbeddingSection } from "./sections/embedding-section"
 import { OutputSection } from "./sections/output-section"
 import { InterfaceSection } from "./sections/interface-section"
 import { AboutSection } from "./sections/about-section"
-import { FalkordbSection } from "./sections/falkordb-section"
 import { QuestionTypesSection } from "./sections/question-types-section"
 import { DataTypesSection } from "./sections/data-types-section"
 
@@ -31,7 +29,6 @@ type CategoryId =
   | "interface"
   | "question-types"
   | "data-types"
-  | "falkordb"
   | "about"
 
 interface Category {
@@ -50,7 +47,6 @@ const CATEGORIES: Category[] = [
   { id: "interface", labelKey: "settings.categories.interface", icon: Palette },
   { id: "question-types", labelKey: "settings.categories.questionTypes", icon: FileJson },
   { id: "data-types", labelKey: "settings.categories.dataTypes", icon: FileJson },
-  { id: "falkordb", labelKey: "settings.categories.falkordb", icon: Database },
   { id: "about", labelKey: "settings.categories.about", icon: Info },
 ]
 
@@ -194,8 +190,6 @@ export function SettingsView() {
         return <QuestionTypesSection />
       case "data-types":
         return <DataTypesSection />
-      case "falkordb":
-        return <FalkordbSection />
       case "about":
         return <AboutSection />
     }
@@ -246,7 +240,7 @@ export function SettingsView() {
         {/* Global Save bar hidden for sections that persist inline:
             - "llm" saves per-row on every edit (independent per-preset state)
             - "about" has no editable fields */}
-        {active !== "about" && active !== "llm" && active !== "falkordb" && (
+        {active !== "about" && active !== "llm" && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">

@@ -28,7 +28,7 @@ export type GraphQuery =
   | { type: "node"; nodeName: string }
 
 export interface GraphBackend {
-  kind: "sqlite" | "falkordb"
+  kind: "sqlite"
 
   ping(): Promise<void>
   listGraphs(projectName: string): Promise<string[]>

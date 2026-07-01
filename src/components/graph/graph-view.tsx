@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState, useRef, useMemo } from "react"
-import { Network, RefreshCw, X, Info, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, Trash2, Pencil, Plus } from "lucide-react"
+import { Network, RefreshCw, X, Info, FileText, ChevronRight, ChevronDown, Folder, FolderOpen, Trash2, Pencil } from "lucide-react"
 import { openPath } from "@tauri-apps/plugin-opener"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,7 @@ import { listDbFiles } from "@/lib/wiki-graph"
 import type { FileNode } from "@/types/wiki"
 import { FalkorCanvas } from "./falkor-canvas"
 import { assignColors, type CanvasData } from "@/lib/falkor-visualization"
-import { getGraphBackend, type GraphBackend } from "@/lib/graph-backend"
+import { getGraphBackend } from "@/lib/graph-backend"
 import { graphSnapshotToCanvas } from "@/lib/graph-backend/graph-result-mappers"
 import { cleanupOrphanGraphs } from "@/lib/graph-sync"
 import { loadGraphPolicy, type GraphPolicy } from "@/lib/graph-policy"
@@ -70,7 +70,7 @@ export function GraphView() {
   const [graphPolicy, setGraphPolicy] = useState<GraphPolicy | null>(null)
   const lastLoadedVersion = useRef(-1)
 
-  // Live graphs from FalkorDB (only graphs that actually have nodes)
+  // Live graphs from the graph backend (only graphs that actually have nodes)
   const [liveGraphs, setLiveGraphs] = useState<string[]>(() =>
     project ? loadCachedGraphs(project.name) : []
   )
@@ -112,7 +112,7 @@ export function GraphView() {
       setGraphPolicy(policy)
       lastLoadedVersion.current = useWikiStore.getState().dataVersion
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load graph from FalkorDB")
+      setError(err instanceof Error ? err.message : "Failed to load graph")
     } finally {
       setLoading(false)
     }
@@ -404,9 +404,9 @@ export function GraphView() {
               element={selectedElement}
               onClose={() => setSelectedElement(null)}
               project={project}
-              graphName={activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? selectedGraph)}
+              graphName={selectedGraph}
               graphPolicy={graphPolicy}
-              onGraphChanged={() => { void loadGraph(activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? undefined)) }}
+              onGraphChanged={() => { void loadGraph(selectedGraph) }}
             />
             {relationColorMap.size > 1 && (
               <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">
@@ -520,9 +520,9 @@ export function GraphView() {
               element={selectedElement}
               onClose={() => setSelectedElement(null)}
               project={project}
-              graphName={activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? selectedGraph)}
+              graphName={selectedRelatedGraph ?? selectedGraph}
               graphPolicy={graphPolicy}
-              onGraphChanged={() => { void loadGraph(activeTab === "knowledge" ? selectedGraph : (selectedRelatedGraph ?? undefined)) }}
+              onGraphChanged={() => { void loadGraph(selectedRelatedGraph ?? undefined) }}
             />
                     {relationColorMap.size > 1 && (
                       <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">

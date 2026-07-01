@@ -1,7 +1,6 @@
 pub mod claude_cli;
 pub mod codex_cli;
 pub mod fs;
-pub mod graph_db;
 pub mod graph_sqlite;
 pub mod gemini_cli;
 pub mod git_ops;

@@ -162,22 +162,6 @@ export async function loadBranchFolderMapping(branch: string): Promise<string | 
   return map[branch] ?? null
 }
 
-const FALKORDB_URL_KEY = "falkordbUrl"
-
-export async function saveFalkordbUrl(url: string): Promise<void> {
-  const store = await getStore()
-  if (url) {
-    await store.set(FALKORDB_URL_KEY, url)
-  } else {
-    await store.delete(FALKORDB_URL_KEY)
-  }
-}
-
-export async function loadFalkordbUrl(): Promise<string | null> {
-  const store = await getStore()
-  return (await store.get<string>(FALKORDB_URL_KEY)) ?? null
-}
-
 // ── Update-check persistence ──────────────────────────────────────────────
 // Small slice of state the UI-layer update store hydrates from on boot.
 // Only fields that should persist across launches: the user's "enable

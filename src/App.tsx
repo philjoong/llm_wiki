@@ -482,13 +482,14 @@ function App() {
 
   async function handleSync() {
     if (!project) return
-    const { exportGraphDb } = await import("@/commands/graph-db")
+    const { getGraphBackend } = await import("@/lib/graph-backend")
     const { writeFile } = await import("@/commands/fs")
     const { gitSyncCommit, gitPullRebase, gitPush, gitRemoteAdd } = await import("@/commands/git")
     const { vcDbSaveSnapshot } = await import("@/commands/vc-db")
 
     // 1. Export graph to JSON
-    const graphData = await exportGraphDb(project.name, "main")
+    const backend = await getGraphBackend(project.path)
+    const graphData = await backend.exportGraph(project.name, "main")
     const graphJson = JSON.stringify(graphData, null, 2)
 
     // 2. Write to graph.json

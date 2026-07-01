@@ -18,9 +18,18 @@ import { detectLanguage } from "@/lib/detect-language"
 import { parseSourceRefs } from "@/lib/sources-merge"
 import { buildGraphPolicyPrompt, loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
 import type { GraphPolicy } from "@/lib/graph-policy"
-import { syncGraphToFalkorDb } from "@/lib/graph-sync"
+import { syncGraphToBackend } from "@/lib/graph-sync"
 import { getGraphBackend } from "@/lib/graph-backend"
 import { removePageFromIndex } from "@/lib/page-graph-index"
+import {
+  loadEntityDict,
+  saveEntityDict,
+  buildEntityHintsForPrompt,
+  findCandidates,
+  upsertEntity,
+  addAlias,
+} from "@/lib/entity-dict"
+import type { EntityEntry } from "@/lib/entity-dict"
 import {
   loadCounterexamples,
   loadRejectionLog,
@@ -714,10 +723,14 @@ export async function autoIngestImpl(
           graphPolicy = stage2Result.policy
           if (stage2Result.reviewItem) allReviewItems.push(stage2Result.reviewItem)
           if (stage2Result.assignments.length > 0) {
-            const graphSummary = await syncGraphToFalkorDb(pp, projectName, stage2Result.assignments, (msg) => {
-              activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
-            })
-            invoke("app_debug", { message: `[ingest:graph3] ${chunkLabel}${graphSummary}` }).catch(() => {})
+            const { clean, conflicts } = await checkEntityConflicts(stage2Result.assignments, pp)
+            allReviewItems.push(...conflicts)
+            if (clean.length > 0) {
+              const graphSummary = await syncGraphToBackend(pp, projectName, clean, (msg) => {
+                activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
+              })
+              invoke("app_debug", { message: `[ingest:graph3] ${chunkLabel}${graphSummary}` }).catch(() => {})
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
@@ -741,9 +754,10 @@ export async function autoIngestImpl(
 
       let stage2Raw = ""
       try {
+        const entityHints = buildEntityHintsForPrompt(await loadEntityDict(pp))
         stage2Raw = await callModel(
           llmConfig,
-          buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy)),
+          buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy), entityHints),
           `Read the sections, then fill in the empty fields of each seed triple below. Do not add or rename any keys inside triple objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into triples. You may add additional triple objects using the same schema when one source_text contains multiple facts.\n\n${JSON_ONLY_INSTRUCTION}\n\n${buildStage2Scaffold(sectionsWithoutPath)}`,
           signal,
           pp,
@@ -847,12 +861,16 @@ export async function autoIngestImpl(
             const projectName = useWikiStore.getState().project?.name || "default"
             activity.updateItem(activityId, { detail: `${chunkLabel}Syncing knowledge graph...` })
             try {
-              const graphSummary = await syncGraphToFalkorDb(pp, projectName, assignments, (msg) => {
-                activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
-              })
-              const graphDebug = `[ingest:graph] ${chunkLabel}${graphSummary}`
-              console.log(graphDebug)
-              invoke("app_debug", { message: graphDebug }).catch(() => {})
+              const { clean, conflicts } = await checkEntityConflicts(assignments, pp)
+              allReviewItems.push(...conflicts)
+              if (clean.length > 0) {
+                const graphSummary = await syncGraphToBackend(pp, projectName, clean, (msg) => {
+                  activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
+                })
+                const graphDebug = `[ingest:graph] ${chunkLabel}${graphSummary}`
+                console.log(graphDebug)
+                invoke("app_debug", { message: graphDebug }).catch(() => {})
+              }
             } catch (err) {
               const graphErrMsg = `Knowledge graph sync failed: ${err instanceof Error ? err.message : String(err)}`
               console.warn(`[ingest] ${graphErrMsg}`)
@@ -1567,7 +1585,7 @@ export function buildDecompositionPrompt(
  * independently assigned to the best-fit graph.
  * Output: JSON { triples: Stage2Triple[] }.
  */
-export function buildGraphAssignmentPrompt(graphPolicyPrompt: string): string {
+export function buildGraphAssignmentPrompt(graphPolicyPrompt: string, entityHints?: string): string {
   return [
     "You are a graph assignment engine. You receive a list of source sections (Stage 1 output)",
     "and must decompose each section into one or more node/edge/node triples, then assign",
@@ -1634,6 +1652,17 @@ export function buildGraphAssignmentPrompt(graphPolicyPrompt: string): string {
     "You may add additional triple objects with the same `source_id` when one section has multiple facts.",
     "Do not add or rename keys inside triple objects.",
     "",
+    entityHints
+      ? [
+          "## Known entity names (reuse these exact strings when the concept matches)",
+          entityHints,
+          "",
+          "Rule: If the subject or object you are about to write matches one of these names",
+          "(or is clearly the same concept), use the exact string from this list.",
+          "If it is a new concept not on this list, coin a new name.",
+          "",
+        ].join("\n")
+      : "",
     graphPolicyPrompt,
   ].filter(Boolean).join("\n")
 }
@@ -1744,6 +1773,57 @@ export function buildFileBlocksFromAssignments(
   return blocks.join("\n\n")
 }
 
+/**
+ * Check Stage 2 triples against the entity dictionary for fuzzy name
+ * conflicts (e.g. "고블린전사" vs the registered "고블린 전사"). Exact
+ * matches and brand-new names pass through as `clean` — only fuzzy matches
+ * (ambiguous enough to need a human call) are pulled into `conflicts`.
+ */
+async function checkEntityConflicts(
+  triples: Stage2Triple[],
+  projectPath: string,
+): Promise<{ clean: Stage2Triple[]; conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] }> {
+  const dict = await loadEntityDict(projectPath)
+  const conflictGroups = new Map<string, { candidates: EntityEntry[]; triples: Stage2Triple[] }>()
+  const conflictedTripleSet = new Set<Stage2Triple>()
+
+  for (const triple of triples) {
+    for (const name of [triple.subject, triple.object]) {
+      const candidates = findCandidates(name, dict)
+      const hasFuzzyOnly = candidates.length > 0 && !candidates.some((c) => c.match === "exact")
+      if (!hasFuzzyOnly) continue
+
+      conflictedTripleSet.add(triple)
+      const group = conflictGroups.get(name) ?? { candidates: candidates.map((c) => c.entry), triples: [] }
+      group.triples.push(triple)
+      conflictGroups.set(name, group)
+    }
+  }
+
+  const clean = triples.filter((t) => !conflictedTripleSet.has(t))
+  const conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = Array.from(conflictGroups.entries()).map(
+    ([incomingName, group]) => ({
+      type: "entity_confirmation",
+      title: `엔티티 확인: "${incomingName}"`,
+      description: `"${incomingName}"과 유사한 기존 엔티티가 있습니다: ${group.candidates.map((c) => c.canonicalName).join(", ")}`,
+      affectedPages: [...new Set(group.triples.map((t) => t.page_path).filter(Boolean))],
+      entityConfirmation: {
+        incomingName,
+        candidates: group.candidates,
+        triples: group.triples,
+        pagePaths: [...new Set(group.triples.map((t) => t.page_path).filter(Boolean))],
+      },
+      options: [
+        ...group.candidates.map((c) => ({ label: `같은 엔티티: ${c.canonicalName}`, action: `entity:same:${c.id}` })),
+        { label: "새 엔티티", action: "entity:new" },
+        { label: "무시", action: "entity:ignore" },
+      ],
+    }),
+  )
+
+  return { clean, conflicts }
+}
+
 interface Stage2CoreResult {
   assignments: Stage2Triple[]
   policy: GraphPolicy
@@ -1767,9 +1847,10 @@ async function runStage2Core(
   fileName: string,
 ): Promise<Stage2CoreResult> {
   const scaffold = buildStage2Scaffold(sections)
+  const entityHints = buildEntityHintsForPrompt(await loadEntityDict(projectPath))
   const raw = await callModel(
     llmConfig,
-    buildGraphAssignmentPrompt(buildGraphPolicyPrompt(policy)),
+    buildGraphAssignmentPrompt(buildGraphPolicyPrompt(policy), entityHints),
     `Read the sections, then fill in the empty fields of each seed triple below. Do not add or rename any keys inside triple objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into triples. You may add additional triple objects using the same schema when one source_text contains multiple facts.\n\n${JSON_ONLY_INSTRUCTION}\n\n${scaffold}`,
     signal,
     projectPath,
@@ -1875,7 +1956,13 @@ export async function runStage2ForApprovedDoc(
   try {
     const result = await runStage2Core(llmConfig, sections, policy, undefined, pp, "", projectPath)
     if (result.assignments.length > 0) {
-      await syncGraphToFalkorDb(pp, projectName, result.assignments)
+      const { clean, conflicts } = await checkEntityConflicts(result.assignments, pp)
+      if (clean.length > 0) {
+        await syncGraphToBackend(pp, projectName, clean)
+      }
+      if (conflicts.length > 0) {
+        useReviewStore.getState().addItems(conflicts)
+      }
     }
     // Surface any Stage 2 failures from the approve path.
     if (result.reviewItem) {
@@ -1942,7 +2029,13 @@ export async function reIngestDocument(
 
     // 5. Sync
     if (result.assignments.length > 0) {
-      await syncGraphToFalkorDb(pp, projectName, result.assignments)
+      const { clean, conflicts } = await checkEntityConflicts(result.assignments, pp)
+      if (clean.length > 0) {
+        await syncGraphToBackend(pp, projectName, clean)
+      }
+      if (conflicts.length > 0) {
+        useReviewStore.getState().addItems(conflicts)
+      }
     }
     if (result.reviewItem) {
       useReviewStore.getState().addItems([result.reviewItem])

@@ -161,7 +161,7 @@ describe("classifyQuestion", () => {
     expect(prompt).toContain("policy_violation")
     expect(prompt).toContain("condition_based_test")
     expect(prompt).toContain("정책 위반 탐지")
-    expect(prompt).toContain("조건 + 행위")
+    expect(prompt).toContain("조건 기반 가상 테스트")
     expect(prompt).toContain("질문")
   })
 })

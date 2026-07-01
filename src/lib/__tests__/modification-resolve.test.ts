@@ -7,12 +7,7 @@ vi.mock("@/commands/fs", () => ({
   fileExists: vi.fn(),
 }))
 
-vi.mock("@/commands/git", () => ({
-  gitCommit: vi.fn(),
-}))
-
 import { readFile, writeFile, deleteFile, fileExists } from "@/commands/fs"
-import { gitCommit } from "@/commands/git"
 import {
   approveModification,
   discardModification,
@@ -27,7 +22,6 @@ const mockReadFile = vi.mocked(readFile)
 const mockWriteFile = vi.mocked(writeFile)
 const mockDeleteFile = vi.mocked(deleteFile)
 const mockFileExists = vi.mocked(fileExists)
-const mockGitCommit = vi.mocked(gitCommit)
 
 function makeProposal(overrides: Partial<ModificationProposal> = {}): ModificationProposal {
   return {
@@ -49,9 +43,6 @@ beforeEach(() => {
   mockWriteFile.mockReset().mockResolvedValue(undefined)
   mockDeleteFile.mockReset().mockResolvedValue(undefined)
   mockFileExists.mockReset().mockResolvedValue(false)
-  mockGitCommit
-    .mockReset()
-    .mockResolvedValue({ committed: true, commitHash: "abc1234" })
   __resetProjectLocksForTesting()
 })
 
@@ -68,7 +59,7 @@ describe("pathToSlug", () => {
 })
 
 describe("approveModification", () => {
-  it("copies the parked draft to the target with sources merged, deletes the draft, commits", async () => {
+  it("copies the parked draft to the target with sources merged, deletes the draft", async () => {
     const proposal = makeProposal()
     mockReadFile
       .mockResolvedValueOnce(proposal.incomingExcerpt) // draft
@@ -100,15 +91,6 @@ describe("approveModification", () => {
 
     // Draft deleted
     expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
-
-    // Commit on the target with the v2 source ref in the trailer
-    expect(mockGitCommit).toHaveBeenCalledTimes(1)
-    const [, message, paths] = mockGitCommit.mock.calls[0]
-    expect(paths).toEqual([proposal.targetPath])
-    expect(message).toContain("modification: approve db/content/dungeons/dungeon_a/rewards.md")
-    expect(message).toContain(
-      "Source: instance_server_design_v2.md:## 던전 A — 보상 (변경)",
-    )
   })
 
   it("works when the target page does not yet exist on disk", async () => {
@@ -126,12 +108,11 @@ describe("approveModification", () => {
       proposal.incomingExcerpt,
     )
     expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
-    expect(mockGitCommit).toHaveBeenCalledTimes(1)
   })
 })
 
 describe("discardModification", () => {
-  it("appends a JSONL line to .llm-wiki/rejection-log.jsonl, deletes the draft, commits", async () => {
+  it("appends a JSONL line to .llm-wiki/rejection-log.jsonl, deletes the draft", async () => {
     const proposal = makeProposal()
     // existing log present
     mockFileExists.mockImplementation(async (p) => {
@@ -159,13 +140,6 @@ describe("discardModification", () => {
 
     // Draft deleted
     expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
-
-    // Commit attributed to the target page (not the log file) with discard action
-    const [, message] = mockGitCommit.mock.calls[0]
-    expect(message).toMatch(
-      /^modification: discard db\/content\/dungeons\/dungeon_a\/rewards\.md/,
-    )
-    expect(message).toContain("Resolved-by: discard")
   })
 
   it("creates the rejection log fresh when it doesn't exist yet", async () => {
@@ -186,7 +160,7 @@ describe("discardModification", () => {
 })
 
 describe("pendingModification", () => {
-  it("moves pending/_proposals/<id>.md to pending/<slug>.md and commits", async () => {
+  it("moves pending/_proposals/<id>.md to pending/<slug>.md", async () => {
     const proposal = makeProposal()
     mockReadFile.mockResolvedValueOnce(proposal.incomingExcerpt)
 
@@ -198,16 +172,11 @@ describe("pendingModification", () => {
       proposal.incomingExcerpt,
     )
     expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
-
-    const [, message] = mockGitCommit.mock.calls[0]
-    expect(message).toMatch(
-      /^modification: pending db\/content\/dungeons\/dungeon_a\/rewards\.md/,
-    )
   })
 })
 
 describe("counterexampleModification", () => {
-  it("moves pending/_proposals/<id>.md to counterexamples/<slug>.md and commits", async () => {
+  it("moves pending/_proposals/<id>.md to counterexamples/<slug>.md", async () => {
     const proposal = makeProposal()
     mockReadFile.mockResolvedValueOnce(proposal.incomingExcerpt)
 
@@ -218,10 +187,5 @@ describe("counterexampleModification", () => {
       proposal.incomingExcerpt,
     )
     expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
-
-    const [, message] = mockGitCommit.mock.calls[0]
-    expect(message).toMatch(
-      /^modification: counterexample db\/content\/dungeons\/dungeon_a\/rewards\.md/,
-    )
   })
 })

@@ -1,7 +1,8 @@
 import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
 import type { SourceRef } from "@/lib/source-ref"
-import type { Stage1Section } from "@/lib/ingest"
+import type { Stage1Section, Stage2Triple } from "@/lib/ingest"
+import type { EntityEntry } from "@/lib/entity-dict"
 
 export interface ReviewOption {
   label: string
@@ -64,6 +65,18 @@ export interface OverflowEntry {
   affectedPaths: string[]
 }
 
+/**
+ * One entry per entity-name conflict from checkEntityConflicts(). Groups all
+ * triples that used `incomingName` for the same underlying concept so a
+ * single card can resolve them together.
+ */
+export interface EntityConfirmationItem {
+  incomingName: string
+  candidates: EntityEntry[]
+  triples: Stage2Triple[]
+  pagePaths: string[]
+}
+
 export interface ReviewItem {
   id: string
   type:
@@ -74,6 +87,7 @@ export interface ReviewItem {
     | "suggestion"
     | "modification"
     | "schema"
+    | "entity_confirmation"
   /**
    * Stage 4 two-step decision tree. Only meaningful for `type:
    * "modification"`. `"primary"` shows [Approve | Merge | Reject];
@@ -89,6 +103,8 @@ export interface ReviewItem {
   /** Overflow-only payload — one entry per overflowed graph. Only present on
    *  suggestion items that come from Stage 2 relation-type overflow. */
   overflowEntries?: OverflowEntry[]
+  /** entity_confirmation-only payload — the fuzzy-matched name and the triples that used it. */
+  entityConfirmation?: EntityConfirmationItem
   title: string
   description: string
   sourcePath?: string
@@ -152,14 +168,14 @@ export const useReviewStore = create<ReviewState>((set) => ({
       // Other non-modification types: dedupe against pending only.
       const pendingIndex = new Map<string, number>()
       result.forEach((it, idx) => {
-        if (it.type === "modification") return
+        if (it.type === "modification" || it.type === "entity_confirmation") return
         if (it.type === "schema" || !it.resolved) {
           pendingIndex.set(keyFor(it.type, it.title), idx)
         }
       })
 
       for (const incoming of items) {
-        if (incoming.type === "modification") {
+        if (incoming.type === "modification" || incoming.type === "entity_confirmation") {
           // Always append — never merge.
           result.push({
             ...incoming,

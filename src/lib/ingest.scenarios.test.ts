@@ -1,9 +1,12 @@
 /**
  * Scenario-driven tests for autoIngest.
  *
- * Each scenario materializes an initial project, a source document, and two
- * canned LLM responses (stage 1 analysis, stage 2 generation with FILE +
- * REVIEW blocks). The runner mocks streamChat to emit them sequentially.
+ * Each scenario materializes an initial project, a source document, and a
+ * canned Stage 1 (decomposition) response in the SECTION delimiter format.
+ * Sections that carry a page_path go straight to Stage 3 (file write) with
+ * no further LLM call; a canned Stage 2 (legacy, no-path) response is only
+ * consumed when a scenario's sections omit page_path. The runner mocks
+ * streamChat to emit the canned responses sequentially.
  *
  * After ingest runs, the runner asserts:
  *   - expected files exist on disk with expected substrings

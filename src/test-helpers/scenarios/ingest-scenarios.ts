@@ -1,23 +1,21 @@
 import type { IngestScenario } from "./types"
 
 /**
- * Ingest scenarios drive autoIngest end-to-end. Two LLM responses per
- * scenario (stage 1 analysis, stage 2 generation with FILE + REVIEW blocks).
+ * Ingest scenarios drive autoIngest end-to-end.
  *
- * FILE block format (what stage 2 must emit to write a wiki file):
- *   ---FILE: db/path/to/page.md---
- *   (file content, usually with YAML frontmatter)
- *   ---END FILE---
+ * Stage 1 now decides page_path per section and emits verbatim source
+ * text directly — sections with a page_path go straight to Stage 3
+ * (buildFileBlocksFromSections), which builds FILE content from the
+ * section body/frontmatter without a second LLM call. `analysisResponse`
+ * therefore uses the SECTION delimiter format:
  *
- * REVIEW block format (what stage 2 emits to inject a review item):
- *   ---REVIEW: missing-page | Short title---
- *   Description.
- *   OPTIONS: Approve | Skip
- *   PAGES: page1.md, page2.md
- *   ---END REVIEW---
+ *   ---SECTION: source_range | db/path/to/page.md---
+ *   (verbatim source text for this section)
+ *   ---END SECTION---
  *
- * Stage 2 may emit arbitrary prose around blocks — the parser only
- * cares about the delimited blocks.
+ * `generationResponse` is legacy (Stage 2 FILE/REVIEW block format) and is
+ * only consumed when a section has no page_path — leave it "" for
+ * scenarios where every section carries one.
  */
 
 const BASIC_PURPOSE = `# Purpose
@@ -63,44 +61,21 @@ export const ingestScenarios: IngestScenario[] = [
         "supports variable-length contexts and is now standard in LLMs.",
       ].join("\n"),
     },
+    // Stage 1 now decides page_path directly and emits verbatim source text
+    // per SECTION — there is no separate Stage 2 "generation" call when
+    // every section carries a page_path, so this scenario's file content
+    // comes entirely from buildFileBlocksFromSections(), not from LLM prose.
     analysisResponse: [
-      "## Key Concepts",
-      "- Rotary Position Embedding (RoPE): rotates pairs of dimensions",
-      "",
-      "## Main Arguments",
-      "- RoPE naturally supports variable-length contexts",
-      "",
-      "## Recommendations",
-      "- Create db/concepts/rope.md",
-      "- Create db/sources/rope-paper.md",
-    ].join("\n"),
-    generationResponse: [
-      "I'll create one concept page and the source summary.",
-      "",
-      "---FILE: db/concepts/rope.md---",
-      "---",
-      "title: Rotary Position Embedding",
-      "tags: [positional-encoding]",
-      "sources: [rope-paper.md]",
-      "---",
-      "",
-      "# Rotary Position Embedding",
-      "",
+      "---SECTION: Rotary Position Embedding | db/concepts/rope.md---",
       "RoPE rotates pairs of dimensions in [[attention]] queries and keys",
       "to encode absolute position while preserving relative-position invariance.",
-      "---END FILE---",
+      "---END SECTION---",
       "",
-      "---FILE: db/sources/rope-paper.md---",
-      "---",
-      "title: \"Source: rope-paper.md\"",
-      "sources: [rope-paper.md]",
-      "---",
-      "",
-      "# Source: rope-paper.md",
-      "",
+      "---SECTION: Source: rope-paper.md | db/sources/rope-paper.md---",
       "Paper introducing [[Rotary Position Embedding]].",
-      "---END FILE---",
+      "---END SECTION---",
     ].join("\n"),
+    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/concepts/rope.md",
@@ -113,59 +88,17 @@ export const ingestScenarios: IngestScenario[] = [
         ],
         "db/sources/rope-paper.md": ["rope-paper.md"],
       },
-      reviewsCreated: [],
-    },
-  },
-
-  // 2. generates-review-items — REVIEW blocks in generation become store items
-  {
-    name: "generates-review-items",
-    description:
-      "Stage 2 emits one FILE and two REVIEW blocks (missing-page + " +
-      "suggestion). Both reviews must appear in the store after ingest.",
-    initialWiki: {
-      "purpose.md": BASIC_PURPOSE,
-      "schema.md": BASIC_SCHEMA,
-      "db/index.md": BASIC_INDEX,
-    },
-    source: {
-      path: "raw/sources/flash-attention.md",
-      content:
-        "# FlashAttention\n\nFlashAttention is an IO-aware exact attention algorithm.\n",
-    },
-    analysisResponse: "## Key Concepts\n- FlashAttention\n",
-    generationResponse: [
-      "---FILE: db/sources/flash-attention.md---",
-      "---",
-      "title: \"Source: flash-attention.md\"",
-      "sources: [flash-attention.md]",
-      "---",
-      "",
-      "# Source: flash-attention.md",
-      "",
-      "FlashAttention is mentioned here.",
-      "---END FILE---",
-      "",
-      "---REVIEW: missing-page | FlashAttention---",
-      "The source introduces FlashAttention but no dedicated page exists.",
-      "OPTIONS: Create page | Skip",
-      "PAGES: db/sources/flash-attention.md",
-      "---END REVIEW---",
-      "",
-      "---REVIEW: suggestion | Add IO-aware algorithms survey---",
-      "Consider a survey page grouping IO-aware attention variants.",
-      "---END REVIEW---",
-    ].join("\n"),
-    expected: {
-      writtenPaths: ["db/sources/flash-attention.md"],
+      // No graph policy is seeded for this scenario, so Stage 2 (graph
+      // assignment) has no managed graphs to assign triples to — it
+      // reports back a "no graph assignments produced" suggestion. This
+      // is orthogonal to what this scenario actually tests (file writing).
       reviewsCreated: [
-        { type: "missing-page", titleContains: "FlashAttention" },
-        { type: "suggestion", titleContains: "IO-aware" },
+        { type: "suggestion", titleContains: "no graph assignments produced" },
       ],
     },
   },
 
-  // 3. references-existing-wikilinks — generated pages link to existing pages
+  // 2. references-existing-wikilinks — generated pages link to existing pages
   {
     name: "references-existing-wikilinks",
     description:
@@ -182,30 +115,16 @@ export const ingestScenarios: IngestScenario[] = [
       path: "raw/sources/multi-head.md",
       content: "# Multi-Head Attention\n\nParallel attention heads.\n",
     },
-    analysisResponse:
-      "## Connections to Existing Wiki\n" +
-      "- Multi-head attention is a variant of attention — existing [[attention]] page should be linked.\n",
-    generationResponse: [
-      "---FILE: db/concepts/multi-head-attention.md---",
-      "---",
-      "title: Multi-Head Attention",
-      "---",
-      "",
-      "# Multi-Head Attention",
-      "",
+    analysisResponse: [
+      "---SECTION: Multi-Head Attention | db/concepts/multi-head-attention.md---",
       "Multi-head [[attention]] runs several attention layers in parallel.",
-      "---END FILE---",
+      "---END SECTION---",
       "",
-      "---FILE: db/sources/multi-head.md---",
-      "---",
-      "title: \"Source: multi-head.md\"",
-      "---",
-      "",
-      "# Source: multi-head.md",
-      "",
+      "---SECTION: Source: multi-head.md | db/sources/multi-head.md---",
       "Source for multi-head [[attention]].",
-      "---END FILE---",
+      "---END SECTION---",
     ].join("\n"),
+    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/concepts/multi-head-attention.md",
@@ -214,10 +133,15 @@ export const ingestScenarios: IngestScenario[] = [
       fileContains: {
         "db/concepts/multi-head-attention.md": ["[[attention]]"],
       },
+      // No graph policy seeded — Stage 2 reports "no graph assignments
+      // produced" rather than actually assigning triples. See scenario 1.
+      reviewsCreated: [
+        { type: "suggestion", titleContains: "no graph assignments produced" },
+      ],
     },
   },
 
-  // 4. game-dev/instance-server — Stage 3 decomposition into db/ paths.
+  // 3. game-dev/instance-server — Stage 3 decomposition into db/ paths.
   //
   // The source document mixes 4 distinct semantic units that schema.md
   // routes to 4 different db/ subtrees. The ingest pipeline must:
@@ -264,76 +188,26 @@ export const ingestScenarios: IngestScenario[] = [
       ].join("\n"),
     },
     analysisResponse: [
-      "Proposed decomposition:",
-      "- path: db/systems/instance_server/server_structure.md",
-      "  range: ## 1. 서버 구조",
-      "- path: db/content/dungeons/dungeon_a/entry_rules.md",
-      "  range: ## 2. 던전 A — 입장 규칙",
-      "- path: db/content/dungeons/dungeon_a/rewards.md",
-      "  range: ## 3. 던전 A — 보상",
-      "- path: db/content/dungeons/dungeon_b/spawn_rules.md",
-      "  range: ## 4. 던전 B — 스폰 규칙",
-    ].join("\n"),
-    generationResponse: [
-      "---FILE: db/systems/instance_server/server_structure.md---",
-      "---",
-      "title: 인스턴스 서버 구조",
-      "status: draft",
-      "sources:",
-      "  - file: instance_server_design.md",
-      '    range: "## 1. 서버 구조"',
-      "---",
-      "",
-      "# 인스턴스 서버 구조",
-      "",
+      "---SECTION: ## 1. 서버 구조 | db/systems/instance_server/server_structure.md---",
       "채널마다 별도 프로세스로 동작하며, 메인 서버와 gRPC로 통신한다.",
-      "---END FILE---",
+      "---END SECTION---",
       "",
-      "---FILE: db/content/dungeons/dungeon_a/entry_rules.md---",
-      "---",
-      "title: 던전 A 입장 규칙",
-      "status: draft",
-      "sources:",
-      "  - file: instance_server_design.md",
-      '    range: "## 2. 던전 A — 입장 규칙"',
-      "---",
-      "",
-      "# 던전 A 입장 규칙",
-      "",
+      "---SECTION: ## 2. 던전 A — 입장 규칙 | db/content/dungeons/dungeon_a/entry_rules.md---",
       "- 레벨 50 이상 입장 가능",
       "- 파티 4인 필수",
-      "---END FILE---",
+      "---END SECTION---",
       "",
-      "---FILE: db/content/dungeons/dungeon_a/rewards.md---",
-      "---",
-      "title: 던전 A 보상",
-      "status: draft",
-      "sources:",
-      "  - file: instance_server_design.md",
-      '    range: "## 3. 던전 A — 보상"',
-      "---",
-      "",
-      "# 던전 A 보상",
-      "",
+      "---SECTION: ## 3. 던전 A — 보상 | db/content/dungeons/dungeon_a/rewards.md---",
       "- 클리어 시 골드 1000 + 장비 박스 1개",
       "- 주간 1회 추가 보상",
-      "---END FILE---",
+      "---END SECTION---",
       "",
-      "---FILE: db/content/dungeons/dungeon_b/spawn_rules.md---",
-      "---",
-      "title: 던전 B 스폰 규칙",
-      "status: draft",
-      "sources:",
-      "  - file: instance_server_design.md",
-      '    range: "## 4. 던전 B — 스폰 규칙"',
-      "---",
-      "",
-      "# 던전 B 스폰 규칙",
-      "",
+      "---SECTION: ## 4. 던전 B — 스폰 규칙 | db/content/dungeons/dungeon_b/spawn_rules.md---",
       "- 보스는 60초 간격으로 스폰",
       "- 스폰 위치는 5곳 랜덤",
-      "---END FILE---",
+      "---END SECTION---",
     ].join("\n"),
+    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/systems/instance_server/server_structure.md",
@@ -343,20 +217,24 @@ export const ingestScenarios: IngestScenario[] = [
       ],
       fileContains: {
         "db/content/dungeons/dungeon_a/rewards.md": [
-          "title: 던전 A 보상",
           "file: instance_server_design.md",
           "## 3. 던전 A — 보상",
+          "골드 1000",
         ],
         "db/systems/instance_server/server_structure.md": [
           "file: instance_server_design.md",
           "gRPC",
         ],
       },
-      reviewsCreated: [],
+      // No graph policy seeded — Stage 2 reports "no graph assignments
+      // produced" rather than actually assigning triples. See scenario 1.
+      reviewsCreated: [
+        { type: "suggestion", titleContains: "no graph assignments produced" },
+      ],
     },
   },
 
-  // 5. chinese-source — Chinese content flows through to Chinese wiki pages
+  // 4. chinese-source — Chinese content flows through to Chinese wiki pages
   {
     name: "chinese-source",
     description:
@@ -371,28 +249,16 @@ export const ingestScenarios: IngestScenario[] = [
       path: "raw/sources/transformer-survey.md",
       content: "# Transformer 综述\n\nTransformer 是一种基于注意力机制的神经网络架构。\n",
     },
-    analysisResponse: "## 核心概念\n- Transformer：基于注意力机制的架构\n",
-    generationResponse: [
-      "---FILE: db/concepts/transformer.md---",
-      "---",
-      "title: Transformer",
-      "---",
-      "",
-      "# Transformer",
-      "",
+    analysisResponse: [
+      "---SECTION: Transformer | db/concepts/transformer.md---",
       "Transformer 是一种基于 [[注意力机制]] 的神经网络架构。",
-      "---END FILE---",
+      "---END SECTION---",
       "",
-      "---FILE: db/sources/transformer-survey.md---",
-      "---",
-      "title: \"Source: transformer-survey.md\"",
-      "---",
-      "",
-      "# Source: transformer-survey.md",
-      "",
+      "---SECTION: Source: transformer-survey.md | db/sources/transformer-survey.md---",
       "关于 [[Transformer]] 的综述。",
-      "---END FILE---",
+      "---END SECTION---",
     ].join("\n"),
+    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/concepts/transformer.md",
@@ -404,6 +270,11 @@ export const ingestScenarios: IngestScenario[] = [
           "[[注意力机制]]",
         ],
       },
+      // No graph policy seeded — Stage 2 reports "no graph assignments
+      // produced" rather than actually assigning triples. See scenario 1.
+      reviewsCreated: [
+        { type: "suggestion", titleContains: "no graph assignments produced" },
+      ],
     },
   },
 ]

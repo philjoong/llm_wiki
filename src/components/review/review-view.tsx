@@ -13,6 +13,7 @@ import {
   Check,
   Trash2,
   Database,
+  Users,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
@@ -28,6 +29,8 @@ import {
 import { approveSchemaChange } from "@/lib/schema-resolve"
 import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
 import { runStage2ForApprovedDoc } from "@/lib/ingest"
+import { syncGraphToBackend } from "@/lib/graph-sync"
+import { loadEntityDict, saveEntityDict, addAlias, upsertEntity } from "@/lib/entity-dict"
 import { PendingView } from "@/components/review/pending-view"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
@@ -38,6 +41,7 @@ const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
   modification: { icon: GitMerge, label: "Modification", color: "text-orange-500" },
   schema: { icon: Database, label: "Schema Change", color: "text-indigo-500" },
+  entity_confirmation: { icon: Users, label: "Entity Confirmation", color: "text-teal-500" },
 }
 
 export function ReviewView() {
@@ -143,6 +147,44 @@ export function ReviewView() {
         }
       } catch (err) {
         console.error("[review] modification action failed:", err)
+        resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return
+    }
+
+    // Entity confirmation — resolve a fuzzy name conflict, then sync the
+    // held-back triples to the graph backend.
+    if (item?.type === "entity_confirmation" && project) {
+      const payload = item.entityConfirmation
+      if (!payload) {
+        resolveItem(id, action)
+        return
+      }
+      try {
+        let dict = await loadEntityDict(pp)
+        let triplesToSync = payload.triples
+
+        if (action.startsWith("entity:same:")) {
+          const targetId = action.slice("entity:same:".length)
+          dict = addAlias(targetId, payload.incomingName, dict)
+          const target = dict[targetId]
+          if (target) {
+            triplesToSync = payload.triples.map((t) => ({
+              ...t,
+              subject: t.subject === payload.incomingName ? target.canonicalName : t.subject,
+              object: t.object === payload.incomingName ? target.canonicalName : t.object,
+            }))
+          }
+        } else if (action === "entity:new") {
+          dict = upsertEntity({ canonicalName: payload.incomingName }, dict)
+        }
+        // "entity:ignore" — sync as-is; graph-sync.ts will auto-register incomingName.
+
+        await saveEntityDict(pp, dict)
+        await syncGraphToBackend(pp, projectName, triplesToSync)
+        resolveItem(id, action)
+      } catch (err) {
+        console.error("[review] entity_confirmation action failed:", err)
         resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
       }
       return

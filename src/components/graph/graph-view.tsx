@@ -16,11 +16,13 @@ import { graphSnapshotToCanvas } from "@/lib/graph-backend/graph-result-mappers"
 import { cleanupOrphanGraphs } from "@/lib/graph-sync"
 import { loadGraphPolicy, type GraphPolicy } from "@/lib/graph-policy"
 import { removePageFromIndex } from "@/lib/page-graph-index"
+import { loadEntityDict, saveEntityDict, findEntityByGraphNode, renameEntity, unlinkGraphNode } from "@/lib/entity-dict"
 import { cn } from "@/lib/utils"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { GraphsTab } from "@/components/layout/graphs-tab"
+import { EntityView } from "@/components/entity/entity-view"
 
-type TabId = "knowledge" | "files" | "graphs"
+type TabId = "knowledge" | "files" | "graphs" | "entity"
 
 function nonEmptyGraphsCacheKey(projectName: string): string {
   return `llm-wiki:non-empty-graphs:${projectName}`
@@ -335,7 +337,7 @@ export function GraphView() {
     <div className="flex h-full flex-col">
       {/* Tab bar */}
       <div className="flex shrink-0 items-center border-b">
-        {(["knowledge", "files", "graphs"] as TabId[]).map((tab) => (
+        {(["knowledge", "files", "graphs", "entity"] as TabId[]).map((tab) => (
           <button
             key={tab}
             onClick={() => {
@@ -351,7 +353,7 @@ export function GraphView() {
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "knowledge" ? "Knowledge" : tab === "files" ? "Files" : "Graphs"}
+            {tab === "knowledge" ? "Knowledge" : tab === "files" ? "Files" : tab === "graphs" ? "Graphs" : "Entity"}
           </button>
         ))}
         <div className="ml-auto flex items-center gap-1 pr-2">
@@ -365,6 +367,8 @@ export function GraphView() {
         <GraphsTab onPolicySaved={(managedGraphs) => {
           setLiveGraphs((prev) => prev.filter((g) => managedGraphs.includes(g)))
         }} />
+      ) : activeTab === "entity" ? (
+        <EntityView />
       ) : activeTab === "knowledge" ? (
         <div className="flex h-full min-h-0 flex-col">
           {/* Graph selector + stats */}
@@ -633,6 +637,12 @@ function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, o
           await removePageFromIndex(project.path, pagePath)
         }
       }
+      if (isNode) {
+        try {
+          const dict = await loadEntityDict(project.path)
+          await saveEntityDict(project.path, unlinkGraphNode(graphName, String(element.id), dict))
+        } catch { /* non-fatal */ }
+      }
       onClose()
       onGraphChanged()
     } catch (e) {
@@ -651,6 +661,13 @@ function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, o
       const backend = await getGraphBackend(project.path)
       if (isNode) {
         await backend.updateNodeName(project.name, graphName, String(element.id), nodeName.trim())
+        try {
+          const dict = await loadEntityDict(project.path)
+          const entry = findEntityByGraphNode(graphName, String(element.id), dict)
+          if (entry) {
+            await saveEntityDict(project.path, renameEntity(entry.id, nodeName.trim(), dict))
+          }
+        } catch { /* non-fatal */ }
       } else {
         await backend.updateEdge(project.name, graphName, String(element.id), edgeRelType)
       }

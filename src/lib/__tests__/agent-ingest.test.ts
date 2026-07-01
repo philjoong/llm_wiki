@@ -38,7 +38,7 @@ vi.mock("../graph-policy", () => ({
 }))
 
 vi.mock("../graph-sync", () => ({
-  syncGraphToFalkorDb: vi.fn().mockResolvedValue("0 triples (nothing to sync)"),
+  syncGraphToBackend: vi.fn().mockResolvedValue("0 triples (nothing to sync)"),
 }))
 
 vi.mock("@/lib/counterexample-index", () => ({

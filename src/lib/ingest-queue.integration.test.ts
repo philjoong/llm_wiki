@@ -15,6 +15,7 @@ vi.mock("@/commands/fs", () => realFs)
 // where we can inspect the persisted file before success removes them.
 vi.mock("./ingest", () => ({
   autoIngest: vi.fn(),
+  consumeEmptyDataTypeFlag: vi.fn(() => false),
 }))
 
 // Sweep is tested separately; stub so drains don't explode

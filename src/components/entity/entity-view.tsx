@@ -63,6 +63,16 @@ export function EntityView() {
     )
   }, [entries, search])
 
+  const mergeCandidates = useMemo(() => {
+    if (!mergingId) return []
+    const q = mergeSearch.trim()
+    const pool = entries.filter((e) => e.id !== mergingId)
+    if (!q) return pool
+    return findCandidates(q, dict)
+      .map((c) => c.entry)
+      .filter((e) => e.id !== mergingId)
+  }, [mergingId, mergeSearch, entries, dict])
+
   if (!projectPath) {
     return <div className="p-3 text-xs text-muted-foreground">No project open.</div>
   }
@@ -122,16 +132,6 @@ export function EntityView() {
   }
 
   // ── Merge ──────────────────────────────────────────────────────────────────
-
-  const mergeCandidates = useMemo(() => {
-    if (!mergingId) return []
-    const q = mergeSearch.trim()
-    const pool = entries.filter((e) => e.id !== mergingId)
-    if (!q) return pool
-    return findCandidates(q, dict)
-      .map((c) => c.entry)
-      .filter((e) => e.id !== mergingId)
-  }, [mergingId, mergeSearch, entries, dict])
 
   async function handleMerge(targetId: string) {
     if (!mergingId) return

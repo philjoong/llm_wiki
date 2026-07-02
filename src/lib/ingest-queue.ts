@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "@/commands/fs"
 import { invoke } from "@tauri-apps/api/core"
-import { autoIngest } from "./ingest"
+import { autoIngest, consumeEmptyDataTypeFlag } from "./ingest"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
 import { getProjectPathById } from "@/lib/project-identity"
@@ -514,7 +514,13 @@ async function processNext(projectId: string): Promise<void> {
     // was really ingested (e.g. abort during webview refresh where the
     // historical `return []` error path masqueraded as success). Treat
     // as failure so the task stays in the queue and retries.
-    if (writtenFiles.length === 0) {
+    //
+    // Exception: a data-type task where every chunk legitimately matched
+    // none of the data type's fields (see isEmptyDataTypeExtraction in
+    // ingest.ts) is a successful outcome, not a transport failure —
+    // ingest.ts flags this via consumeEmptyDataTypeFlag() instead of
+    // throwing, and already surfaced a review item explaining why.
+    if (writtenFiles.length === 0 && !consumeEmptyDataTypeFlag()) {
       throw new Error("Ingest produced no output files")
     }
 

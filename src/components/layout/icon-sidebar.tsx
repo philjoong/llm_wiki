@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import {
-  FileText, Settings, ClipboardList, History, Network, DatabaseZap, Link2, ChevronLeft, FolderOpen, Upload,
+  FileText, Settings, ClipboardList, History, Network, DatabaseZap, Link2, ChevronLeft, FolderOpen, Upload, Grid3x3, UsersRound,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
@@ -28,6 +28,8 @@ const NAV_ITEMS: { view: NavView; icon: typeof FileText; labelKey: string }[] = 
   { view: "graph", icon: Network, labelKey: "nav.graph" },
   { view: "review", icon: ClipboardList, labelKey: "nav.review" },
   { view: "history", icon: History, labelKey: "nav.history" },
+  { view: "casemap", icon: Grid3x3, labelKey: "nav.casemap" },
+  { view: "persona", icon: UsersRound, labelKey: "nav.persona" },
 ]
 
 interface IconSidebarProps {
@@ -50,7 +52,7 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
   const [urlDialogOpen, setUrlDialogOpen] = useState(false)
   const [urlValue, setUrlValue] = useState("")
   const [dataTypes, setDataTypes] = useState<DataType[]>([])
-  const [selectedDataTypeId, setSelectedDataTypeId] = useState("")
+  const [selectedDataTypeIds, setSelectedDataTypeIds] = useState<string[]>([])
   const [pendingInjection, setPendingInjection] = useState<PendingInjection | null>(null)
   const [dataTypeDialogOpen, setDataTypeDialogOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -74,24 +76,35 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
     }
 
     setDataTypes(available)
-    setSelectedDataTypeId("")
+    setSelectedDataTypeIds([])
     setPendingInjection({ rels, source })
     setDataTypeDialogOpen(true)
+  }
+
+  function toggleDataType(id: string) {
+    setSelectedDataTypeIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
   }
 
   async function confirmDataTypeInjection() {
     if (!project || !pendingInjection) return
     const rels = pendingInjection.rels
-    const dataTypeId = selectedDataTypeId || undefined
+    // No data type selected → ingest once per file with the standard
+    // (non-structured) Stage 1. Otherwise ingest once per file PER
+    // selected data type, so N selected types produce N documents.
+    const dataTypeIds = selectedDataTypeIds.length > 0 ? selectedDataTypeIds : [undefined]
     setInjecting(pendingInjection.source === "file")
     setInjectingUrl(pendingInjection.source === "url")
     try {
       for (const rel of rels) {
-        await enqueueIngest(project.id, rel, "", dataTypeId)
+        for (const dataTypeId of dataTypeIds) {
+          await enqueueIngest(project.id, rel, "", dataTypeId)
+        }
       }
       setDataTypeDialogOpen(false)
       setPendingInjection(null)
-      setSelectedDataTypeId("")
+      setSelectedDataTypeIds([])
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error("Failed to enqueue ingest:", err)
@@ -193,7 +206,7 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
   useEffect(() => {
     setDataTypeDialogOpen(false)
     setPendingInjection(null)
-    setSelectedDataTypeId("")
+    setSelectedDataTypeIds([])
     setDataTypes([])
   }, [project?.id])
 
@@ -375,35 +388,43 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
           setDataTypeDialogOpen(o)
           if (!o) {
             setPendingInjection(null)
-            setSelectedDataTypeId("")
+            setSelectedDataTypeIds([])
           }
         }}
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Select data type</DialogTitle>
+            <DialogTitle>Select data type(s)</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-2 py-2">
-            <Label htmlFor="inject-data-type">Data type</Label>
-            <select
-              id="inject-data-type"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-              value={selectedDataTypeId}
-              onChange={(e) => setSelectedDataTypeId(e.target.value)}
-              disabled={injecting || injectingUrl}
-            >
-              <option value="">No data type</option>
+            <Label>Data types</Label>
+            <p className="text-xs text-muted-foreground">
+              Select none for the standard ingest, or one or more data types — each selected type produces its own document.
+            </p>
+            <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto rounded-md border border-input p-2">
               {dataTypes.map((dt) => (
-                <option key={dt.id} value={dt.id}>
-                  {dt.name} ({dt.id})
-                </option>
+                <label
+                  key={dt.id}
+                  htmlFor={`inject-data-type-${dt.id}`}
+                  className="flex items-start gap-2 rounded-sm px-1 py-1 text-sm hover:bg-accent"
+                >
+                  <input
+                    id={`inject-data-type-${dt.id}`}
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={selectedDataTypeIds.includes(dt.id)}
+                    onChange={() => toggleDataType(dt.id)}
+                    disabled={injecting || injectingUrl}
+                  />
+                  <span>
+                    <span className="text-foreground">{dt.name} ({dt.id})</span>
+                    {dt.description && (
+                      <span className="block text-xs text-muted-foreground">{dt.description}</span>
+                    )}
+                  </span>
+                </label>
               ))}
-            </select>
-            {selectedDataTypeId && (
-              <p className="text-xs text-muted-foreground">
-                {dataTypes.find((dt) => dt.id === selectedDataTypeId)?.description}
-              </p>
-            )}
+            </div>
           </div>
           <DialogFooter>
             <Button

@@ -4,6 +4,7 @@ import { flushMicrotasks } from "@/test-helpers/deferred"
 // Mock autoIngest so tests control success/failure timing.
 vi.mock("./ingest", () => ({
   autoIngest: vi.fn(),
+  consumeEmptyDataTypeFlag: vi.fn(() => false),
 }))
 
 // Mock fs so we don't hit the real filesystem.

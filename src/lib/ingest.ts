@@ -23,11 +23,8 @@ import { getGraphBackend } from "@/lib/graph-backend"
 import { removePageFromIndex } from "@/lib/page-graph-index"
 import {
   loadEntityDict,
-  saveEntityDict,
   buildEntityHintsForPrompt,
   findCandidates,
-  upsertEntity,
-  addAlias,
 } from "@/lib/entity-dict"
 import type { EntityEntry } from "@/lib/entity-dict"
 import {
@@ -115,6 +112,45 @@ export function isSafeIngestPath(p: string): boolean {
   if (!SAFE_INGEST_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false
   return true
 }
+
+/** Turns a filename into a `db/` path segment: lowercase, ascii-safe, hyphenated. */
+function slugifyForPagePath(name: string): string {
+  const stem = name.replace(/\.[^./]+$/, "")
+  const slug = stem
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  return slug || "untitled"
+}
+
+// Placeholder markers the data-type extraction prompt instructs the LLM to
+// use when a field has no matching content in the source. A field body
+// entirely made of these (plus whitespace/list bullets) contributes no
+// real information.
+const EMPTY_FIELD_MARKERS = ["정보 없음", "정보없음", "n/a", "없음", "none", "no information", "not found", "not available"]
+
+/**
+ * True when a data-type extraction produced nothing usable: every `##`
+ * field section is blank or only contains an empty-field placeholder.
+ * Used to skip document/graph creation for chunks that matched no real
+ * data instead of writing a page full of "정보 없음".
+ */
+function isEmptyDataTypeExtraction(markdown: string): boolean {
+  const fieldBodies = markdown
+    .split(/^##\s+.*$/m)
+    .slice(1) // drop text before the first heading (if any)
+  const sections = fieldBodies.length > 0 ? fieldBodies : [markdown]
+
+  return sections.every((body) => {
+    const cleaned = body
+      .replace(/^[-*]\s*/gm, "") // strip list bullets
+      .trim()
+      .toLowerCase()
+    if (cleaned.length === 0) return true
+    return EMPTY_FIELD_MARKERS.some((marker) => cleaned === marker)
+  })
+}
+
 // Fence delimiters per CommonMark (triple+ backticks or tildes). Leading
 // indentation ≤ 3 spaces is still a fence; 4+ spaces is an indented code
 // block and doesn't use fence markers.
@@ -416,6 +452,25 @@ function splitKeepLeading(text: string, sep: string): string[] {
  * so later chunks see what earlier ones wrote (path-collision avoidance
  * + Stage-4 modification flow on real conflicts).
  */
+// Set by autoIngestImpl right before it returns zero files for a data-type
+// ingest whose chunks legitimately matched none of the data type's fields.
+// ingest-queue.ts reads it via consumeEmptyDataTypeFlag() immediately after
+// autoIngest resolves to tell that outcome apart from a real failure — see
+// autoIngest's doc comment for why this can't just be an extra return value.
+let emptyDataTypeMatchFlag = false
+
+/**
+ * One-shot read of emptyDataTypeMatchFlag: returns its value and resets it
+ * to false. Exported for ingest-queue.ts; each ingest task consumes the
+ * flag left by its own autoIngest call before the next task can set it —
+ * the queue processes one task at a time, so there's no cross-task races.
+ */
+export function consumeEmptyDataTypeFlag(): boolean {
+  const value = emptyDataTypeMatchFlag
+  emptyDataTypeMatchFlag = false
+  return value
+}
+
 export async function autoIngest(
   projectPath: string,
   sourcePath: string,
@@ -592,6 +647,10 @@ export async function autoIngestImpl(
   // recorded here and skipped so the remaining chunks still ingest. The
   // whole document no longer aborts on the first bad chunk.
   const failedChunks: Array<{ chunk: number; stage: string; error: string }> = []
+  // Chunks where the data-type extraction legitimately found nothing (all
+  // fields empty/placeholder). Tracked separately from failedChunks — this
+  // isn't an error, just "this chunk doesn't match this data type".
+  const emptyDataTypeChunks: number[] = []
   // dbIndex is refreshed between chunks so later chunks see what earlier
   // chunks wrote — this lets the LLM align paths with what already exists
   // and routes real overwrite conflicts through Stage 4's proposal flow
@@ -647,9 +706,22 @@ export async function autoIngestImpl(
           failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (data type extraction)", error: msg })
           continue
         }
-        // Wrap the extracted md as a single SECTION so Stage 2 receives
-        // the same Stage1Section[] shape regardless of the code path.
-        stage1Raw = `---SECTION: ${fileName}---\n${stage1Raw}\n---END SECTION---`
+
+        if (isEmptyDataTypeExtraction(stage1Raw)) {
+          activity.updateItem(activityId, { detail: `${chunkLabel}No "${dataType.name}" data found — skipping chunk` })
+          emptyDataTypeChunks.push(chunkIdx + 1)
+          continue
+        }
+
+        // Wrap the extracted md as a single SECTION with a page_path fixed
+        // to this data type + source file. Without a page_path the section
+        // would fall into the legacy Stage-2-decides-page_path route, where
+        // the LLM is free to split one extraction into several triples on
+        // several pages — i.e. several documents from one data type. Giving
+        // it a page_path up front routes it through Stage 3 directly, so
+        // exactly one document is produced per (data type, source file).
+        const dataTypePagePath = `db/${dataTypeId}/${slugifyForPagePath(fileName)}.md`
+        stage1Raw = `---SECTION: ${fileName} | ${dataTypePagePath}---\n${stage1Raw}\n---END SECTION---`
       } else {
         const msg = `Data type "${dataTypeId}" not found. Ingest stopped instead of falling back to standard Stage 1.`
         console.warn(`[ingest] ${msg}`)
@@ -930,6 +1002,22 @@ export async function autoIngestImpl(
     })
   }
 
+  // ── Empty data-type extraction → review item ─────────────────
+  // Not a failure: the source just had nothing matching the selected
+  // data type's fields. Surfaced so a zero-file result is explained
+  // instead of looking like a silent/failed ingest.
+  if (dataTypeId && emptyDataTypeChunks.length > 0 && allWrittenPaths.length === 0) {
+    allReviewItems.push({
+      type: "suggestion",
+      stage: "primary",
+      title: `No matching data for "${dataTypeId}": ${fileName}`,
+      description: `${emptyDataTypeChunks.length}/${chunks.length} chunk(s) had no content matching this data type's fields — every field came back empty or "정보 없음"/"N/A". No document or graph was created.`,
+      sourcePath: sp,
+      affectedPages: [],
+      options: [{ label: "Dismiss", action: "Dismiss" }],
+    })
+  }
+
   // ── Step 4: Append modification cards ────────────────────────
   // Stage 4 — append a modification card for every proposal the writer
   // parked. These items always run in their own card (the store skips
@@ -967,7 +1055,14 @@ export async function autoIngestImpl(
   // Skipped chunks (failedChunks) also block caching: a partial ingest
   // must stay re-runnable so the skipped chunks get another attempt
   // instead of being frozen out by a content-hash cache hit.
-  if (allWrittenPaths.length > 0 && allHardFailures.length === 0 && failedChunks.length === 0) {
+  //
+  // A data-type ingest where every chunk legitimately matched nothing is
+  // cached too (with an empty file list) — otherwise the same unchanged
+  // source would re-run the extraction LLM call on every ingest and, since
+  // autoIngest's zero-file result reads as a transport failure to the
+  // queue, get retried and marked failed for no reason.
+  const allChunksEmptyDataType = Boolean(dataTypeId) && emptyDataTypeChunks.length === chunks.length
+  if ((allWrittenPaths.length > 0 || allChunksEmptyDataType) && allHardFailures.length === 0 && failedChunks.length === 0) {
     await saveIngestCache(pp, fileName, sourceContent, allWrittenPaths)
   } else if (allHardFailures.length > 0) {
     console.warn(
@@ -1012,15 +1107,26 @@ export async function autoIngestImpl(
   const skippedSuffix = failedChunks.length > 0
     ? ` (${failedChunks.length}/${chunks.length} chunk(s) skipped)`
     : ""
+  const isCleanEmptyDataTypeResult =
+    allWrittenPaths.length === 0 && allChunksEmptyDataType && allHardFailures.length === 0 && failedChunks.length === 0
   const detail = allWrittenPaths.length > 0
     ? `${allWrittenPaths.length} files written${allReviewItems.length > 0 ? `, ${allReviewItems.length} review item(s)` : ""}${skippedSuffix}`
-    : `No files generated${skippedSuffix}`
+    : isCleanEmptyDataTypeResult
+      ? `No "${dataTypeId}" data found in source — nothing to ingest`
+      : `No files generated${skippedSuffix}`
 
   activity.updateItem(activityId, {
-    status: allWrittenPaths.length > 0 ? "done" : "error",
+    status: allWrittenPaths.length > 0 || isCleanEmptyDataTypeResult ? "done" : "error",
     detail,
     filesWritten: allWrittenPaths,
   })
+
+  // Tell ingest-queue.ts this zero-file result is a legitimate "no match"
+  // outcome, not a failure, so it doesn't retry/fail the task. Must be set
+  // right before returning — consumeEmptyDataTypeFlag() is a one-shot read.
+  if (isCleanEmptyDataTypeResult) {
+    emptyDataTypeMatchFlag = true
+  }
 
   return allWrittenPaths
 }

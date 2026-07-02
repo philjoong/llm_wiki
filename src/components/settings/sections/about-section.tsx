@@ -4,7 +4,12 @@ import { useTranslation } from "react-i18next"
 import { clipServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { useUpdateStore, shouldShowUpdateBanner } from "@/stores/update-store"
-import { checkForUpdates, normalizeRepo } from "@/lib/update-check"
+import {
+  checkForUpdates,
+  normalizeRepo,
+  parseRepoRef,
+  repoWebUrl,
+} from "@/lib/update-check"
 import { saveUpdateCheckState } from "@/lib/project-store"
 
 export function AboutSection() {
@@ -12,13 +17,20 @@ export function AboutSection() {
   const [clipStatus, setClipStatus] = useState<string>("...")
   const updateStore = useUpdateStore()
   const [repoDraft, setRepoDraft] = useState(updateStore.repo)
-  // Keep the input in sync if the store value changes (e.g. hydrate
+  const [tokenDraft, setTokenDraft] = useState(updateStore.token)
+  // Keep the inputs in sync if the store values change (e.g. hydrate
   // from disk completes after this component mounts).
   useEffect(() => {
     setRepoDraft(updateStore.repo)
   }, [updateStore.repo])
+  useEffect(() => {
+    setTokenDraft(updateStore.token)
+  }, [updateStore.token])
   const normalizedRepo = normalizeRepo(repoDraft)
   const repoInvalid = repoDraft.trim().length > 0 && normalizedRepo === null
+  // The token only matters for GitLab repos — hide the field otherwise.
+  const isGitlabRepo =
+    !!updateStore.repo && parseRepoRef(updateStore.repo).kind === "gitlab"
 
   useEffect(() => {
     let alive = true
@@ -41,6 +53,7 @@ export function AboutSection() {
     const result = await checkForUpdates({
       currentVersion: __APP_VERSION__,
       repo,
+      token: useUpdateStore.getState().token,
     })
     const now = Date.now()
     useUpdateStore.getState().setResult(result, now)
@@ -53,6 +66,7 @@ export function AboutSection() {
       lastCheckedAt: now,
       dismissedVersion: null,
       repo,
+      token: useUpdateStore.getState().token,
     })
   }, [])
 
@@ -65,6 +79,7 @@ export function AboutSection() {
       lastCheckedAt: useUpdateStore.getState().lastCheckedAt ?? Date.now(),
       dismissedVersion: result.remote,
       repo: useUpdateStore.getState().repo,
+      token: useUpdateStore.getState().token,
     })
   }, [])
 
@@ -76,6 +91,7 @@ export function AboutSection() {
       lastCheckedAt: useUpdateStore.getState().lastCheckedAt,
       dismissedVersion: useUpdateStore.getState().dismissedVersion,
       repo: useUpdateStore.getState().repo,
+      token: useUpdateStore.getState().token,
     })
   }, [])
 
@@ -89,8 +105,23 @@ export function AboutSection() {
       lastCheckedAt: useUpdateStore.getState().lastCheckedAt,
       dismissedVersion: useUpdateStore.getState().dismissedVersion,
       repo: next,
+      token: useUpdateStore.getState().token,
     })
   }, [repoDraft])
+
+  const handleSaveToken = useCallback(async () => {
+    const next = tokenDraft.trim()
+    if (next === useUpdateStore.getState().token) return
+    useUpdateStore.getState().setToken(next)
+    setTokenDraft(next)
+    await saveUpdateCheckState({
+      enabled: useUpdateStore.getState().enabled,
+      lastCheckedAt: useUpdateStore.getState().lastCheckedAt,
+      dismissedVersion: useUpdateStore.getState().dismissedVersion,
+      repo: useUpdateStore.getState().repo,
+      token: next,
+    })
+  }, [tokenDraft])
 
   const rows: Array<{ label: string; value: string; mono?: boolean }> = [
     { label: t("settings.sections.about.version"), value: `v${__APP_VERSION__}`, mono: true },
@@ -177,7 +208,7 @@ export function AboutSection() {
 
         <div className="space-y-1">
           <label className="text-xs font-medium text-muted-foreground">
-            {t("settings.sections.about.repoLabel", { defaultValue: "GitHub repository" })}
+            {t("settings.sections.about.repoLabel", { defaultValue: "Repository" })}
           </label>
           <div className="flex items-center gap-2">
             <input
@@ -191,7 +222,7 @@ export function AboutSection() {
                   handleSaveRepo()
                 }
               }}
-              placeholder="owner/repo"
+              placeholder="owner/repo · gitlab.host/group/project"
               spellCheck={false}
               className={`flex-1 rounded-md border bg-background px-2.5 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring ${
                 repoInvalid ? "border-destructive" : "border-input"
@@ -212,7 +243,7 @@ export function AboutSection() {
             {repoInvalid
               ? t("settings.sections.about.repoInvalid", {
                   defaultValue:
-                    "Enter a GitHub repo as owner/repo or paste a github.com URL.",
+                    "Enter a GitHub repo as owner/repo, or paste a full GitHub/GitLab URL.",
                 })
               : t("settings.sections.about.repoHint", {
                   defaultValue:
@@ -220,6 +251,37 @@ export function AboutSection() {
                 })}
           </p>
         </div>
+
+        {isGitlabRepo && (
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              {t("settings.sections.about.tokenLabel", {
+                defaultValue: "GitLab access token",
+              })}
+            </label>
+            <input
+              type="password"
+              value={tokenDraft}
+              onChange={(e) => setTokenDraft(e.target.value)}
+              onBlur={handleSaveToken}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  handleSaveToken()
+                }
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              {t("settings.sections.about.tokenHint", {
+                defaultValue:
+                  "Needed when the GitLab project is private or internal (read_api scope).",
+              })}
+            </p>
+          </div>
+        )}
 
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input
@@ -241,11 +303,11 @@ export function AboutSection() {
               {" "}
               <a
                 className="underline underline-offset-2 hover:text-primary"
-                href={`https://github.com/${updateStore.repo}`}
+                href={repoWebUrl(updateStore.repo)}
                 target="_blank"
                 rel="noreferrer"
               >
-                {`github.com/${updateStore.repo}`}
+                {repoWebUrl(updateStore.repo).replace(/^https:\/\//, "")}
               </a>
             </>
           )}

@@ -4,7 +4,7 @@
  * fetch layer — we don't exercise it against real GitHub in CI.
  */
 import { describe, it, expect } from "vitest"
-import { isNewer } from "./update-check"
+import { isNewer, normalizeRepo, parseRepoRef, repoWebUrl } from "./update-check"
 
 describe("isNewer — semver comparison", () => {
   it("remote > local on patch", () => {
@@ -65,5 +65,63 @@ describe("isNewer — semver comparison", () => {
   it("empty string treated as 0.0.0", () => {
     expect(isNewer("", "0.3.9")).toBe(false)
     expect(isNewer("0.3.9", "")).toBe(true)
+  })
+})
+
+describe("normalizeRepo", () => {
+  it("accepts bare owner/repo (GitHub shorthand)", () => {
+    expect(normalizeRepo("owner/repo")).toBe("owner/repo")
+  })
+
+  it("strips github.com URL down to owner/repo", () => {
+    expect(normalizeRepo("https://github.com/owner/repo")).toBe("owner/repo")
+    expect(normalizeRepo("github.com/owner/repo/")).toBe("owner/repo")
+    expect(normalizeRepo("  https://github.com/owner/repo.git ")).toBe("owner/repo")
+  })
+
+  it("keeps the host for GitLab project URLs", () => {
+    expect(normalizeRepo("https://set-git.cloud.ncsoft.com/gameqa/asset")).toBe(
+      "set-git.cloud.ncsoft.com/gameqa/asset",
+    )
+    expect(normalizeRepo("set-git.cloud.ncsoft.com/gameqa/asset.git")).toBe(
+      "set-git.cloud.ncsoft.com/gameqa/asset",
+    )
+  })
+
+  it("supports nested GitLab groups", () => {
+    expect(normalizeRepo("https://gitlab.example.com/group/sub/project")).toBe(
+      "gitlab.example.com/group/sub/project",
+    )
+  })
+
+  it("drops GitLab web-UI path suffixes after /-/", () => {
+    expect(
+      normalizeRepo("https://gitlab.example.com/group/project/-/releases"),
+    ).toBe("gitlab.example.com/group/project")
+  })
+
+  it("rejects unusable input", () => {
+    expect(normalizeRepo("")).toBe(null)
+    expect(normalizeRepo("justoneword")).toBe(null)
+    // Host with only one path segment can't be a GitLab project.
+    expect(normalizeRepo("https://gitlab.example.com/group")).toBe(null)
+  })
+})
+
+describe("parseRepoRef / repoWebUrl", () => {
+  it("treats owner/repo as GitHub", () => {
+    expect(parseRepoRef("owner/repo")).toEqual({ kind: "github", slug: "owner/repo" })
+    expect(repoWebUrl("owner/repo")).toBe("https://github.com/owner/repo")
+  })
+
+  it("treats a leading hostname as GitLab", () => {
+    expect(parseRepoRef("set-git.cloud.ncsoft.com/gameqa/asset")).toEqual({
+      kind: "gitlab",
+      host: "set-git.cloud.ncsoft.com",
+      path: "gameqa/asset",
+    })
+    expect(repoWebUrl("set-git.cloud.ncsoft.com/gameqa/asset")).toBe(
+      "https://set-git.cloud.ncsoft.com/gameqa/asset",
+    )
   })
 })

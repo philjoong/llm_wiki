@@ -176,11 +176,16 @@ export interface PersistedUpdateCheckState {
   lastCheckedAt: number | null
   dismissedVersion: string | null
   /**
-   * GitHub repo to query for releases, in `owner/repo` form. Empty
-   * string means the user hasn't configured one yet — the checker
-   * skips silently in that case.
+   * Repo to query for releases: GitHub `owner/repo` or GitLab
+   * `host/group/project`. Empty string means the user hasn't
+   * configured one yet — the checker skips silently in that case.
    */
   repo: string
+  /**
+   * Access token sent as PRIVATE-TOKEN on GitLab API calls. Optional
+   * because state persisted by older builds predates the field.
+   */
+  token?: string
 }
 
 export async function saveUpdateCheckState(

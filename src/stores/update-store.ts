@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import type { UpdateStatus } from "@/lib/update-check"
+import { DEFAULT_UPDATE_REPO, DEFAULT_UPDATE_TOKEN } from "@/lib/update-check"
 
 /**
  * UI-side state for the update-check feature. Persistence (user-level
@@ -23,14 +24,20 @@ export interface UpdateStoreState {
   dismissedVersion: string | null
   /** User preference: run the automatic check on app startup. */
   enabled: boolean
-  /** GitHub repo (`owner/repo`) the user wants to monitor. Empty = unset. */
+  /**
+   * Repo to monitor: GitHub `owner/repo` or GitLab `host/group/project`
+   * (see `parseRepoRef`). Empty = unset.
+   */
   repo: string
+  /** Access token sent as PRIVATE-TOKEN on GitLab API calls. Empty = none. */
+  token: string
 
   setChecking: (b: boolean) => void
   setResult: (result: UpdateStatus, at: number) => void
   setDismissed: (version: string | null) => void
   setEnabled: (b: boolean) => void
   setRepo: (repo: string) => void
+  setToken: (token: string) => void
   hydrate: (partial: Partial<UpdateStoreState>) => void
 }
 
@@ -40,7 +47,10 @@ export const useUpdateStore = create<UpdateStoreState>((set) => ({
   lastCheckedAt: null,
   dismissedVersion: null,
   enabled: true,
-  repo: "",
+  // Fresh installs point at the internal GitLab project out of the box
+  // so workers get update notices with zero configuration.
+  repo: DEFAULT_UPDATE_REPO,
+  token: DEFAULT_UPDATE_TOKEN,
 
   setChecking: (checking) => set({ checking }),
   setResult: (lastResult, lastCheckedAt) =>
@@ -48,6 +58,7 @@ export const useUpdateStore = create<UpdateStoreState>((set) => ({
   setDismissed: (dismissedVersion) => set({ dismissedVersion }),
   setEnabled: (enabled) => set({ enabled }),
   setRepo: (repo) => set({ repo }),
+  setToken: (token) => set({ token }),
   hydrate: (partial) => set(partial),
 }))
 

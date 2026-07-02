@@ -86,15 +86,24 @@ function App() {
           "@/lib/project-store"
         )
         const { useUpdateStore } = await import("@/stores/update-store")
-        const { checkForUpdates, UPDATE_CHECK_CACHE_MS } = await import(
-          "@/lib/update-check"
-        )
+        const {
+          checkForUpdates,
+          UPDATE_CHECK_CACHE_MS,
+          DEFAULT_UPDATE_TOKEN,
+        } = await import("@/lib/update-check")
 
         const persisted = await loadUpdateCheckState()
         debug("update-check: persisted state loaded", {
           hasPersisted: Boolean(persisted),
         })
-        if (persisted) useUpdateStore.getState().hydrate(persisted)
+        if (persisted) {
+          useUpdateStore.getState().hydrate({
+            ...persisted,
+            // State saved by builds that predate the token field —
+            // fall back to the built-in default instead of wiping it.
+            token: persisted.token ?? DEFAULT_UPDATE_TOKEN,
+          })
+        }
 
         const state = useUpdateStore.getState()
         if (!state.enabled) {
@@ -118,10 +127,11 @@ function App() {
         }
 
         useUpdateStore.getState().setChecking(true)
-        debug("update-check: requesting GitHub release data", { repo: state.repo })
+        debug("update-check: requesting release data", { repo: state.repo })
         const result = await checkForUpdates({
           currentVersion: __APP_VERSION__,
           repo: state.repo,
+          token: state.token,
         })
         if (cancelled) return
         useUpdateStore.getState().setResult(result, Date.now())
@@ -130,6 +140,7 @@ function App() {
           lastCheckedAt: Date.now(),
           dismissedVersion: useUpdateStore.getState().dismissedVersion,
           repo: useUpdateStore.getState().repo,
+          token: useUpdateStore.getState().token,
         })
         debug("update-check: finished")
       } catch (err) {

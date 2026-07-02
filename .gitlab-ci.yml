@@ -1,0 +1,78 @@
+# v* 태그를 push하면 Windows 인스톨러를 빌드해서 GitLab Release를 생성한다.
+# 앱의 설정 → 정보(About) 업데이트 확인 기능이 이 프로젝트의 최신 Release를
+# 조회하므로, 태그 push 한 번으로 전체 작업자에게 새 버전 알림이 나간다.
+#
+# 배포 절차:
+#   1. package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json 버전 올리기
+#   2. git commit → git tag v0.3.14 → git push origin main --tags
+#
+# Windows 러너 사전 요구사항 (shell/PowerShell executor):
+#   - Node.js 20+, Rust stable(rustup), protoc(Protocol Buffers 컴파일러)
+#   - 러너 태그가 `windows`가 아니면 아래 build-windows의 tags를 수정할 것
+#
+# release 잡은 GitLab 공식 release-cli 이미지를 사용한다. 사내 러너에서
+# registry.gitlab.com에 접근할 수 없다면, release-cli가 설치된 러너에서
+# 실행되도록 image를 제거하고 tags를 조정하면 된다.
+
+stages:
+  - build
+  - release
+
+variables:
+  # 인스톨러가 업로드되는 Generic Package Registry 경로. Release의
+  # 다운로드 링크가 이 주소를 가리킨다.
+  PACKAGE_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/llm-wiki/${CI_COMMIT_TAG}"
+  INSTALLER_NAME: "LLM-Wiki-${CI_COMMIT_TAG}-x64-setup.exe"
+
+build-windows:
+  stage: build
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  tags:
+    - windows
+  script:
+    # 태그와 package.json 버전이 일치해야 한다. 불일치하면 배포된 앱이
+    # 자기 버전을 잘못 알아 업데이트 알림이 계속 뜨거나 안 뜬다.
+    - |
+      $pkgVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+      if ("v$pkgVersion" -ne $env:CI_COMMIT_TAG) {
+        Write-Error "Tag $env:CI_COMMIT_TAG != package.json version v$pkgVersion"
+        exit 1
+      }
+    # PDF 기능은 번들된 pdfium.dll에 의존한다. 없어도 빌드는 성공하므로
+    # 여기서 미리 실패시킨다 (docs/build-plan.md 참고).
+    - |
+      if (-not (Test-Path "src-tauri/pdfium/pdfium.dll")) {
+        Write-Error "src-tauri/pdfium/pdfium.dll missing - PDF features would break at runtime"
+        exit 1
+      }
+    - npm install
+    - npm run tauri build
+    # NSIS 인스톨러를 예측 가능한 이름으로 Generic Package Registry에 업로드
+    - |
+      $exe = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+      if (-not $exe) { Write-Error "NSIS installer not found under src-tauri/target/release/bundle/nsis"; exit 1 }
+      Invoke-RestMethod -Method Put `
+        -Headers @{ "JOB-TOKEN" = $env:CI_JOB_TOKEN } `
+        -InFile $exe.FullName `
+        -Uri "$env:PACKAGE_URL/$env:INSTALLER_NAME"
+
+release:
+  stage: release
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - build-windows
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG"
+  release:
+    tag_name: '$CI_COMMIT_TAG'
+    name: 'LLM Wiki $CI_COMMIT_TAG'
+    # 이 텍스트가 앱의 "업데이트 가능" 배너에 릴리스 노트로 표시된다.
+    description: 'LLM Wiki $CI_COMMIT_TAG 업데이트입니다. 아래 자산(Assets) 링크에서 인스톨러를 내려받아 실행하면 기존 버전 위에 설치됩니다.'
+    assets:
+      links:
+        - name: '${INSTALLER_NAME}'
+          url: '${PACKAGE_URL}/${INSTALLER_NAME}'
+          link_type: package

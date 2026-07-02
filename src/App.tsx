@@ -445,6 +445,16 @@ function App() {
       // ignore, start fresh
       debug("project-open: loadReviewItems failed", err)
     }
+    // Rebuild page↔graph index from SQLite so drift from manual edits self-heals
+    try {
+      debug("project-open: before rebuildPageGraphIndex")
+      const { rebuildPageGraphIndex } = await import("@/lib/page-graph-index")
+      await rebuildPageGraphIndex(proj.name, proj.path)
+      debug("project-open: after rebuildPageGraphIndex")
+    } catch (err) {
+      debug("project-open: rebuildPageGraphIndex failed", err)
+    }
+
     // Load persisted chat history
     try {
       debug("project-open: before loadChatHistory")

@@ -737,6 +737,9 @@ function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, o
                     onChange={(e) => setEdgeRelType(e.target.value)}
                   />
                 )}
+                <p className="mt-2 text-[10px] text-muted-foreground">
+                  이 변경은 그래프에만 반영됩니다. 원본 문서(db/*.md)는 변경되지 않습니다.
+                </p>
               </div>
             )}
             {error && <p className="text-[10px] text-destructive">{error}</p>}

@@ -6,7 +6,7 @@ import {
   saveGraphPolicy,
   type GraphPolicy,
 } from "@/lib/graph-policy"
-import { loadPageGraphIndex, findPagesByGraph } from "@/lib/page-graph-index"
+import { loadPageGraphIndex, findPagesByGraph, removeGraphFromIndex } from "@/lib/page-graph-index"
 import { getGraphBackend } from "@/lib/graph-backend"
 
 interface GraphsTabProps {
@@ -166,6 +166,12 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
       await backend.deleteGraph(projectName, graphName)
     } catch {
       // Graph may not exist yet; proceed with policy cleanup
+    }
+
+    try {
+      await removeGraphFromIndex(projectPath, graphName)
+    } catch {
+      // Non-fatal — index will self-heal on next rebuild
     }
 
     if (!policy) return

@@ -1,93 +1,360 @@
-# Asset
+# LLM Wiki
 
+<img src="logo.jpg" alt="LLM Wiki" width="120" align="right" />
 
+**LLM과 함께 개인 지식 베이스를 구축하고 관리하는 데스크톱 앱** (Tauri 기반, Windows/macOS/Linux)
 
-## Getting started
+파일·웹페이지 등 원본 자료를 넣으면 LLM이 내용을 분해해 위키 문서(`db/*.md`)와 지식 그래프를 자동으로 구축합니다. 이후 하이브리드 검색(토큰 + 벡터) + 그래프 컨텍스트 기반으로 위키에 질문하고 답변을 받을 수 있습니다. QA 업무를 위한 테스트 플랜 생성(경우의 수 맵핑), 페르소나 시나리오 생성 기능도 포함합니다.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+---
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## 목차
 
-## Add your files
+1. [설치 및 실행](#설치-및-실행)
+2. [시작하기 — 프로젝트 만들기](#시작하기--프로젝트-만들기)
+3. [설정](#설정)
+4. [화면 구성](#화면-구성)
+5. [지식 추출 (Ingest)](#지식-추출-ingest)
+6. [Chat — 위키에 질문하기](#chat--위키에-질문하기)
+7. [그래프 탭](#그래프-탭)
+8. [수정 요청 (Review) 탭](#수정-요청-review-탭)
+9. [히스토리 & 원격 동기화](#히스토리--원격-동기화)
+10. [경우의 수 맵핑 (테스트 플랜)](#경우의-수-맵핑-테스트-플랜)
+11. [페르소나 시나리오](#페르소나-시나리오)
+12. [브라우저 확장 — LLM Wiki Clipper](#브라우저-확장--llm-wiki-clipper)
+13. [프로젝트 폴더 구조](#프로젝트-폴더-구조)
+14. [질문 유형 / 데이터 유형 커스터마이징](#질문-유형--데이터-유형-커스터마이징)
+15. [개발자용 명령어](#개발자용-명령어)
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+---
+
+## 설치 및 실행
+
+### 배포판 사용
+
+릴리스 페이지에서 설치 파일을 받아 실행합니다. 앱 내 **설정 > 정보** 탭에서 업데이트 확인 저장소(GitHub `owner/repo` 또는 GitLab URL)를 지정하면 새 버전 알림을 받을 수 있습니다.
+
+### 소스에서 실행
+
+요구 사항: Node.js, Rust 툴체인 (Tauri 2)
+
+```bash
+npm install
+npm run tauri dev     # 개발 모드 실행
+npm run tauri build   # 배포용 빌드
+```
+
+---
+
+## 시작하기 — 프로젝트 만들기
+
+앱을 실행하면 **Select Project** 화면이 나타납니다. 프로젝트는 Git 브랜치 단위로 관리됩니다.
+
+- **원격 Git URL**: 상단에 원격 저장소 URL(예: `gitlab.example.com/group/repo.git`)을 입력하고 새로고침하면 원격 브랜치 목록이 표시됩니다. 브랜치를 선택하면 연결할 로컬 폴더를 지정한 뒤 프로젝트가 열립니다.
+- **새 프로젝트 만들기**: 브랜치 이름을 입력하고 **Create**를 누르면 새 브랜치/프로젝트가 생성됩니다. 원격 URL 없이 만들면 **로컬 온리** 프로젝트가 되며(HardDrive 아이콘 + "local only" 태그), 나중에 **Push to remote** 버튼으로 원격에 올릴 수 있습니다.
+- **Export as .llmwiki / Import .llmwiki**: 프로젝트 전체를 `.llmwiki` 파일 하나로 내보내거나, 받은 파일을 새 프로젝트로 가져올 수 있습니다.
+
+프로젝트는 생성 시 자동으로 git 저장소로 초기화되며, 기본 질문 유형/데이터 유형 템플릿(`question_types/`, `data_types/`)이 함께 복사됩니다.
+
+> ⚠️ 프로젝트를 사용하려면 먼저 **설정에서 LLM 제공자를 구성**해야 합니다.
+
+---
+
+## 설정
+
+좌측 사이드바 하단 톱니바퀴 아이콘으로 진입합니다.
+
+### LLM 모델
+
+지식 추출과 답변 생성에 사용할 LLM을 설정합니다. 여러 제공자를 각각 설정해 두고 하나만 활성화하는 방식이며, 각 제공자의 API 키는 독립적으로 보관되어 전환해도 사라지지 않습니다. **연결 테스트** 버튼으로 즉시 확인할 수 있습니다.
+
+| 제공자 | 필요 설정 |
+|---|---|
+| OpenAI | API 키, 모델 |
+| Anthropic | API 키, 모델 |
+| Google (Gemini) | API 키, 모델 |
+| Ollama | Ollama URL (기본 `http://localhost:11434`), 모델 — API 키 불필요 |
+| Claude Code CLI / Codex CLI / Gemini CLI | 로컬에 설치된 CLI를 subprocess로 사용 — API 키 불필요 |
+| 커스텀 엔드포인트 | OpenAI 호환(`/chat/completions`) 또는 Anthropic 호환(`/v1/messages`) 엔드포인트 URL — LiteLLM, vLLM, LM Studio, LocalAI, Azure OpenAI 등 |
+
+### 벡터 임베딩
+
+위키에 대한 **의미 검색(RAG)** 을 활성화합니다.
+
+- **내장 (BGE-small)**: 별도 서버 없이 번들된 fastembed 모델 사용. 첫 사용 시 ~130MB 다운로드.
+- **외부 서버**: OpenAI 호환 `/v1/embeddings` 엔드포인트 직접 입력 (LM Studio, Ollama embedding 등 로컬 모델은 API 키 불필요).
+- 청크 크기/오버랩 조정, 전체 페이지 재인덱싱 기능 제공.
+- 비활성화 시 검색은 토큰 매칭만 사용합니다.
+
+### 출력 환경설정
+
+- **AI 출력 언어**: chat 답변·위키 페이지 등 AI 생성물의 언어를 강제합니다. "Auto"면 입력/원본 언어를 따릅니다.
+- **대화 히스토리 길이**: 요청마다 LLM에 전달할 이전 메시지 수.
+
+### 인터페이스
+
+UI 언어(한국어/English)와 외관을 설정합니다.
+
+### 질문 유형 / 데이터 유형
+
+프로젝트의 질문 유형(`question_types/`)과 데이터 유형(`data_types/`) YAML 카탈로그를 앱 안에서 관리합니다. 형식은 [커스터마이징](#질문-유형--데이터-유형-커스터마이징) 참고.
+
+### 정보
+
+앱 버전, Clip 서버 상태 확인, 업데이트 확인 저장소 설정(GitHub/GitLab, private 저장소는 액세스 토큰 필요), 시작 시 자동 업데이트 확인 옵션.
+
+---
+
+## 화면 구성
+
+좌측 **아이콘 사이드바**에서 화면을 전환합니다.
+
+| 탭 | 기능 |
+|---|---|
+| **Chat** | 위키에 질문하고 답변을 받는 기본 화면 |
+| **그래프** | 위키 문서·지식 그래프·엔티티 탐색 및 편집 |
+| **수정 요청** | 지식 추출 중 발생한 충돌·제안을 검토/승인 (미해결 건수 배지 표시) |
+| **히스토리** | git 커밋 이력 조회, 파일 복원, 커밋 되돌리기 |
+| **경우의 수 맵핑** | 게임 기능 기반 테스트 플랜 생성 (7단계 워크플로) |
+| **페르소나 시나리오** | 페르소나 기반 플레이 시나리오 생성 |
+| **설정** | 위 [설정](#설정) 참고 |
+
+사이드바 하단에는 **프로젝트 전환**, **Sync to Remote**(Upload 아이콘) 버튼이 있습니다. 지식 추출 등 백그라운드 작업은 우측 하단 **활동 패널**에 진행 상황이 표시됩니다.
+
+---
+
+## 지식 추출 (Ingest)
+
+원본 자료를 위키로 변환하는 핵심 기능입니다. 세 가지 방법으로 자료를 넣을 수 있습니다.
+
+1. **파일에서 추출**: 사이드바의 **지식 추출** 버튼 → 파일 선택
+2. **URL에서 추출**: **URL에서 지식 추출** → 웹페이지 URL 입력 (본문이 markdown으로 변환되어 저장)
+3. **브라우저 확장**: [LLM Wiki Clipper](#브라우저-확장--llm-wiki-clipper)로 보고 있는 페이지를 클립 — 앱이 자동 감지해 추출 큐에 추가
+
+### 데이터 유형 선택
+
+추출 시작 시 **데이터 유형**(예: 패치노트) 체크박스 목록이 표시됩니다.
+
+- **선택 안 함**: LLM이 문서를 자유롭게 개념 단위로 분해해 위키 페이지를 만듭니다.
+- **N개 선택**: 데이터 유형마다 정의된 필드(버전, 적용 날짜, 변경 내용 등)에 맞춰 구조화 추출을 수행하며, 유형별로 별도 문서가 생성됩니다.
+
+### 파이프라인 동작
+
+각 자료는 3단계로 처리됩니다.
+
+1. **문서 분해** — LLM이 원문을 의미 단위 섹션으로 나누고 저장 경로(`db/...`)를 결정
+2. **그래프 배정** — 섹션에서 `주어 → 술어 → 목적어` 관계(triple)를 추출해 지식 그래프에 반영
+3. **파일 생성** — 섹션을 `db/` 아래 markdown 문서로 저장
+
+처리 결과는 활동 패널에서 확인할 수 있고, 충돌이나 확인이 필요한 항목은 **수정 요청** 탭에 쌓입니다. 큰 파일은 자동으로 청크로 나뉘어 처리되며, 일부 청크가 실패해도 나머지는 계속 진행됩니다. 추출 큐는 프로젝트별로 저장되므로 앱을 재시작해도 중단된 작업이 이어서 처리됩니다.
+
+---
+
+## Chat — 위키에 질문하기
+
+Chat 탭 입력창에 질문을 입력하면 다음 과정을 거쳐 답변이 생성됩니다.
+
+1. 하이브리드 검색 (토큰 매칭 + 벡터 검색)으로 관련 위키 페이지 선별
+2. 지식 그래프에서 이웃 문서로 컨텍스트 확장
+3. 관련 페이지 본문을 컨텍스트로 LLM이 스트리밍 답변 생성
+
+### 입력창 옵션
+
+- **⚡ RAG 버튼**: 벡터(의미) 검색 ON/OFF. 임베딩 설정이 켜져 있을 때 사용 가능.
+- **질문 유형 드롭다운**: 미리 정의한 답변 형식(예: 원인/해결 방법 필드)을 선택하면 그 형식대로 답변합니다. "None"이면 자유 형식.
+
+### 답변 화면
+
+- 답변은 markdown으로 렌더링되며, 모델의 추론 과정(`<think>`)은 접힌 "Thinking" 섹션으로 표시됩니다. 스트리밍 중 **Stop** 버튼으로 중단, 완료 후 **Regenerate**로 재생성할 수 있습니다.
+- 답변 하단 **References 패널**에 인용된 위키 페이지 목록이 표시되고, 클릭하면 그래프 탭 > Files에서 해당 파일이 열립니다.
+- 자료에 대해 토론한 내용은 **Wiki에 저장** 버튼으로 위키에 반영할 수 있습니다.
+
+### 대화 관리
+
+좌측 대화 사이드바에서 **New Chat**으로 새 대화를 시작할 수 있고, 대화 목록(제목·시각·메시지 수)이 프로젝트별로 저장됩니다.
+
+---
+
+## 그래프 탭
+
+상단 서브탭으로 전환합니다.
+
+| 서브탭 | 기능 |
+|---|---|
+| **Knowledge** | 그래프 시각화 캔버스 — 그래프 선택, 관계 타입별 색상 범례/필터, 노드·엣지 선택 후 속성 확인/편집/삭제 |
+| **Files** | `db/` 위키 페이지를 폴더별로 탐색 — 선택한 파일의 관련 그래프 표시, 미리보기, 에디터에서 편집 (탐색기에서 열기 지원) |
+| **Graphs** | 그래프 정책 관리 — 그래프 추가/이름 변경/삭제, 그래프별 관계 타입 관리(최대 4개), 고아 그래프 정리 |
+| **Entity** | 엔티티 사전 관리 — 검색, 정식 명칭(canonicalName)·별칭(alias) 편집, 엔티티 병합/분리 |
+
+문서 편집기는 WYSIWYG markdown 에디터(수식 지원)입니다.
+
+> Knowledge 탭에서 노드/엣지를 직접 수정하면 **그래프에만 반영**되며 원본 위키 문서(`db/*.md`)에는 역전파되지 않습니다.
+
+---
+
+## 수정 요청 (Review) 탭
+
+지식 추출 과정에서 사용자 확인이 필요한 항목이 카드로 표시됩니다.
+
+### 문서 충돌 (modification)
+
+이미 존재하는 문서와 새로 추출된 내용이 다를 때 발생합니다. 기존/신규 diff를 보고 선택합니다.
+
+| 버튼 | 동작 |
+|---|---|
+| **Approve** | 새 내용으로 덮어쓰고 그래프에도 반영 |
+| **Merge** | 초안을 에디터에서 열어 수동 편집 후 승인 |
+| **Reject → Discard** | 기존 유지, 초안 삭제 |
+| **Reject → Pending** | 초안을 `pending/`으로 보류 |
+| **Reject → Counterexample** | 초안을 `counterexamples/`로 이동 (반례 보관) |
+
+### 엔티티 확인 (entity_confirmation)
+
+새로 추출된 이름이 기존 엔티티와 **유사하지만 정확히 일치하지 않을 때**(예: "고블린 전사" vs "고블린전사") 표시됩니다. **같은 엔티티**(별칭으로 등록) / **새 엔티티** / **무시** 중 선택합니다.
+
+### 제안 (suggestion)
+
+그래프 배정 실패 등 자동 처리되지 못한 항목입니다. 그래프의 관계 타입 슬롯(그래프당 최대 4개)이 가득 찬 경우 "Create new graph" 액션으로 새 그래프를 만들 수 있습니다.
+
+### 스키마 변경 (schema change)
+
+데이터 유형/질문 유형 스키마 변경 제안을 승인/거부합니다.
+
+보류(`pending/`)한 초안은 **pending** 서브탭에서 다시 확인할 수 있고, 처리 완료된 항목은 **해결 완료 항목 정리** 버튼으로 정리합니다.
+
+---
+
+## 히스토리 & 원격 동기화
+
+### 히스토리 탭
+
+- 커밋 목록을 조회하고, 커밋별 변경 파일과 diff를 확인합니다.
+- **이 버전으로 복원**: 선택한 파일을 해당 커밋 시점으로 되돌립니다.
+- **이 커밋 되돌리기**: 커밋 전체를 revert 합니다 (충돌 시 대상 파일이 안내됩니다).
+
+### Sync to Remote
+
+앱 사용 중에는 **자동 커밋이 발생하지 않습니다.** 문서·그래프를 자유롭게 수정하다가 동기화할 때:
+
+- 사이드바 하단 **Upload 버튼**, 또는
+- 앱 종료 시 나타나는 다이얼로그에서 **Sync to Remote** 선택
+
+동작: 그래프 스냅샷(`graph.json`) 내보내기 → 전체 변경 사항 커밋 → `git pull --rebase`로 원격 변경 통합 → push. 여러 사용자가 같은 원격을 공유할 수 있으며, rebase 충돌 시 충돌 해결 다이얼로그가 표시됩니다.
+
+로컬 온리 프로젝트에서는 이 기능이 숨겨집니다.
+
+---
+
+## 경우의 수 맵핑 (테스트 플랜)
+
+게임 기능 설명을 입력하면 LLM과 함께 단계적으로 테스트 플랜을 만드는 QA 도구입니다. 플랜별로 7단계를 진행합니다.
+
+1. **기능 정보 입력** — 대상, 비용, 쿨타임, 사용 조건 등을 자연어로 입력
+2. **추상화** — AI가 기능을 특성 태그로 추상화 (태그 추가/삭제 가능, 기존 엔티티와 연결 제안)
+3. **테스트 축** — 테스트 축과 값 추천 (축 비활성화, 고위험 값 표시 가능)
+4. **조합 생성** — 페어와이즈 커버리지로 조합 생성
+5. **불가능 조합 제거** — 공유 룰 + LLM 판정으로 불가능 조합 제외 (판정 뒤집기 가능)
+6. **리스크 우선순위** — 루브릭 기준 리스크 등급 평가 (High: 재화 손실/진행 불가 등)
+7. **QA 리뷰** — 테스트케이스 생성, 수동 케이스 추가/편집/제외 후 **최종 확정 & 내보내기**
+
+불가능 조합 룰은 플랜 간 공유되므로 프로젝트가 쌓일수록 판정이 정교해집니다.
+
+---
+
+## 페르소나 시나리오
+
+- **페르소나 관리**: 이름·설명·특성(예: 연타, 동시 입력)을 가진 페르소나를 등록/편집합니다.
+- **시나리오**: 페르소나와 대상 기능(예: 파이어볼 스킬 전투 루프)을 선택하면 해당 페르소나 관점의 플레이 시나리오를 생성하고 파일로 내보낼 수 있습니다.
+
+---
+
+## 브라우저 확장 — LLM Wiki Clipper
+
+웹서핑 중 보고 있는 페이지를 원클릭으로 위키에 추출하는 Chrome 확장입니다.
+
+### 설치
+
+1. Chrome에서 `chrome://extensions` 접속 → **개발자 모드** 활성화
+2. **압축해제된 확장 프로그램을 로드** → 이 저장소의 `extension/` 폴더 선택
+
+### 사용
+
+1. LLM Wiki 앱을 실행하고 프로젝트를 열어 둡니다. 앱이 로컬 clip 서버(`127.0.0.1:19827`)를 구동하며, 사이드바 하단 상태 점(녹색 = 실행 중)과 설정 > 정보에서 상태를 확인할 수 있습니다.
+2. 클리핑할 페이지에서 확장 아이콘 클릭 → 본문이 자동 추출(Readability)되어 markdown 미리보기가 표시됩니다. 제목을 수정하고 대상 프로젝트를 드롭다운에서 선택한 뒤 **Clip**을 누릅니다.
+3. 앱이 3초 이내에 클립을 감지해 자동으로 지식 추출 큐에 추가합니다 (LLM 설정이 되어 있을 때).
+
+---
+
+## 프로젝트 폴더 구조
+
+프로젝트는 일반 폴더 + git 저장소이며, 모든 데이터가 파일로 저장되어 그대로 백업/공유할 수 있습니다.
 
 ```
-cd existing_repo
-git remote add origin https://set-git.cloud.ncsoft.com/gameqa/asset.git
-git branch -M main
-git push -uf origin main
+my-wiki/
+├── db/                  # 위키 페이지 (markdown) — 검색·답변의 대상
+├── raw/sources/         # 추출 원본 자료 (파일/URL/웹클립)
+├── pending/             # 보류된 초안 (+ _proposals/: 충돌 초안)
+├── counterexamples/     # 반례로 분류한 초안
+├── question_types/      # 질문 유형 정의 (YAML) — 프로젝트 공유
+├── data_types/          # 데이터 유형 정의 (YAML) — 프로젝트 공유
+├── graph.json           # 지식 그래프 스냅샷 (Sync 시 갱신)
+└── .llm-wiki/           # 내부 상태 (graph.sqlite, entity-dict.json,
+                         #   graph-policy.json, page-graph-index.json 등)
 ```
 
-## Integrate with your tools
+---
 
-- [ ] [Set up project integrations](https://set-git.cloud.ncsoft.com/gameqa/asset/-/settings/integrations)
+## 질문 유형 / 데이터 유형 커스터마이징
 
-## Collaborate with your team
+### 데이터 유형 (`data_types/*.yaml`)
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+지식 추출 시 구조화 추출에 사용됩니다.
 
-## Test and Deploy
+```yaml
+name: "패치노트"
+fields:
+  version: "패치 버전 번호"
+  release_date: "패치 적용 날짜"
+  balance_changes: "수치 변경 내용"
+  bug_fixes: "버그 수정 목록"
+```
 
-Use the built-in continuous integration in GitLab.
+### 질문 유형 (`question_types/*.yaml` 또는 `.md`)
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+Chat에서 답변 형식을 강제할 때 사용됩니다.
 
-***
+```yaml
+name: "버그 분석"
+description: "버그 원인과 해결책을 묻는 질문"
+fields:
+  cause: "원인 설명"
+  solution: "해결 방법"
+prompt_template: |
+  Respond with each field listed above clearly labeled.
+```
 
-# Editing this README
+프로젝트의 해당 폴더에 파일을 추가하면 즉시 사용할 수 있습니다. 개인 전용 override는 `.llm-wiki/question-types/`, `.llm-wiki/data-types/`에 둘 수 있습니다.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+---
 
-## Suggestions for a good README
+## 개발자용 명령어
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+```bash
+npm run dev          # Vite 개발 서버 (웹뷰만)
+npm run tauri dev    # 데스크톱 앱 개발 모드
+npm run typecheck    # 타입 검사
+npm run test         # 전체 테스트 (mock + real-LLM)
+npm run test:mocks   # mock 테스트만
+npm run tauri build  # 배포 빌드
+```
 
-## Name
-Choose a self-explaining name for your project.
+내부 동작에 대한 상세 문서는 [`docs/`](docs/) 폴더를 참고하세요:
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+- [`docs/ingest-current-state.md`](docs/ingest-current-state.md) — 지식 추출 파이프라인 상세
+- [`docs/answer-guide.md`](docs/answer-guide.md) — Chat 답변 파이프라인
+- [`docs/git-sync-guide.md`](docs/git-sync-guide.md) — Git 연동 및 히스토리
+- [`docs/entity-develop.md`](docs/entity-develop.md) — 엔티티 사전 설계
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+[LICENSE](LICENSE) 파일을 참고하세요.

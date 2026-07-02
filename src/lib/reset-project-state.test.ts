@@ -62,7 +62,7 @@ describe("resetProjectState — Zustand stores", () => {
       items: [
         {
           id: "r1",
-          type: "missing-page",
+          type: "suggestion",
           title: "x",
           description: "",
           options: [],

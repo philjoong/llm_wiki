@@ -92,17 +92,20 @@ describe("findCandidates", () => {
     expect(result).toHaveLength(1)
     expect(result[0].match).toBe("exact")
     expect(result[0].entry.id).toBe("id-1")
+    expect(result[0].matchedName).toBe("고블린 전사")
   })
 
-  it("finds an exact match against an alias", () => {
+  it("finds an exact match against an alias and records the matched alias", () => {
     const result = findCandidates("Goblin Warrior", dict)
     expect(result[0].match).toBe("exact")
+    expect(result[0].matchedName).toBe("Goblin Warrior")
   })
 
   it("finds a fuzzy match for a near-miss name", () => {
     const result = findCandidates("고블린전사", dict)
     expect(result[0].match).toBe("fuzzy")
     expect(result[0].entry.id).toBe("id-1")
+    expect(result[0].matchedName).toBe("고블린 전사")
   })
 
   it("returns empty for unrelated names", () => {

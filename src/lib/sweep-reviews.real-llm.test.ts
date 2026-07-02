@@ -1,12 +1,10 @@
 /**
  * Real-LLM sweep tests — exercises the LLM-judged stage against Ollama.
  *
- * Uses only the sweep scenarios whose rule stage can't resolve everything
- * (so the LLM stage actually fires). Asserts contracts:
+ * Uses only the sweep scenarios that involve LLM judgment. Asserts contracts:
  *   - Sweep completes without throwing
  *   - All resolved IDs came from the input review set
- *   - Review types that must stay pending (contradiction/confirm) aren't
- *     mass-resolved
+ *   - Every resolution is attributed to the LLM judge
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest"
 import fs from "node:fs/promises"
@@ -27,9 +25,8 @@ const ENABLED = process.env.RUN_LLM_TESTS === "1"
 
 const TEST_TIMEOUT_MS = 5 * 60 * 1000
 
-// Only run scenarios that actually invoke the LLM stage (i.e. have reviews
-// the rule stage can't resolve). The 10 rule-only scenarios are fully
-// deterministic and already covered by the mocked runner.
+// Only run scenarios that actually invoke the LLM stage. The no-LLM
+// scenario is fully deterministic and already covered by the mocked runner.
 const LLM_SCENARIO_NAMES = new Set([
   "llm-judged/semantic-match",
   "mixed-batch/partial-resolution",
@@ -132,16 +129,17 @@ describe("real-LLM sweep scenarios (LLM-judged only)", () => {
           ).toBe(true)
         }
 
-        // Contract 2: Resolved items carry a valid resolvedAction
+        // Contract 2: Resolved items carry the LLM-judged action — the
+        // sweep has no other resolution path.
         for (const item of resolved) {
           expect(
             item.resolvedAction,
             `${item.id} resolved but has no resolvedAction`,
           ).toBeTruthy()
           expect(
-            ["auto-resolved", "llm-judged"].includes(item.resolvedAction!),
+            item.resolvedAction,
             `${item.id} has unknown action: ${item.resolvedAction}`,
-          ).toBe(true)
+          ).toBe("llm-judged")
         }
 
         // Contract 3: Total count matches the number of resolved items
@@ -153,32 +151,13 @@ describe("real-LLM sweep scenarios (LLM-judged only)", () => {
         // ── Scenario-specific strict assertions ────────────────────────
         // These catch regressions that the generic contracts miss.
         if (scenario.name === "mixed-batch/partial-resolution") {
-          // r-mix-rule is a rule-resolvable missing-page review — its
-          // target page DOES exist in the wiki, so rules must resolve it.
-          const ruleResolved = state.find((i) => i.id === "r-mix-rule")
-          expect(
-            ruleResolved?.resolved,
-            "r-mix-rule should ALWAYS be resolved by rule stage",
-          ).toBe(true)
-          expect(ruleResolved?.resolvedAction).toBe("auto-resolved")
-
-          // r-mix-contra is a contradiction — MUST stay pending regardless
-          // of LLM behavior. If this ever resolves, the conservative
-          // filter in sweep is broken.
-          const contraItem = state.find((i) => i.id === "r-mix-contra")
-          expect(
-            contraItem?.resolved,
-            "r-mix-contra (contradiction) must NEVER be auto-resolved",
-          ).toBe(false)
-
-          // r-mix-sugg is a suggestion — rule stage must NOT touch it
-          // (LLM stage might, conservatively). Check it's not resolved
-          // by rules specifically.
+          // Both items are suggestions; resolution is best-effort LLM
+          // judgment, but any resolution must be attributed to the judge.
           const suggItem = state.find((i) => i.id === "r-mix-sugg")
           if (suggItem?.resolved) {
             expect(
               suggItem.resolvedAction,
-              "suggestion can only be resolved by LLM, not rules",
+              "suggestion can only be resolved by the LLM judge",
             ).toBe("llm-judged")
           }
         }

@@ -4,7 +4,7 @@ import { useReviewStore, type ReviewItem } from "./review-store"
 // Minimal builder so each test only specifies what it cares about.
 function makeInput(overrides: Partial<Omit<ReviewItem, "id" | "resolved" | "createdAt">> = {}) {
   return {
-    type: "missing-page" as ReviewItem["type"],
+    type: "suggestion" as ReviewItem["type"],
     title: "Attention",
     description: "description",
     options: [],
@@ -61,8 +61,8 @@ describe("review-store addItems dedupe", () => {
 
   it("does NOT merge across different types", () => {
     useReviewStore.getState().addItems([
-      makeInput({ type: "missing-page", title: "Attention" }),
-      makeInput({ type: "duplicate", title: "Attention" }),
+      makeInput({ type: "suggestion", title: "Attention" }),
+      makeInput({ type: "schema", title: "Attention" }),
     ])
     expect(useReviewStore.getState().items).toHaveLength(2)
   })
@@ -77,24 +77,6 @@ describe("review-store addItems dedupe", () => {
     expect(items).toHaveLength(2)
     expect(items.find((i) => i.resolved)?.id).toBe(oldId)
     expect(items.find((i) => !i.resolved)?.affectedPages).toEqual(["new.md"])
-  })
-
-  it("covers contradiction type (was previously skipped in dedupe)", () => {
-    useReviewStore.getState().addItems([
-      makeInput({ type: "contradiction", title: "Conflict A", affectedPages: ["a.md"] }),
-      makeInput({ type: "contradiction", title: "Conflict A", affectedPages: ["b.md"] }),
-    ])
-    const items = useReviewStore.getState().items
-    expect(items).toHaveLength(1)
-    expect(items[0].affectedPages).toEqual(expect.arrayContaining(["a.md", "b.md"]))
-  })
-
-  it("covers confirm type", () => {
-    useReviewStore.getState().addItems([
-      makeInput({ type: "confirm", title: "Confirm X" }),
-      makeInput({ type: "confirm", title: "Confirm X" }),
-    ])
-    expect(useReviewStore.getState().items).toHaveLength(1)
   })
 
   it("prefers the newer non-empty description on merge", () => {
@@ -153,11 +135,11 @@ describe("review-store addItems dedupe", () => {
 
   it("invariant: after addItems, no two pending items share (type, normalized title)", () => {
     useReviewStore.getState().addItems([
-      makeInput({ type: "missing-page", title: "Missing page: Foo" }),
-      makeInput({ type: "missing-page", title: "缺失页面: Foo" }),
-      makeInput({ type: "missing-page", title: "Foo" }),
-      makeInput({ type: "duplicate", title: "Foo" }),
-      makeInput({ type: "duplicate", title: "Duplicate page: Foo" }),
+      makeInput({ type: "suggestion", title: "Missing page: Foo" }),
+      makeInput({ type: "suggestion", title: "缺失页面: Foo" }),
+      makeInput({ type: "suggestion", title: "Foo" }),
+      makeInput({ type: "schema", title: "Foo" }),
+      makeInput({ type: "schema", title: "Duplicate page: Foo" }),
     ])
     const pending = useReviewStore.getState().items.filter((i) => !i.resolved)
     const keys = pending.map((i) => `${i.type}::${i.title.toLowerCase().replace(/^(missing|duplicate).*?:\s*/i, "").trim()}`)
@@ -201,16 +183,16 @@ describe("review-store modification stage flow", () => {
 
   it("transitionToRejectionHandling is a no-op on resolved or non-modification items", () => {
     const store = useReviewStore.getState()
-    store.addItems([makeModification("a"), makeInput({ title: "regular missing" })])
-    const [mod, missing] = useReviewStore.getState().items
+    store.addItems([makeModification("a"), makeInput({ title: "regular suggestion" })])
+    const [mod, suggestion] = useReviewStore.getState().items
     store.resolveItem(mod.id, "Approved")
     store.transitionToRejectionHandling(mod.id)
-    store.transitionToRejectionHandling(missing.id)
+    store.transitionToRejectionHandling(suggestion.id)
     const items = useReviewStore.getState().items
     // Resolved modification keeps stage='primary'.
     expect(items.find((i) => i.id === mod.id)?.stage).toBe("primary")
-    // Missing-page item should NOT have a stage at all.
-    expect(items.find((i) => i.id === missing.id)?.stage).toBeUndefined()
+    // Suggestion item should NOT have a stage at all.
+    expect(items.find((i) => i.id === suggestion.id)?.stage).toBeUndefined()
   })
 
   it("addItems does NOT dedupe two modifications with the same target path", () => {

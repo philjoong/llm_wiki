@@ -12,12 +12,7 @@
  * TS source here is the only thing tracked.
  */
 
-export type ReviewType =
-  | "contradiction"
-  | "duplicate"
-  | "missing-page"
-  | "confirm"
-  | "suggestion"
+export type ReviewType = "suggestion" | "schema" | "entity_confirmation"
 
 export interface ReviewFixture {
   id: string
@@ -100,7 +95,7 @@ export interface IngestScenario {
      * review has the same type and a title containing titleContains.
      */
     reviewsCreated?: Array<{
-      type: "contradiction" | "duplicate" | "missing-page" | "suggestion" | "confirm"
+      type: "suggestion" | "schema" | "entity_confirmation"
       titleContains: string
     }>
   }

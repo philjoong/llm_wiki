@@ -2,12 +2,9 @@
  * Sweep pending review items and auto-resolve those whose underlying
  * condition has been addressed by subsequent ingests.
  *
- * Triggered when the ingest queue drains. Two stages:
- *   1. Rule-based matching (filename / frontmatter title / affectedPages)
- *   2. LLM semantic judgment for remaining pending items
- *
- * Conservative: preserves contradiction / suggestion / confirm types
- * that need human judgment.
+ * Triggered when the ingest queue drains. Pending items are judged by an
+ * LLM against the current wiki state; only items it is confident about
+ * are resolved. Conservative: items that need human judgment stay pending.
  */
 
 import { listDirectory, readFile } from "@/commands/fs"
@@ -17,7 +14,6 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat } from "@/lib/llm-client"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
-import { normalizeReviewTitle } from "@/lib/review-utils"
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -80,44 +76,6 @@ async function buildWikiIndex(projectPath: string): Promise<WikiIndex> {
   }
 
   return { byId, byTitle, pages }
-}
-
-/**
- * Extract candidate page names from a review item's title / description.
- * Conservative — only flags items where we can confidently identify a page name.
- */
-function extractCandidateNames(item: ReviewItem): string[] {
-  const names = new Set<string>()
-
-  // The review title itself is often the missing page name
-  // e.g. "Missing page: 注意力机制" or "注意力机制"
-  const cleaned = normalizeReviewTitle(item.title)
-  if (cleaned && cleaned.length <= 100) {
-    names.add(cleaned)
-  }
-
-  // Also check affectedPages — these reference files directly
-  for (const page of item.affectedPages ?? []) {
-    const base = page.split("/").pop()?.replace(/\.md$/, "")
-    if (base) names.add(base.toLowerCase())
-  }
-
-  return Array.from(names)
-}
-
-/** Check if a candidate name matches an existing wiki page */
-function pageExists(name: string, index: WikiIndex): boolean {
-  const normalized = name.trim().toLowerCase()
-  if (!normalized) return false
-
-  // Exact filename match (kebab-case or matching existing id)
-  if (index.byId.has(normalized)) return true
-  if (index.byId.has(normalized.replace(/\s+/g, "-"))) return true
-
-  // Exact title match (from frontmatter)
-  if (index.byTitle.has(normalized)) return true
-
-  return false
 }
 
 /**
@@ -225,7 +183,7 @@ async function judgeBatch(
     "",
     "For each review item, decide whether the underlying condition has been RESOLVED by the current wiki state.",
     "Be conservative: only mark as resolved if you are confident the concern no longer applies.",
-    "For contradictions, confirmations, or human-judgment items, default to keeping them pending.",
+    "For items that need human judgment, default to keeping them pending.",
     "",
     'Respond with ONLY a JSON object in this exact shape: {"resolved": ["id1", "id2"]}',
     'If none of the items are resolved, return exactly: {"resolved": []}',
@@ -349,8 +307,8 @@ export async function sweepResolvedReviews(
   // Stage 4 — `modification` review cards represent a parked proposal
   // file plus a user decision tree. They are NEVER auto-resolved by
   // sweep: only the user can pick Approve / Merge / Discard / Pending /
-  // Counterexample. Filtering them out here keeps both the rule stage
-  // and the LLM judge from touching them.
+  // Counterexample. Filtering them out here keeps the LLM judge from
+  // touching them.
   const pending = store.items.filter((i) => !i.resolved && i.type !== "modification")
 
   if (pending.length === 0) return 0
@@ -361,102 +319,48 @@ export async function sweepResolvedReviews(
   // were reading the wiki directory.
   if (signal?.aborted || !matchesCurrentProject(projectPath)) return 0
 
-  let ruleResolved = 0
-  const stillPending: ReviewItem[] = []
-
-  // Stage 1: rule-based matching
-  for (const item of pending) {
-    // Bail mid-loop on project switch / abort — applying rules to new
-    // project's reviews with old project's wiki index would corrupt state.
-    if (signal?.aborted || !matchesCurrentProject(projectPath)) return ruleResolved
-
-    let resolvedByRule = false
-
-    if (item.type === "missing-page") {
-      const names = extractCandidateNames(item)
-      if (names.length > 0 && names.some((n) => pageExists(n, index))) {
-        store.resolveItem(item.id, "auto-resolved")
-        ruleResolved++
-        resolvedByRule = true
-      }
-    } else if (item.type === "duplicate") {
-      // If any affected page no longer exists, the duplicate situation changed —
-      // auto-resolve (user or cascade-delete took care of it).
-      const affected = item.affectedPages ?? []
-      if (affected.length > 0) {
-        const allStillExist = affected.every((p) => {
-          const base = p.split("/").pop()?.replace(/\.md$/, "").toLowerCase()
-          return base ? index.byId.has(base) : false
-        })
-        if (!allStillExist) {
-          store.resolveItem(item.id, "auto-resolved")
-          ruleResolved++
-          resolvedByRule = true
-        }
-      }
-    }
-
-    if (!resolvedByRule) {
-      stillPending.push(item)
-    }
-  }
-
-  // Stage 2: LLM semantic judgment on what's left
+  // LLM semantic judgment
   let llmResolved = 0
   const activity = useActivityStore.getState()
   let activityId: string | null = null
 
-  if (stillPending.length > 0 && !signal?.aborted && matchesCurrentProject(projectPath)) {
-    // Surface a running indicator so a multi-second LLM judgment doesn't
-    // feel like the app froze.
-    activityId = activity.addItem({
-      type: "query",
-      title: "Review cleanup",
-      status: "running",
-      detail: `Judging ${stillPending.length} pending review${stillPending.length > 1 ? "s" : ""}…`,
-      filesWritten: [],
-    })
+  // Surface a running indicator so a multi-second LLM judgment doesn't
+  // feel like the app froze.
+  activityId = activity.addItem({
+    type: "query",
+    title: "Review cleanup",
+    status: "running",
+    detail: `Judging ${pending.length} pending review${pending.length > 1 ? "s" : ""}…`,
+    filesWritten: [],
+  })
 
-    try {
-      const resolvedIds = await llmJudgeReviews(stillPending, index, signal)
-      // Final guard: do not write results if the user switched projects
-      // or aborted between the LLM call starting and finishing.
-      if (!signal?.aborted && matchesCurrentProject(projectPath)) {
-        for (const id of resolvedIds) {
-          store.resolveItem(id, "llm-judged")
-          llmResolved++
-        }
+  try {
+    const resolvedIds = await llmJudgeReviews(pending, index, signal)
+    // Final guard: do not write results if the user switched projects
+    // or aborted between the LLM call starting and finishing.
+    if (!signal?.aborted && matchesCurrentProject(projectPath)) {
+      for (const id of resolvedIds) {
+        store.resolveItem(id, "llm-judged")
+        llmResolved++
       }
-    } catch (err) {
-      activity.updateItem(activityId, {
-        status: "error",
-        detail: `Review cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
-      })
-      activityId = null
     }
+  } catch (err) {
+    activity.updateItem(activityId, {
+      status: "error",
+      detail: `Review cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+    })
+    activityId = null
   }
 
-  const total = ruleResolved + llmResolved
-  const parts: string[] = []
-  if (ruleResolved > 0) parts.push(`${ruleResolved} by rules`)
-  if (llmResolved > 0) parts.push(`${llmResolved} by LLM`)
+  const total = llmResolved
   const detail = total > 0
-    ? `Auto-resolved ${total} stale review item${total > 1 ? "s" : ""} (${parts.join(", ")})`
+    ? `Auto-resolved ${total} stale review item${total > 1 ? "s" : ""} by LLM judgment`
     : "No stale review items to clean up"
 
   if (activityId !== null) {
     activity.updateItem(activityId, {
       status: signal?.aborted ? "error" : "done",
       detail: signal?.aborted ? "Review cleanup cancelled" : detail,
-    })
-  } else if (total > 0) {
-    // Rule-only path: no in-progress indicator was shown, add a done item.
-    activity.addItem({
-      type: "query",
-      title: "Review cleanup",
-      status: "done",
-      detail,
-      filesWritten: [],
     })
   }
 

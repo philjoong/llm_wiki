@@ -24,18 +24,9 @@ import type { FileNode } from "@/types/wiki"
 const mockListDirectory = vi.mocked(listDirectory)
 const mockReadFile = vi.mocked(readFile)
 
-function fileNode(name: string): FileNode {
-  return {
-    name,
-    path: `/project/db/${name}`,
-    is_dir: false,
-    children: [],
-  } as FileNode
-}
-
 function addPending(items: Array<Partial<ReviewItem>>) {
   const input = items.map((p) => ({
-    type: "missing-page" as ReviewItem["type"],
+    type: "suggestion" as ReviewItem["type"],
     title: "X",
     description: "",
     options: [],
@@ -61,20 +52,6 @@ function setProject(path: string) {
     ollamaUrl: "",
     customEndpoint: "",
     maxContextSize: 128000,
-  })
-}
-
-/** Clear the API key so the LLM stage short-circuits without a call. */
-function disableLlm() {
-  useWikiStore.setState({
-    llmConfig: {
-      provider: "openai",
-      apiKey: "",
-      model: "",
-      ollamaUrl: "",
-      customEndpoint: "",
-      maxContextSize: 0,
-    },
   })
 }
 
@@ -105,31 +82,12 @@ beforeEach(() => {
 describe("sweep race — project-identity guard", () => {
   it("bails immediately if projectPath does not match current project", async () => {
     setProject("/project-A")
-    addPending([{ title: "Missing page: Foo" }])
+    addPending([{ title: "Suggestion: Foo" }])
 
     const resolved = await sweepResolvedReviews("/project-B")
     expect(resolved).toBe(0)
     // Store untouched
     expect(useReviewStore.getState().items.filter((i) => i.resolved)).toHaveLength(0)
-  })
-
-  it("does not apply resolveItem if user switches projects mid-sweep (after buildWikiIndex)", async () => {
-    setProject("/project-A")
-    addPending([{ title: "Missing page: Foo" }])
-
-    // Set up the wiki dir to contain foo.md so the rule stage WOULD have
-    // resolved the review. The project switch should prevent that write.
-    mockListDirectory.mockResolvedValue([fileNode("foo.md")])
-    mockReadFile.mockResolvedValue("---\ntitle: Foo\n---\n")
-
-    const sweepPromise = sweepResolvedReviews("/project-A")
-    // Switch projects before sweep has a chance to finish
-    setProject("/project-B")
-
-    const resolved = await sweepPromise
-    // After project switch, the identity guard aborts before any resolveItem
-    expect(resolved).toBe(0)
-    expect(useReviewStore.getState().items.every((i) => !i.resolved)).toBe(true)
   })
 
   it("bails before LLM stage if project path mismatches when entering stage 2", async () => {
@@ -192,36 +150,6 @@ describe("sweep race — abort signal", () => {
     const result = await sweepPromise
     expect(result).toBe(0)
     expect(harness.anyAborted()).toBe(true)
-  })
-})
-
-describe("sweep — rule-based auto-resolution", () => {
-  it("auto-resolves a missing-page review when the page now exists by filename", async () => {
-    setProject("/project")
-    addPending([{ title: "Missing page: attention", type: "missing-page" }])
-
-    mockListDirectory.mockResolvedValue([fileNode("attention.md")])
-    mockReadFile.mockResolvedValue("no frontmatter")
-
-    const resolved = await sweepResolvedReviews("/project")
-    expect(resolved).toBe(1)
-
-    const items = useReviewStore.getState().items
-    expect(items[0].resolved).toBe(true)
-    expect(items[0].resolvedAction).toBe("auto-resolved")
-  })
-
-  it("does not resolve when the page doesn't exist", async () => {
-    setProject("/project")
-    disableLlm() // prevent stage-2 LLM stage from running
-    addPending([{ title: "Missing page: neverwritten", type: "missing-page" }])
-
-    mockListDirectory.mockResolvedValue([fileNode("other.md")])
-    mockReadFile.mockResolvedValue("")
-
-    const resolved = await sweepResolvedReviews("/project")
-    expect(resolved).toBe(0)
-    expect(useReviewStore.getState().items[0].resolved).toBe(false)
   })
 })
 

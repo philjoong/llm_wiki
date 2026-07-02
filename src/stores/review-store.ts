@@ -2,7 +2,7 @@ import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
 import type { SourceRef } from "@/lib/source-ref"
 import type { Stage1Section, Stage2Triple } from "@/lib/ingest"
-import type { EntityEntry } from "@/lib/entity-dict"
+import type { EntityCandidate } from "@/lib/entity-dict"
 
 export interface ReviewOption {
   label: string
@@ -72,7 +72,8 @@ export interface OverflowEntry {
  */
 export interface EntityConfirmationItem {
   incomingName: string
-  candidates: EntityEntry[]
+  /** Matched dictionary entries, each with the match kind and the name that matched. */
+  candidates: EntityCandidate[]
   triples: Stage2Triple[]
   pagePaths: string[]
 }
@@ -80,10 +81,6 @@ export interface EntityConfirmationItem {
 export interface ReviewItem {
   id: string
   type:
-    | "contradiction"
-    | "duplicate"
-    | "missing-page"
-    | "confirm"
     | "suggestion"
     | "modification"
     | "schema"
@@ -151,9 +148,9 @@ export const useReviewStore = create<ReviewState>((set) => ({
 
   addItems: (items) =>
     set((state) => {
-      // De-dupe against pending items with same type + normalized title (all
-      // 5 types — bulk ingest can re-surface the same contradiction/confirm
-      // from multiple files).
+      // De-dupe against pending items with same type + normalized title —
+      // bulk ingest can re-surface the same suggestion/schema item from
+      // multiple files.
       // Merge affectedPages / sourcePath instead of duplicating.
       // Modification items skip the dedupe path: each proposal is tied to
       // a distinct parked draft (incomingDraftPath) and merging two of them

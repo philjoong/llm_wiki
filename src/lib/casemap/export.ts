@@ -19,7 +19,7 @@ export function buildTestPlanMarkdown(plan: TestPlan): string {
     "",
     plan.featureInput.trim(),
     "",
-    `**특성:** ${plan.abstraction.join(", ")}`,
+    `**특성:** ${plan.abstraction.map((t) => t.tag).join(", ")}`,
     "",
     `## 테스트케이스 (${included.length}건)`,
     "",

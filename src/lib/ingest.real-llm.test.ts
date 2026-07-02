@@ -228,13 +228,14 @@ const scenarios: RealIngestScenario[] = [
     name: "missing-page-trigger-en",
     description:
       "Vision Transformer mentions concepts NOT in seed wiki " +
-      "(layer normalization, GELU, class token). Expected: missing-page reviews.",
+      "(layer normalization, GELU, class token).",
     realContentFile: "missing-page-trigger-en.md",
     sourcePath: "raw/sources/missing-page-trigger-en.md",
     targetLanguage: "English",
     seedWikiPages: EN_SEED_WIKI,
     languageContractForbidden: FORBID_NON_LATIN,
-    expectedReviewTypes: ["missing-page"],
+    // The review-type contract is a soft signal, not a hard requirement.
+    // We assert on presence of reviews generally, not type specifically.
   },
   {
     name: "duplicate-trigger-en",

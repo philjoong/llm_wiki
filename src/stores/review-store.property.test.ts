@@ -10,13 +10,10 @@ beforeEach(() => {
   useReviewStore.setState({ items: [] })
 })
 
-const typeArb = fc.constantFrom<ReviewItem["type"]>(
-  "contradiction",
-  "duplicate",
-  "missing-page",
-  "confirm",
-  "suggestion",
-)
+// Only "suggestion" participates in the pending-only dedupe path (schema
+// dedupes against resolved items too; modification/entity_confirmation
+// skip dedupe entirely).
+const typeArb = fc.constantFrom<ReviewItem["type"]>("suggestion")
 
 const reviewInputArb = fc.record({
   type: typeArb,

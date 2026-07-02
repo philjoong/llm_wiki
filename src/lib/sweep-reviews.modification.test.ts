@@ -1,14 +1,14 @@
 /**
  * Stage 4 — `modification` review items are NEVER auto-resolved by the
- * sweep pass. The sweep is allowed to clean up stale missing-page /
- * duplicate cards via filename or LLM judgment, but a modification
- * proposal carries a parked draft file that only the user can resolve.
+ * sweep pass. The sweep is allowed to clean up stale cards via LLM
+ * judgment, but a modification proposal carries a parked draft file
+ * that only the user can resolve.
  *
  * This test mocks both the FS index lookup and the LLM client to a no-op
  * baseline, then runs the sweep against a store that mixes one
- * resolvable missing-page card with one modification card. The expected
- * outcome: missing-page may resolve via the rule stage, modification
- * stays pending and never reaches the LLM judge.
+ * suggestion card with one modification card. The expected outcome:
+ * with the LLM disabled nothing resolves, and the modification never
+ * reaches the LLM judge.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
@@ -67,16 +67,14 @@ beforeEach(() => {
 })
 
 describe("sweep skips modification items", () => {
-  it("does not resolve modification cards even when the rule stage clears other items", async () => {
-    // Wiki index contains an `attention.md` page → the missing-page
-    // card SHOULD resolve via the rule stage.
+  it("does not resolve modification cards while other pending items go to the judge", async () => {
     mockListDirectory.mockResolvedValue([fileNode("attention.md")])
     mockReadFile.mockResolvedValue("---\ntitle: Attention\n---\n\n# Attention\n")
 
     useReviewStore.getState().addItems([
       {
-        type: "missing-page",
-        title: "Missing page: attention",
+        type: "suggestion",
+        title: "Consider a page for attention",
         description: "",
         options: [],
       },
@@ -99,13 +97,14 @@ describe("sweep skips modification items", () => {
 
     const items = useReviewStore.getState().items
     const modItem = items.find((i) => i.type === "modification") as ReviewItem
-    const missingItem = items.find((i) => i.type === "missing-page") as ReviewItem
+    const suggestionItem = items.find((i) => i.type === "suggestion") as ReviewItem
 
+    // LLM is disabled — nothing resolves, and the modification card in
+    // particular stays untouched in its primary stage.
     expect(modItem.resolved).toBe(false)
     expect(modItem.stage).toBe("primary")
-    expect(missingItem.resolved).toBe(true)
-    expect(missingItem.resolvedAction).toBe("auto-resolved")
-    expect(resolvedCount).toBe(1)
+    expect(suggestionItem.resolved).toBe(false)
+    expect(resolvedCount).toBe(0)
 
     // LLM judge must never see a modification card — the API key was
     // cleared, but as a belt-and-suspenders check: streamChat was not

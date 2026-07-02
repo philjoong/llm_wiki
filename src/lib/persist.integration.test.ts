@@ -26,7 +26,7 @@ let tmp: { path: string; cleanup: () => Promise<void> }
 function makeReview(overrides: Partial<ReviewItem> = {}): ReviewItem {
   return {
     id: "r-1",
-    type: "missing-page",
+    type: "suggestion",
     title: "Attention",
     description: "",
     options: [],
@@ -48,7 +48,7 @@ describe("review persistence — round-trip", () => {
   it("save then load returns identical items", async () => {
     const items: ReviewItem[] = [
       makeReview({ id: "r-1", title: "Alpha" }),
-      makeReview({ id: "r-2", title: "Beta", type: "duplicate" }),
+      makeReview({ id: "r-2", title: "Beta", type: "schema" }),
     ]
     await saveReviewItems(tmp.path, items)
     const loaded = await loadReviewItems(tmp.path)

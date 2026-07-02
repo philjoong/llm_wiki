@@ -26,7 +26,7 @@ import {
   buildEntityHintsForPrompt,
   findCandidates,
 } from "@/lib/entity-dict"
-import type { EntityEntry } from "@/lib/entity-dict"
+import type { EntityCandidate } from "@/lib/entity-dict"
 import {
   loadCounterexamples,
   loadRejectionLog,
@@ -781,7 +781,6 @@ export async function autoIngestImpl(
       allWrittenPaths.push(...wp3)
       allHardFailures.push(...hf3)
       allWarnings.push(...ww3)
-      allReviewItems.push(...parseReviewBlocks(generation3, sp))
 
       // Sections that wrote successfully → run Stage 2 immediately.
       const writtenPagePaths = new Set(wp3.filter((p) => !p.startsWith("pending/")))
@@ -874,12 +873,9 @@ export async function autoIngestImpl(
 
             const overflowMap = new Map<string, { newTypes: Set<string>; paths: string[] }>()
             for (const f of failures) {
-              if (!f.graph || !f.reason.includes("already has 4 relation types")) continue
-              const typesMatch = f.reason.match(/new graph required for:\s*(.+)$/)
-              if (!typesMatch) continue
-              const newTypes = typesMatch[1].split(",").map((t) => t.trim()).filter(Boolean)
+              if (!f.graph || !f.overflowTypes?.length) continue
               const entry = overflowMap.get(f.graph) ?? { newTypes: new Set(), paths: [] }
-              for (const t of newTypes) entry.newTypes.add(t)
+              for (const t of f.overflowTypes) entry.newTypes.add(t)
               if (f.page_path) entry.paths.push(f.page_path)
               overflowMap.set(f.graph, entry)
             }
@@ -897,7 +893,7 @@ export async function autoIngestImpl(
               type: "suggestion",
               stage: "primary",
               title: `${summarizeStage2FailureTitle(failures, fileName)}${chunkSuffix}`,
-              description: failures.map((f) => `- **${f.page_path || f.concept}** (${f.graph || "no graph"}): ${f.reason}`).join("\n"),
+              description: failures.map(formatStage2FailureLine).join("\n"),
               sourcePath: sp,
               affectedPages: [...new Set(failures.map((f) => f.page_path).filter((p): p is string => Boolean(p)))],
               overflowEntries: hasOverflow ? overflowEntries : undefined,
@@ -927,7 +923,6 @@ export async function autoIngestImpl(
           allHardFailures.push(...hardFailures)
           allWarnings.push(...writeWarnings)
           allProposals.push(...proposals)
-          allReviewItems.push(...parseReviewBlocks(generation, sp))
 
           if (writtenPaths.length > 0) {
             const projectName = useWikiStore.getState().project?.name || "default"
@@ -1353,63 +1348,6 @@ async function writeFileBlocks(
   return { writtenPaths, warnings, hardFailures, proposals }
 }
 
-const REVIEW_BLOCK_REGEX = /---REVIEW:\s*(\w[\w-]*)\s*\|\s*(.+?)\s*---\n([\s\S]*?)---END REVIEW---/g
-
-function parseReviewBlocks(
-  text: string,
-  sourcePath: string,
-): Omit<ReviewItem, "id" | "resolved" | "createdAt">[] {
-  const items: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = []
-  const matches = text.matchAll(REVIEW_BLOCK_REGEX)
-
-  for (const match of matches) {
-    const rawType = match[1].trim().toLowerCase()
-    const title = match[2].trim()
-    const body = match[3].trim()
-
-    const type = (
-      ["contradiction", "duplicate", "missing-page", "suggestion"].includes(rawType)
-        ? rawType
-        : "confirm"
-    ) as ReviewItem["type"]
-
-    // Parse OPTIONS line
-    const optionsMatch = body.match(/^OPTIONS:\s*(.+)$/m)
-    const options = optionsMatch
-      ? optionsMatch[1].split("|").map((o) => {
-          const label = o.trim()
-          return { label, action: label }
-        })
-      : [
-          { label: "Approve", action: "Approve" },
-          { label: "Skip", action: "Skip" },
-        ]
-
-    // Parse PAGES line
-    const pagesMatch = body.match(/^PAGES:\s*(.+)$/m)
-    const affectedPages = pagesMatch
-      ? pagesMatch[1].split(",").map((p) => p.trim())
-      : undefined
-
-    // Description is the body minus OPTIONS and PAGES lines
-    const description = body
-      .replace(/^OPTIONS:.*$/m, "")
-      .replace(/^PAGES:.*$/m, "")
-      .trim()
-
-    items.push({
-      type,
-      title,
-      description,
-      sourcePath,
-      affectedPages,
-      options,
-    })
-  }
-
-  return items
-}
-
 /** Stage 1 output: a single meaningful section from the source document. */
 export interface Stage1Section {
   source_range: string
@@ -1439,6 +1377,12 @@ export interface Stage2Failure {
   graph?: string
   source_range?: string
   reason: string
+  /** Original triple fields, preserved so the review card can show what failed to store. */
+  subject?: string
+  predicate?: string
+  object?: string
+  /** Set only for existing-graph relation-type overflow — the types that didn't fit. Drives OverflowEntry. */
+  overflowTypes?: string[]
 }
 
 export function mergeRelationTypes(existing: string[], used: string[]): {
@@ -1483,7 +1427,7 @@ function relationTypesUsedBy(item: Stage2Triple): string[] {
   return [...proposedTypes, ...predicateType]
 }
 
-function failureFor(item: Stage2Triple, assignmentIndex: number, reason: string): Stage2Failure {
+function failureFor(item: Stage2Triple, assignmentIndex: number, reason: string, overflowTypes?: string[]): Stage2Failure {
   return {
     assignmentIndex,
     concept: item.subject || "(unknown)",
@@ -1491,7 +1435,25 @@ function failureFor(item: Stage2Triple, assignmentIndex: number, reason: string)
     graph: item.graph,
     source_range: item.source_range,
     reason,
+    subject: item.subject,
+    predicate: item.predicate,
+    object: item.object,
+    overflowTypes,
   }
+}
+
+/**
+ * One review-card line for a Stage 2 failure: the original triple (with
+ * `(?)` marking the missing fields), its graph/page, and the reason.
+ */
+function formatStage2FailureLine(f: Stage2Failure): string {
+  const part = (v?: string) => (v && v.trim() ? v : "(?)")
+  const triple = `${part(f.subject)} --${part(f.predicate)}--> ${part(f.object)}`
+  const context = [
+    f.graph ? `graph: \`${f.graph}\`` : null,
+    f.page_path ? `page: \`${f.page_path}\`` : null,
+  ].filter(Boolean).join(", ")
+  return `- **${triple}**${context ? ` (${context})` : ""}: ${f.reason}`
 }
 
 /** User-facing category for a Stage2Failure reason string. */
@@ -1639,7 +1601,8 @@ export function validateStage2(triples: Stage2Triple[], policy: GraphPolicy): St
     const existingTypes = policy.graphRelationTypes[item.graph] ?? policy.relationTypes
     const { overflow } = mergeRelationTypes(existingTypes, usedTypes)
     if (overflow.length > 0) {
-      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" already has 4 relation types; new graph required for: ${[...new Set(overflow)].join(", ")}`))
+      const overflowTypes = [...new Set(overflow)]
+      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" already has 4 relation types; new graph required for: ${overflowTypes.join(", ")}`, overflowTypes))
     }
   }
 
@@ -1890,7 +1853,7 @@ async function checkEntityConflicts(
   projectPath: string,
 ): Promise<{ clean: Stage2Triple[]; conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] }> {
   const dict = await loadEntityDict(projectPath)
-  const conflictGroups = new Map<string, { candidates: EntityEntry[]; triples: Stage2Triple[] }>()
+  const conflictGroups = new Map<string, { candidates: EntityCandidate[]; triples: Stage2Triple[] }>()
   const conflictedTripleSet = new Set<Stage2Triple>()
 
   for (const triple of triples) {
@@ -1900,7 +1863,7 @@ async function checkEntityConflicts(
       if (!hasFuzzyOnly) continue
 
       conflictedTripleSet.add(triple)
-      const group = conflictGroups.get(name) ?? { candidates: candidates.map((c) => c.entry), triples: [] }
+      const group = conflictGroups.get(name) ?? { candidates, triples: [] }
       group.triples.push(triple)
       conflictGroups.set(name, group)
     }
@@ -1911,7 +1874,7 @@ async function checkEntityConflicts(
     ([incomingName, group]) => ({
       type: "entity_confirmation",
       title: `엔티티 확인: "${incomingName}"`,
-      description: `"${incomingName}"과 유사한 기존 엔티티가 있습니다: ${group.candidates.map((c) => c.canonicalName).join(", ")}`,
+      description: `"${incomingName}"과 유사한 기존 엔티티가 있습니다: ${group.candidates.map((c) => c.entry.canonicalName).join(", ")}`,
       affectedPages: [...new Set(group.triples.map((t) => t.page_path).filter(Boolean))],
       entityConfirmation: {
         incomingName,
@@ -1920,7 +1883,7 @@ async function checkEntityConflicts(
         pagePaths: [...new Set(group.triples.map((t) => t.page_path).filter(Boolean))],
       },
       options: [
-        ...group.candidates.map((c) => ({ label: `같은 엔티티: ${c.canonicalName}`, action: `entity:same:${c.id}` })),
+        ...group.candidates.map((c) => ({ label: `같은 엔티티: ${c.entry.canonicalName}`, action: `entity:same:${c.entry.id}` })),
         { label: "새 엔티티", action: "entity:new" },
         { label: "무시", action: "entity:ignore" },
       ],
@@ -2006,12 +1969,9 @@ async function runStage2Core(
     invoke("app_debug", { message: `[ingest:stage2:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length}` }).catch(() => {})
     const overflowMap = new Map<string, { newTypes: Set<string>; paths: string[] }>()
     for (const f of failures) {
-      if (!f.graph || !f.reason.includes("already has 4 relation types")) continue
-      const typesMatch = f.reason.match(/new graph required for:\s*(.+)$/)
-      if (!typesMatch) continue
-      const newTypes = typesMatch[1].split(",").map((t) => t.trim()).filter(Boolean)
+      if (!f.graph || !f.overflowTypes?.length) continue
       const entry = overflowMap.get(f.graph) ?? { newTypes: new Set(), paths: [] }
-      for (const t of newTypes) entry.newTypes.add(t)
+      for (const t of f.overflowTypes) entry.newTypes.add(t)
       if (f.page_path) entry.paths.push(f.page_path)
       overflowMap.set(f.graph, entry)
     }
@@ -2027,7 +1987,7 @@ async function runStage2Core(
       type: "suggestion",
       stage: "primary",
       title: summarizeStage2FailureTitle(failures, fileName),
-      description: failures.map((f) => `- **${f.page_path || f.concept}** (${f.graph || "no graph"}): ${f.reason}`).join("\n"),
+      description: failures.map(formatStage2FailureLine).join("\n"),
       sourcePath: fileName,
       affectedPages: [...new Set(failures.map((f) => f.page_path).filter((p): p is string => Boolean(p)))],
       overflowEntries: hasOverflow ? overflowEntries : undefined,

@@ -23,8 +23,11 @@ import {
 import { applyRules } from "@/lib/casemap/rule-filter"
 import { renderCombination } from "@/lib/casemap/prompts"
 import { exportTestPlan } from "@/lib/casemap/export"
+import { approveTagLink, fuzzyCandidates, linkExactTags } from "@/lib/casemap/entity-links"
+import { loadEntityDict, saveEntityDict, type EntityDict } from "@/lib/entity-dict"
 import {
   createEmptyPlan,
+  type AbstractionTag,
   type CandidateCombo,
   type RiskLevel,
   type Rule,
@@ -49,6 +52,7 @@ export function CasemapView() {
   const [loaded, setLoaded] = useState(false)
   const [plan, setPlan] = useState<TestPlan | null>(null)
   const [rules, setRules] = useState<Rule[]>([])
+  const [dict, setDict] = useState<EntityDict>({})
   const [viewStep, setViewStep] = useState(1)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
@@ -59,11 +63,14 @@ export function CasemapView() {
     if (!projectPath) return
     setPlan(null)
     setLoaded(false)
-    Promise.all([loadTestPlans(projectPath), loadRules(projectPath)]).then(([p, r]) => {
-      setPlans(p)
-      setRules(r)
-      setLoaded(true)
-    })
+    Promise.all([loadTestPlans(projectPath), loadRules(projectPath), loadEntityDict(projectPath)]).then(
+      ([p, r, d]) => {
+        setPlans(p)
+        setRules(r)
+        setDict(d)
+        setLoaded(true)
+      },
+    )
   }, [projectPath])
 
   async function persistPlan(next: TestPlan) {
@@ -75,6 +82,15 @@ export function CasemapView() {
   async function persistRules(next: Rule[]) {
     setRules(next)
     await saveRules(projectPath, next)
+  }
+
+  /** User approved a fuzzy tag→entity suggestion: link + record the tag as an alias. */
+  async function approveLink(tagText: string, entityId: string) {
+    if (!plan) return
+    const { tags, dict: nextDict } = approveTagLink(plan.abstraction, tagText, entityId, dict)
+    setDict(nextDict)
+    await saveEntityDict(projectPath, nextDict)
+    await persistPlan({ ...plan, abstraction: tags })
   }
 
   function openPlan(p: TestPlan) {
@@ -238,7 +254,7 @@ export function CasemapView() {
                 const tags = await runAbstraction(plan.featureInput, ctx)
                 return {
                   ...plan,
-                  abstraction: tags,
+                  abstraction: linkExactTags(tags, dict),
                   axes: [],
                   priorityValues: [],
                   candidates: [],
@@ -253,8 +269,10 @@ export function CasemapView() {
         {viewStep === 2 && (
           <StepAbstraction
             plan={plan}
+            dict={dict}
             busy={busy}
             onChange={(abstraction) => void persistPlan({ ...plan, abstraction })}
+            onApproveLink={(tagText, entityId) => void approveLink(tagText, entityId)}
             onRun={() =>
               void runStep(async () => {
                 const { axes, priorityValues } = await runAxisRecommendation(plan.featureInput, plan.abstraction, ctx)
@@ -374,36 +392,67 @@ function StepFeatureInput({ plan, busy, onChange, onRun }: {
 
 // ── Step 2: abstraction tags ─────────────────────────────────────────────────
 
-function StepAbstraction({ plan, busy, onChange, onRun }: {
+function StepAbstraction({ plan, dict, busy, onChange, onApproveLink, onRun }: {
   plan: TestPlan
+  dict: EntityDict
   busy: boolean
-  onChange: (tags: string[]) => void
+  onChange: (tags: AbstractionTag[]) => void
+  onApproveLink: (tagText: string, entityId: string) => void
   onRun: () => void
 }) {
   const { t } = useTranslation()
   const [newTag, setNewTag] = useState("")
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   function addTag() {
     const tag = newTag.trim()
-    if (!tag || plan.abstraction.includes(tag)) return
-    onChange([...plan.abstraction, tag])
+    if (!tag || plan.abstraction.some((x) => x.tag === tag)) return
+    onChange([...plan.abstraction, ...linkExactTags([{ tag }], dict)])
     setNewTag("")
   }
   return (
     <div className="flex max-w-3xl flex-col gap-3">
       <p className="text-xs text-muted-foreground">{t("casemap.abstractionHint")}</p>
       <div className="flex flex-wrap gap-1.5">
-        {plan.abstraction.map((tag) => (
-          <span key={tag} className="flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-xs">
-            {tag}
-            <button
-              onClick={() => onChange(plan.abstraction.filter((x) => x !== tag))}
-              className="text-muted-foreground hover:text-destructive"
-              disabled={busy}
+        {plan.abstraction.map((item) => {
+          const linked = item.entityId ? dict[item.entityId] : undefined
+          const suggestion = dismissed.has(item.tag) ? undefined : fuzzyCandidates(item, dict)[0]
+          return (
+            <span
+              key={item.tag}
+              className={`flex items-center gap-1 rounded px-2 py-0.5 text-xs ${item.entityId ? "bg-primary/10" : "bg-muted"}`}
+              title={linked ? t("casemap.entityLinked", { name: linked.canonicalName }) : undefined}
             >
-              ✕
-            </button>
-          </span>
-        ))}
+              {item.entityId && <span aria-hidden>🔗</span>}
+              {item.tag}
+              {suggestion && (
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  · {t("casemap.linkSuggestion", { name: suggestion.entry.canonicalName })}
+                  <button
+                    onClick={() => onApproveLink(item.tag, suggestion.entry.id)}
+                    className="text-primary hover:underline"
+                    disabled={busy}
+                  >
+                    [{t("casemap.link")}]
+                  </button>
+                  <button
+                    onClick={() => setDismissed((prev) => new Set(prev).add(item.tag))}
+                    className="hover:text-foreground"
+                    disabled={busy}
+                  >
+                    [{t("casemap.dismiss")}]
+                  </button>
+                </span>
+              )}
+              <button
+                onClick={() => onChange(plan.abstraction.filter((x) => x.tag !== item.tag))}
+                className="text-muted-foreground hover:text-destructive"
+                disabled={busy}
+              >
+                ✕
+              </button>
+            </span>
+          )
+        })}
       </div>
       <div className="flex items-center gap-1">
         <input

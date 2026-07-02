@@ -1,4 +1,4 @@
-import type { CandidateCombo, Combination, RiskLevel, TestAxis } from "./types"
+import type { AbstractionTag, CandidateCombo, Combination, RiskLevel, TestAxis } from "./types"
 
 /**
  * Prompt builders + response parsers for the case-mapping LLM steps.
@@ -51,13 +51,29 @@ function renderCandidateLines(candidates: CandidateCombo[], axes: TestAxis[]): s
 
 // ── Step 2: abstraction ──────────────────────────────────────────────────────
 
-export function buildAbstractionPrompt(featureInput: string, languageDirective: string): BuiltPrompt {
+export function buildAbstractionPrompt(
+  featureInput: string,
+  languageDirective: string,
+  entityHints?: string,
+): BuiltPrompt {
   const system = [
     "You are a senior game QA analyst. Given a natural-language description of a game feature, abstract it into short characteristic tags that drive test design.",
     "",
     "Tags are short noun phrases describing testable properties, e.g.: 시전형 스킬, 단일 대상 타깃, 스플래시 대미지, 쿨타임 존재, 마나 소모, PvP 영향 있음.",
     "Return 4-12 tags. Do not invent properties the description doesn't imply.",
     "",
+    // Same reuse-rule pattern as ingest.ts's buildGraphAssignmentPrompt entityHints block.
+    ...(entityHints
+      ? [
+          "## Known entity names (reuse these exact strings when the concept matches)",
+          entityHints,
+          "",
+          "Rule: If a tag you are about to write matches one of these names",
+          "(or is clearly the same concept), use the exact string from this list.",
+          "If it is a new concept not on this list, coin a new name.",
+          "",
+        ]
+      : []),
     'Respond with JSON: {"tags": ["tag1", "tag2", ...]}',
     "",
     languageDirective,
@@ -66,11 +82,11 @@ export function buildAbstractionPrompt(featureInput: string, languageDirective: 
   return { system, user }
 }
 
-export function parseAbstractionResponse(raw: string): string[] {
+export function parseAbstractionResponse(raw: string): AbstractionTag[] {
   const obj = extractJsonObject(raw)
   const tags = asStringArray(obj.tags)
   if (tags.length === 0) throw new Error("LLM returned no tags")
-  return [...new Set(tags)]
+  return [...new Set(tags)].map((tag) => ({ tag }))
 }
 
 // ── Step 3: test axis recommendation ─────────────────────────────────────────
@@ -86,7 +102,7 @@ const DEFAULT_AXES_SEED = [
   "앱 상태: 포그라운드, 앱 최소화, 앱 종료 후 재실행",
 ].join("\n")
 
-export function buildAxisPrompt(featureInput: string, tags: string[], languageDirective: string): BuiltPrompt {
+export function buildAxisPrompt(featureInput: string, tags: AbstractionTag[], languageDirective: string): BuiltPrompt {
   const system = [
     "You are a senior game QA analyst designing a combinatorial test matrix. Given a feature description and its characteristic tags, recommend the test axes (dimensions) and 2-8 concrete values per axis.",
     "",
@@ -102,7 +118,7 @@ export function buildAxisPrompt(featureInput: string, tags: string[], languageDi
   ].join("\n")
   const user = [
     `Feature description:\n${featureInput}`,
-    `Characteristic tags: ${tags.join(", ")}`,
+    `Characteristic tags: ${tags.map((t) => t.tag).join(", ")}`,
     "",
     JSON_ONLY_INSTRUCTION,
   ].join("\n")
@@ -245,7 +261,7 @@ export function parseRiskResponse(raw: string): RiskGrade[] {
 
 export function buildTestCasePrompt(
   featureInput: string,
-  tags: string[],
+  tags: AbstractionTag[],
   candidates: CandidateCombo[],
   axes: TestAxis[],
   languageDirective: string,
@@ -265,7 +281,7 @@ export function buildTestCasePrompt(
   ].join("\n")
   const user = [
     `Feature description:\n${featureInput}`,
-    `Characteristic tags: ${tags.join(", ")}`,
+    `Characteristic tags: ${tags.map((t) => t.tag).join(", ")}`,
     "",
     "Candidates:",
     renderCandidateLines(candidates, axes),

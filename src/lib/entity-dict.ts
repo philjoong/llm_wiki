@@ -82,6 +82,8 @@ export function isSimilar(a: string, b: string): "exact" | "fuzzy" | "none" {
 export interface EntityCandidate {
   entry: EntityEntry
   match: "exact" | "fuzzy"
+  /** The specific name (canonicalName or one of the aliases) that matched. */
+  matchedName: string
 }
 
 /** Find entities whose canonicalName or any alias is similar to `name`. Exact matches sort first. */
@@ -90,12 +92,13 @@ export function findCandidates(name: string, dict: EntityDict): EntityCandidate[
   for (const entry of Object.values(dict)) {
     const names = [entry.canonicalName, ...entry.aliases]
     let best: "exact" | "fuzzy" | "none" = "none"
+    let matchedName = ""
     for (const n of names) {
       const verdict = isSimilar(name, n)
-      if (verdict === "exact") { best = "exact"; break }
-      if (verdict === "fuzzy") best = "fuzzy"
+      if (verdict === "exact") { best = "exact"; matchedName = n; break }
+      if (verdict === "fuzzy" && best === "none") { best = "fuzzy"; matchedName = n }
     }
-    if (best !== "none") candidates.push({ entry, match: best })
+    if (best !== "none") candidates.push({ entry, match: best, matchedName })
   }
   return candidates.sort((a, b) => (a.match === b.match ? 0 : a.match === "exact" ? -1 : 1))
 }

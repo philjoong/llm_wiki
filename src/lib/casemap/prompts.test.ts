@@ -65,9 +65,21 @@ describe("abstraction prompt", () => {
     expect(user).toContain("Output ONLY a JSON object")
   })
 
+  it("omits the known-entity-names section when no hints are given", () => {
+    const { system } = buildAbstractionPrompt("설명", LANG)
+    expect(system).not.toContain("Known entity names")
+  })
+
+  it("injects the known-entity-names section and reuse rule when hints are given", () => {
+    const { system } = buildAbstractionPrompt("설명", LANG, "고블린 전사, 오크 전사")
+    expect(system).toContain("## Known entity names")
+    expect(system).toContain("고블린 전사, 오크 전사")
+    expect(system).toContain("use the exact string from this list")
+  })
+
   it("parses, trims and dedupes tags", () => {
     const raw = '{"tags": [" 시전형 스킬 ", "쿨타임 존재", "시전형 스킬", ""]}'
-    expect(parseAbstractionResponse(raw)).toEqual(["시전형 스킬", "쿨타임 존재"])
+    expect(parseAbstractionResponse(raw)).toEqual([{ tag: "시전형 스킬" }, { tag: "쿨타임 존재" }])
   })
 
   it("throws on an empty tag list", () => {
@@ -77,7 +89,7 @@ describe("abstraction prompt", () => {
 
 describe("axis prompt", () => {
   it("seeds the default axes and tags", () => {
-    const { system, user } = buildAxisPrompt("설명", ["쿨타임 존재"], LANG)
+    const { system, user } = buildAxisPrompt("설명", [{ tag: "쿨타임 존재" }], LANG)
     expect(system).toContain("네트워크: 정상, 지연, 끊김")
     expect(user).toContain("쿨타임 존재")
   })
@@ -161,7 +173,7 @@ describe("test case prompt", () => {
   })
 
   it("prompt carries feature text, tags and candidates", () => {
-    const { user } = buildTestCasePrompt("파이어볼 설명", ["쿨타임 존재"], CANDS, AXES, LANG)
+    const { user } = buildTestCasePrompt("파이어볼 설명", [{ tag: "쿨타임 존재" }], CANDS, AXES, LANG)
     expect(user).toContain("파이어볼 설명")
     expect(user).toContain("쿨타임 존재")
     expect(user).toContain("id: c2")

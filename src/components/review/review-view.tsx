@@ -2,13 +2,9 @@ import { useCallback, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
-  AlertTriangle,
-  Copy,
-  FileQuestion,
   CheckCircle2,
   GitMerge,
   Lightbulb,
-  MessageSquare,
   X,
   Check,
   Trash2,
@@ -33,11 +29,7 @@ import { syncGraphToBackend } from "@/lib/graph-sync"
 import { loadEntityDict, saveEntityDict, addAlias, upsertEntity } from "@/lib/entity-dict"
 import { PendingView } from "@/components/review/pending-view"
 
-const typeConfig: Record<ReviewItem["type"], { icon: typeof AlertTriangle; label: string; color: string }> = {
-  contradiction: { icon: AlertTriangle, label: "Contradiction", color: "text-amber-500" },
-  duplicate: { icon: Copy, label: "Possible Duplicate", color: "text-blue-500" },
-  "missing-page": { icon: FileQuestion, label: "Missing Page", color: "text-purple-500" },
-  confirm: { icon: MessageSquare, label: "Needs Confirmation", color: "text-foreground" },
+const typeConfig: Record<ReviewItem["type"], { icon: typeof Lightbulb; label: string; color: string }> = {
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
   modification: { icon: GitMerge, label: "Modification", color: "text-orange-500" },
   schema: { icon: Database, label: "Schema Change", color: "text-indigo-500" },
@@ -499,6 +491,10 @@ function ReviewCard({
         <SchemaProposalView proposal={item.schemaProposal} />
       )}
 
+      {item.type === "entity_confirmation" && item.entityConfirmation && (
+        <EntityConfirmationView payload={item.entityConfirmation} />
+      )}
+
       {item.overflowEntries && item.overflowEntries.length > 0 && (
         <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-2">
           {item.overflowEntries.map((e) => (
@@ -609,6 +605,60 @@ function ModificationDiff({
       <div className="col-span-2 text-[10px] text-muted-foreground">
         Draft: <code>{proposal.incomingDraftPath}</code>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Evidence block for an entity_confirmation card: which existing entities
+ * matched the incoming name (and via which alias), each candidate's linked
+ * documents and graph nodes, plus a few of the held-back triples so the
+ * user can judge whether the names refer to the same entity.
+ */
+function EntityConfirmationView({
+  payload,
+}: {
+  payload: NonNullable<ReviewItem["entityConfirmation"]>
+}) {
+  const tripleExamples = payload.triples.slice(0, 3)
+  return (
+    <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-2">
+      {payload.candidates.map((c) => (
+        <div key={c.entry.id} className="space-y-0.5">
+          <div>
+            <span className="font-mono font-semibold">{c.entry.canonicalName}</span>
+            <span className="text-muted-foreground">
+              {" — "}
+              {c.match === "exact" ? "정확히 일치" : "이름 유사"}
+              {c.matchedName && c.matchedName !== c.entry.canonicalName
+                ? ` (alias "${c.matchedName}" 기준)`
+                : ""}
+            </span>
+          </div>
+          {c.entry.aliases.length > 0 && (
+            <div className="text-muted-foreground">
+              Aliases: <span className="font-mono">{c.entry.aliases.join(", ")}</span>
+            </div>
+          )}
+          <div className="text-muted-foreground">
+            연결 문서 {c.entry.pagePaths.length}개
+            {c.entry.pagePaths.length > 0 && `: ${c.entry.pagePaths.join(", ")}`} · 그래프 노드 {c.entry.graphNodes.length}개
+          </div>
+        </div>
+      ))}
+      {tripleExamples.length > 0 && (
+        <div className="space-y-0.5 border-t pt-1.5">
+          <div className="text-muted-foreground">
+            보류된 triple{payload.triples.length > tripleExamples.length ? ` (${payload.triples.length}개 중 ${tripleExamples.length}개)` : ""}:
+          </div>
+          {tripleExamples.map((t, i) => (
+            <div key={i} className="font-mono">
+              {t.subject} --{t.predicate}--&gt; {t.object}
+              <span className="text-muted-foreground"> ({t.graph})</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -737,8 +787,6 @@ function detectPageType(action: string, reviewType: string): string {
   if (lower.includes("concept") || lower.includes("概念")) return "concept"
   if (lower.includes("comparison") || lower.includes("compare") || lower.includes("比较")) return "comparison"
   if (lower.includes("synthesis") || lower.includes("综合")) return "synthesis"
-  if (reviewType === "missing-page") return "concept"
-  if (reviewType === "contradiction") return "query"
   if (reviewType === "suggestion") return "query"
   // Default: research/investigate/create → query
   return "query"

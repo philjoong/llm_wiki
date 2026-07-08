@@ -37,17 +37,6 @@ export interface ModificationProposal {
 }
 
 /**
- * Stage 5 schema proposals carry the data needed to render the
- * "AI wants to create a new Type" UI and resolve the proposal
- * into the graph policy.
- */
-export interface SchemaProposal {
-  type: "node_type" | "relation_type" | "attribute"
-  name: string
-  targetNode?: string // for attribute
-}
-
-/**
  * One entry per overflow failure from Stage 2 validation.
  * Carries enough info so the review card can offer "create new graph" as an
  * actionable resolution instead of just Dismiss.
@@ -83,7 +72,6 @@ export interface ReviewItem {
   type:
     | "suggestion"
     | "modification"
-    | "schema"
     | "entity_confirmation"
   /**
    * Stage 4 two-step decision tree. Only meaningful for `type:
@@ -95,8 +83,6 @@ export interface ReviewItem {
   stage?: "primary" | "rejection-handling"
   /** Modification-only payload — the diff data and the parked draft. */
   proposal?: ModificationProposal
-  /** Schema-only payload — the new type being proposed. */
-  schemaProposal?: SchemaProposal
   /** Overflow-only payload — one entry per overflowed graph. Only present on
    *  suggestion items that come from Stage 2 relation-type overflow. */
   overflowEntries?: OverflowEntry[]
@@ -149,7 +135,7 @@ export const useReviewStore = create<ReviewState>((set) => ({
   addItems: (items) =>
     set((state) => {
       // De-dupe against pending items with same type + normalized title —
-      // bulk ingest can re-surface the same suggestion/schema item from
+      // bulk ingest can re-surface the same suggestion item from
       // multiple files.
       // Merge affectedPages / sourcePath instead of duplicating.
       // Modification items skip the dedupe path: each proposal is tied to
@@ -160,13 +146,11 @@ export const useReviewStore = create<ReviewState>((set) => ({
       const keyFor = (t: string, title: string) => `${t}::${normalizeReviewTitle(title)}`
 
       // Build index of existing items for fast lookup.
-      // schema items: dedupe against ALL (resolved or not) so re-sync doesn't
-      // re-surface proposals the user already approved/rejected.
-      // Other non-modification types: dedupe against pending only.
+      // Non-modification types: dedupe against pending only.
       const pendingIndex = new Map<string, number>()
       result.forEach((it, idx) => {
         if (it.type === "modification" || it.type === "entity_confirmation") return
-        if (it.type === "schema" || !it.resolved) {
+        if (!it.resolved) {
           pendingIndex.set(keyFor(it.type, it.title), idx)
         }
       })

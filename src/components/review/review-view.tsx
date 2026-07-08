@@ -8,7 +8,6 @@ import {
   X,
   Check,
   Trash2,
-  Database,
   Users,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -22,7 +21,6 @@ import {
   pendingModification,
   counterexampleModification,
 } from "@/lib/modification-resolve"
-import { approveSchemaChange } from "@/lib/schema-resolve"
 import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
 import { runStage2ForApprovedDoc } from "@/lib/ingest"
 import { syncGraphToBackend } from "@/lib/graph-sync"
@@ -32,7 +30,6 @@ import { PendingView } from "@/components/review/pending-view"
 const typeConfig: Record<ReviewItem["type"], { icon: typeof Lightbulb; label: string; color: string }> = {
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
   modification: { icon: GitMerge, label: "Modification", color: "text-orange-500" },
-  schema: { icon: Database, label: "Schema Change", color: "text-indigo-500" },
   entity_confirmation: { icon: Users, label: "Entity Confirmation", color: "text-teal-500" },
 }
 
@@ -54,27 +51,6 @@ export function ReviewView() {
     // module (file moves + git commits) and refresh the file tree so
     // the sidebar reflects the new state of pending/_proposals/...
     const item = items.find((i) => i.id === id)
-
-    // Stage 5 — schema flow.
-    if (item?.type === "schema" && project) {
-      const proposal = item.schemaProposal
-      if (!proposal) {
-        resolveItem(id, action)
-        return
-      }
-      try {
-        if (action === "schema:approve") {
-          await approveSchemaChange(pp, projectName, proposal)
-          resolveItem(id, "Approved")
-        } else {
-          resolveItem(id, action)
-        }
-      } catch (err) {
-        console.error("[review] schema action failed:", err)
-        resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      return
-    }
 
     if (item?.type === "modification" && project) {
       const proposal = item.proposal
@@ -487,10 +463,6 @@ function ReviewCard({
         <ModificationDiff proposal={item.proposal} />
       )}
 
-      {item.type === "schema" && item.schemaProposal && (
-        <SchemaProposalView proposal={item.schemaProposal} />
-      )}
-
       {item.type === "entity_confirmation" && item.entityConfirmation && (
         <EntityConfirmationView payload={item.entityConfirmation} />
       )}
@@ -659,30 +631,6 @@ function EntityConfirmationView({
           ))}
         </div>
       )}
-    </div>
-  )
-}
-
-function SchemaProposalView({
-  proposal,
-}: {
-  proposal: NonNullable<ReviewItem["schemaProposal"]>
-}) {
-  return (
-    <div className="mb-3 rounded border bg-indigo-50/50 p-2 dark:bg-indigo-950/20">
-      <div className="mb-1 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-        Proposed {proposal.type === "node_type" ? "Node Label" : proposal.type === "relation_type" ? "Relationship Type" : "Attribute"}
-      </div>
-      <div className="flex items-center gap-2">
-        <code className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-mono text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300">
-          {proposal.name}
-        </code>
-        {proposal.targetNode && (
-          <span className="text-[10px] text-muted-foreground">
-            on node <code className="rounded bg-muted px-1">{proposal.targetNode}</code>
-          </span>
-        )}
-      </div>
     </div>
   )
 }

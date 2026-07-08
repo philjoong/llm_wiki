@@ -82,7 +82,6 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     }
     const next: GraphPolicy = {
       ...policy,
-      relationTypes: policy.relationTypes ?? [],
       managedGraphs: [...policy.managedGraphs, name],
       graphRelationTypes: { ...policy.graphRelationTypes, [name]: [] },
     }
@@ -130,7 +129,6 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
 
     const next: GraphPolicy = {
       ...policy,
-      relationTypes: policy.relationTypes,
       managedGraphs: policy.managedGraphs.map((g) => (g === oldName ? newName : g)),
       graphRelationTypes: newRelTypes,
     }
@@ -180,7 +178,6 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
 
     const next: GraphPolicy = {
       ...policy,
-      relationTypes: policy.relationTypes,
       managedGraphs: policy.managedGraphs.filter((g) => g !== graphName),
       graphRelationTypes: newRelTypes,
     }
@@ -228,7 +225,6 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     newTypes[index] = newValue
     const next: GraphPolicy = {
       ...policy,
-      relationTypes: policy.relationTypes,
       graphRelationTypes: { ...policy.graphRelationTypes, [graphName]: newTypes },
     }
     const saved = await saveGraphPolicy(projectPath, next)
@@ -262,7 +258,6 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     const newTypes = types.filter((_, i) => i !== index)
     const next: GraphPolicy = {
       ...policy,
-      relationTypes: policy.relationTypes,
       graphRelationTypes: { ...policy.graphRelationTypes, [graphName]: newTypes },
     }
     const saved = await saveGraphPolicy(projectPath, next)
@@ -286,7 +281,6 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
     }
     const next: GraphPolicy = {
       ...policy,
-      relationTypes: policy.relationTypes,
       graphRelationTypes: { ...policy.graphRelationTypes, [graphName]: [...types, newValue] },
     }
     const saved = await saveGraphPolicy(projectPath, next)

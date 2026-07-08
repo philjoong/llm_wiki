@@ -3,12 +3,6 @@
  * See docs/new-feature-dev-plan.md §2.
  */
 
-/** Step-2 characteristic tag, optionally linked to an entity-dict entry. */
-export interface AbstractionTag {
-  tag: string
-  entityId?: string
-}
-
 /** One test axis (e.g. 상태, 입력, 네트워크) with its candidate values. */
 export interface TestAxis {
   id: string
@@ -76,7 +70,7 @@ export interface TestPlan {
   id: string
   name: string
   featureInput: string
-  abstraction: AbstractionTag[]
+  abstraction: string[]
   axes: TestAxis[]
   /** High-risk (axisId, value) refs flagged by the axis-recommendation LLM step. */
   priorityValues: { axisId: string; value: string }[]

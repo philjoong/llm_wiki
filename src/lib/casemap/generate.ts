@@ -5,7 +5,6 @@ import { streamCodexCli } from "@/lib/codex-cli-transport"
 import type { ChatMessage } from "@/lib/llm-providers"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { buildLanguageDirective } from "@/lib/output-language"
-import { buildEntityHintsForPrompt, loadEntityDict } from "@/lib/entity-dict"
 import { generatePairwise } from "./pairwise"
 import {
   buildAbstractionPrompt,
@@ -20,7 +19,7 @@ import {
   parseTestCaseResponse,
   type AxisRecommendation,
 } from "./prompts"
-import type { AbstractionTag, CandidateCombo, TestAxis, TestCase } from "./types"
+import type { CandidateCombo, TestAxis, TestCase } from "./types"
 
 /** Cap on generated combinations (docs/new-feature-dev-plan.md §5). */
 export const COMBINATION_CAP = 200
@@ -105,15 +104,8 @@ export interface StepContext {
 }
 
 /** Step 2: feature abstraction → characteristic tags. */
-export async function runAbstraction(featureInput: string, ctx: StepContext): Promise<AbstractionTag[]> {
-  // Inject dict names so tag vocabulary matches the wiki's canonical names
-  // from the start (docs/casemap-entity-link-plan.md Phase A).
-  const entityHints = buildEntityHintsForPrompt(await loadEntityDict(ctx.projectPath))
-  const { system, user } = buildAbstractionPrompt(
-    featureInput,
-    buildLanguageDirective(featureInput),
-    entityHints || undefined,
-  )
+export async function runAbstraction(featureInput: string, ctx: StepContext): Promise<string[]> {
+  const { system, user } = buildAbstractionPrompt(featureInput, buildLanguageDirective(featureInput))
   const raw = await callModel(ctx.llmConfig, system, user, ctx.signal, ctx.projectPath)
   return parseAbstractionResponse(raw)
 }
@@ -121,7 +113,7 @@ export async function runAbstraction(featureInput: string, ctx: StepContext): Pr
 /** Step 3: recommend test axes + values (with high-risk value flags). */
 export async function runAxisRecommendation(
   featureInput: string,
-  tags: AbstractionTag[],
+  tags: string[],
   ctx: StepContext,
 ): Promise<AxisRecommendation> {
   const { system, user } = buildAxisPrompt(featureInput, tags, buildLanguageDirective(featureInput))
@@ -213,7 +205,7 @@ const RISK_ORDER = { high: 0, medium: 1, low: 2 } as const
  */
 export async function runCaseGeneration(
   featureInput: string,
-  tags: AbstractionTag[],
+  tags: string[],
   candidates: CandidateCombo[],
   axes: TestAxis[],
   ctx: StepContext,

@@ -62,7 +62,7 @@ describe("review-store addItems dedupe", () => {
   it("does NOT merge across different types", () => {
     useReviewStore.getState().addItems([
       makeInput({ type: "suggestion", title: "Attention" }),
-      makeInput({ type: "schema", title: "Attention" }),
+      makeInput({ type: "entity_confirmation", title: "Attention" }),
     ])
     expect(useReviewStore.getState().items).toHaveLength(2)
   })
@@ -138,8 +138,8 @@ describe("review-store addItems dedupe", () => {
       makeInput({ type: "suggestion", title: "Missing page: Foo" }),
       makeInput({ type: "suggestion", title: "缺失页面: Foo" }),
       makeInput({ type: "suggestion", title: "Foo" }),
-      makeInput({ type: "schema", title: "Foo" }),
-      makeInput({ type: "schema", title: "Duplicate page: Foo" }),
+      makeInput({ type: "suggestion", title: "Duplicate page: Bar" }),
+      makeInput({ type: "suggestion", title: "Bar" }),
     ])
     const pending = useReviewStore.getState().items.filter((i) => !i.resolved)
     const keys = pending.map((i) => `${i.type}::${i.title.toLowerCase().replace(/^(missing|duplicate).*?:\s*/i, "").trim()}`)

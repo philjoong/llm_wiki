@@ -18,7 +18,10 @@ export async function loadReviewItems(projectPath: string): Promise<ReviewItem[]
   const pp = normalizePath(projectPath)
   try {
     const content = await readFile(`${pp}/.llm-wiki/review.json`)
-    return JSON.parse(content) as ReviewItem[]
+    const items = JSON.parse(content) as ReviewItem[]
+    // Legacy files may contain `type: "schema"` items from the removed
+    // schema-proposal flow — drop them; nothing can render or resolve them.
+    return items.filter((it) => (it.type as string) !== "schema")
   } catch {
     return []
   }

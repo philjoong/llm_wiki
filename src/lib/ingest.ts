@@ -883,7 +883,7 @@ export async function autoIngestImpl(
             const overflowEntries: OverflowEntry[] = Array.from(overflowMap.entries()).map(([graph, { newTypes, paths }]) => ({
               graph,
               newTypes: Array.from(newTypes),
-              existingTypes: graphPolicy.graphRelationTypes[graph] ?? graphPolicy.relationTypes,
+              existingTypes: graphPolicy.graphRelationTypes[graph] ?? [],
               suggestedGraph: `${graph}_ext`,
               affectedPaths: paths,
             }))
@@ -1554,7 +1554,7 @@ export function applyStage2GraphPolicyUpdates(
 
     if (!nextPolicy.managedGraphs.includes(item.graph)) continue
 
-    const existingTypes = nextPolicy.graphRelationTypes[item.graph] ?? nextPolicy.relationTypes
+    const existingTypes = nextPolicy.graphRelationTypes[item.graph] ?? []
     const { merged, added, overflow } = mergeRelationTypes(existingTypes, usedTypes)
     if (added.length === 0 || overflow.length > 0) continue
 
@@ -1598,7 +1598,7 @@ export function validateStage2(triples: Stage2Triple[], policy: GraphPolicy): St
     }
 
     // Predicate type may extend this graph only while the graph stays within 4 types.
-    const existingTypes = policy.graphRelationTypes[item.graph] ?? policy.relationTypes
+    const existingTypes = policy.graphRelationTypes[item.graph] ?? []
     const { overflow } = mergeRelationTypes(existingTypes, usedTypes)
     if (overflow.length > 0) {
       const overflowTypes = [...new Set(overflow)]
@@ -1978,7 +1978,7 @@ async function runStage2Core(
     const overflowEntries: OverflowEntry[] = Array.from(overflowMap.entries()).map(([graph, { newTypes, paths }]) => ({
       graph,
       newTypes: Array.from(newTypes),
-      existingTypes: nextPolicy.graphRelationTypes[graph] ?? nextPolicy.relationTypes,
+      existingTypes: nextPolicy.graphRelationTypes[graph] ?? [],
       suggestedGraph: `${graph}_ext`,
       affectedPaths: paths,
     }))

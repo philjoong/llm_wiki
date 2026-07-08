@@ -21,7 +21,7 @@ describe("buildTestPlanMarkdown", () => {
   it("renders the doc's case format (목적/사전 조건/절차/기대 결과) with numbering", () => {
     const plan = createEmptyPlan("파이어볼")
     plan.featureInput = "파이어볼은 적 1명을 대상으로 시전하는 마법 스킬이다."
-    plan.abstraction = [{ tag: "시전형 스킬" }, { tag: "쿨타임 존재", entityId: "ent-1" }]
+    plan.abstraction = ["시전형 스킬", "쿨타임 존재"]
     plan.axes = [
       { id: "a1", name: "상태", values: ["전투 중"], enabled: true },
       { id: "a2", name: "네트워크", values: ["지연"], enabled: true },

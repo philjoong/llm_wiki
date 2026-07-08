@@ -48,11 +48,22 @@ describe("review persistence — round-trip", () => {
   it("save then load returns identical items", async () => {
     const items: ReviewItem[] = [
       makeReview({ id: "r-1", title: "Alpha" }),
-      makeReview({ id: "r-2", title: "Beta", type: "schema" }),
+      makeReview({ id: "r-2", title: "Beta", type: "entity_confirmation" }),
     ]
     await saveReviewItems(tmp.path, items)
     const loaded = await loadReviewItems(tmp.path)
     expect(loaded).toEqual(items)
+  })
+
+  it("drops legacy 'schema' items on load", async () => {
+    const legacy = [
+      makeReview({ id: "r-1", title: "Alpha" }),
+      { ...makeReview({ id: "r-2", title: "Old schema proposal" }), type: "schema" },
+    ]
+    await writeFileRaw(`${tmp.path}/.llm-wiki/review.json`, JSON.stringify(legacy))
+    const loaded = await loadReviewItems(tmp.path)
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0].id).toBe("r-1")
   })
 
   it("creates the .llm-wiki directory on first save", async () => {

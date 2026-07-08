@@ -2,15 +2,12 @@ import { createDirectory, fileExists, readFile, writeFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
 
 export interface GraphPolicy {
-  /** Global fallback relation types (used when a graph has no per-graph entry). Max 4. */
-  relationTypes: string[]
   managedGraphs: string[]
   /** Per-graph relation types. Key = graph name, value = allowed types (max 4 each). */
   graphRelationTypes: Record<string, string[]>
 }
 
 export const DEFAULT_POLICY: GraphPolicy = {
-  relationTypes: ["UPGRADES_TO", "WEAK_AGAINST", "DROPS_ITEM", "UNLOCKS"],
   managedGraphs: [],
   graphRelationTypes: {},
 }
@@ -51,14 +48,9 @@ export async function loadGraphPolicy(projectPath: string): Promise<GraphPolicy>
     if (!(await fileExists(path))) return DEFAULT_POLICY
     const raw = await readFile(path)
     const parsed = JSON.parse(raw) as Partial<GraphPolicy>
-    const relationTypes = sanitize(Array.isArray(parsed.relationTypes) ? parsed.relationTypes : [], 4)
-    const managedGraphs = sanitize(Array.isArray(parsed.managedGraphs) ? parsed.managedGraphs : [], 200)
-    const graphRelationTypes = sanitizeGraphRelationTypes(parsed.graphRelationTypes)
-
     return {
-      relationTypes: relationTypes.length > 0 ? relationTypes : DEFAULT_POLICY.relationTypes,
-      managedGraphs,
-      graphRelationTypes,
+      managedGraphs: sanitize(Array.isArray(parsed.managedGraphs) ? parsed.managedGraphs : [], 200),
+      graphRelationTypes: sanitizeGraphRelationTypes(parsed.graphRelationTypes),
     }
   } catch {
     return DEFAULT_POLICY
@@ -69,7 +61,6 @@ export async function saveGraphPolicy(projectPath: string, policy: GraphPolicy):
   const pp = normalizePath(projectPath)
   await createDirectory(`${pp}/.llm-wiki`)
   const normalized: GraphPolicy = {
-    relationTypes: sanitize(policy.relationTypes, 4),
     managedGraphs: sanitize(policy.managedGraphs, 200),
     graphRelationTypes: sanitizeGraphRelationTypes(policy.graphRelationTypes),
   }
@@ -103,26 +94,10 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
         parts.push(`  ${g}: ${types.join(", ")}`)
       }
     }
-  } else {
-    // No managed graphs — fall back to global relation types
-    if (policy.relationTypes.length > 0) {
-      parts.push(
-        "## Graph Relation Policy (project-defined)",
-        "Use these relation types when they fit the relationship.",
-        "If the target graph has fewer than 4 relation types, Stage 2 may propose a new relation type by returning an expanded `graph_relation_types` list.",
-        "If a graph already has 4 relation types and a new type is required, create a new graph instead of omitting the relationship.",
-        `Allowed relation types: ${policy.relationTypes.join(", ")}`,
-        "Use the selected relation type as the triple's `predicate`; do not encode relation types as wikilinks.",
-      )
-    }
   }
+  // No managed graphs (first ingest of a new project) — no relation policy
+  // block; Stage 2's base instructions (`new_graph` + `graph_relation_types`)
+  // handle proposing graphs and their types.
 
   return parts.join("\n")
-}
-
-/** Returns the allowed relation types for a specific graph (falls back to global). */
-export function getRelationTypesForGraph(policy: GraphPolicy, graphName: string): string[] {
-  const perGraph = policy.graphRelationTypes[graphName]
-  if (perGraph && perGraph.length > 0) return perGraph
-  return policy.relationTypes
 }

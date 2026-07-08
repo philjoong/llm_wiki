@@ -30,7 +30,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("../graph-policy", () => ({
   loadGraphPolicy: vi.fn().mockResolvedValue({
     managedGraphs: ["combat_graph"],
-    relationTypes: ["WEAK_AGAINST", "USES_SKILL"],
     graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL"] },
   }),
   saveGraphPolicy: vi.fn().mockResolvedValue(undefined),
@@ -143,12 +142,10 @@ beforeEach(() => {
   mockStream.mockReset()
   mockLoadGraphPolicy.mockReset().mockResolvedValue({
     managedGraphs: ["combat_graph"],
-    relationTypes: ["WEAK_AGAINST", "USES_SKILL"],
     graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL"] },
   })
   mockSaveGraphPolicy.mockReset().mockResolvedValue({
     managedGraphs: ["combat_graph"],
-    relationTypes: ["WEAK_AGAINST", "USES_SKILL"],
     graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL"] },
   })
   callCount = 0
@@ -257,7 +254,6 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
     mockLoadGraphPolicy.mockResolvedValueOnce({
       managedGraphs: ["combat_graph"],
-      relationTypes: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"],
       graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"] },
     })
 
@@ -296,7 +292,6 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
   it("기존 graph에 relation type slot이 남아 있으면 새 type을 추가하고 assignment를 통과시킴", async () => {
     mockLoadGraphPolicy.mockResolvedValueOnce({
       managedGraphs: ["combat_graph"],
-      relationTypes: ["WEAK_AGAINST", "USES_SKILL", "RESISTS"],
       graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL", "RESISTS"] },
     })
 
@@ -349,7 +344,6 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
     mockLoadGraphPolicy.mockResolvedValueOnce({
       managedGraphs: ["combat_graph"],
-      relationTypes: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"],
       graphRelationTypes: { combat_graph: ["WEAK_AGAINST", "USES_SKILL", "RESISTS", "COUNTERS"] },
     })
 

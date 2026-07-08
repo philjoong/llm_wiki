@@ -466,6 +466,7 @@ function App() {
       debug("project-open: rebuildPageGraphIndex failed", err)
     }
 
+
     // Load persisted chat history
     try {
       debug("project-open: before loadChatHistory")

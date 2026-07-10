@@ -544,6 +544,14 @@ function ModificationDiff({
 
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
+      {proposal.sectionHeading !== undefined && (
+        <div className="col-span-2 flex items-center gap-2 rounded border bg-muted/20 px-2 py-1 text-[10px]">
+          <span className="text-muted-foreground">변경 섹션:</span>
+          <code className="rounded bg-muted px-1">
+            {proposal.sectionHeading === null ? "(문서 도입부)" : `## ${proposal.sectionHeading}`}
+          </code>
+        </div>
+      )}
       {(existingGraph || incomingGraph) && (
         <div className="col-span-2 flex items-center gap-2 rounded border bg-muted/20 px-2 py-1 text-[10px]">
           <span className="text-muted-foreground">Target graph:</span>

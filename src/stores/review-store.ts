@@ -15,9 +15,15 @@ export interface ReviewOption {
  * proposal back into the wiki tree.
  *
  * - `targetPath` — the db/ page the user has to decide about
- * - `existingExcerpt` / `incomingExcerpt` — full bodies (frontmatter
- *   stripped is fine; the UI handles truncation). Stored eagerly so the
- *   card can render without extra disk reads.
+ * - `existingExcerpt` / `incomingExcerpt` — the conflicting content only.
+ *   When the conflict is section-scoped (see `sectionHeading`), these hold
+ *   just that `## heading` block's body, not the whole page — the parts of
+ *   the incoming page that didn't conflict are written immediately instead
+ *   of waiting on this proposal. Stored eagerly so the card can render
+ *   without extra disk reads.
+ * - `sectionHeading` — the `## heading` text of the conflicting section, or
+ *   `null` when the conflict is the page's leading (pre-first-heading)
+ *   content, or undefined for a legacy whole-page conflict.
  * - `incomingDraftPath` — relative path of the parked proposal file
  *   under `pending/_proposals/...`. Approve / Pending / Counterexample
  *   all start by reading or moving this file.
@@ -30,6 +36,7 @@ export interface ModificationProposal {
   incomingExcerpt: string
   incomingDraftPath: string
   sourceRefs: SourceRef[]
+  sectionHeading?: string | null
 }
 
 /**

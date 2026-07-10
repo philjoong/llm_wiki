@@ -884,14 +884,23 @@ export async function autoIngestImpl(
   // skips dedupe for `modification`) so two parallel conflicts can't
   // collapse into one and lose a parked draft.
   for (const proposal of allProposals) {
+    const sectionLabel = proposal.sectionHeading === undefined
+      ? null
+      : proposal.sectionHeading === null
+        ? "the page's leading content"
+        : `the \`## ${proposal.sectionHeading}\` section`
     allReviewItems.push({
       type: "modification",
       stage: "primary",
       title: `Modification proposal: ${proposal.targetPath}`,
-      description:
-        `Re-ingest of "${fileName}" produced different content for ` +
-        `${proposal.targetPath}. Approve to overwrite, Merge to hand-edit, ` +
-        `or Reject to send the proposal to discard / pending / counterexample.`,
+      description: sectionLabel
+        ? `Re-ingest of "${fileName}" produced different content for ` +
+          `${sectionLabel} of ${proposal.targetPath}. Approve to overwrite ` +
+          `that section, Merge to hand-edit, or Reject to send the proposal ` +
+          `to discard / pending / counterexample.`
+        : `Re-ingest of "${fileName}" produced different content for ` +
+          `${proposal.targetPath}. Approve to overwrite, Merge to hand-edit, ` +
+          `or Reject to send the proposal to discard / pending / counterexample.`,
       sourcePath: sp,
       affectedPages: [proposal.targetPath],
       options: [],
@@ -1067,6 +1076,18 @@ function stripFrontmatter(content: string): string {
 }
 
 /**
+ * Split a page into its `---\n...\n---\n` frontmatter block (including
+ * delimiters, or "" if absent) and everything after it. Inverse of
+ * concatenation: `frontmatter + body === content`.
+ */
+function splitFrontmatter(content: string): { frontmatter: string; body: string } {
+  if (!content.startsWith("---\n")) return { frontmatter: "", body: content }
+  const end = content.indexOf("\n---\n", 4)
+  if (end < 0) return { frontmatter: "", body: content }
+  return { frontmatter: content.slice(0, end + 5), body: content.slice(end + 5) }
+}
+
+/**
  * "Materially different" check between an incoming generated page and
  * what's already on disk. Compares post-frontmatter body trimmed of
  * trailing whitespace. Equal bodies are treated as a benign re-ingest
@@ -1075,6 +1096,151 @@ function stripFrontmatter(content: string): string {
  */
 function bodiesMatch(a: string, b: string): boolean {
   return stripFrontmatter(a).trim() === stripFrontmatter(b).trim()
+}
+
+/** One `## heading` block of a page body, or the leading text before the first heading. */
+export interface PageSection {
+  heading: string | null
+  body: string
+}
+
+/**
+ * Split a page body (frontmatter already stripped) into `## heading`
+ * blocks, so a page-level conflict can be narrowed down to the specific
+ * section that actually changed.
+ *
+ * Only `##` (level-2) headings are section boundaries — that matches how
+ * ingest emits db/ pages today (one `#` title, then `##` sections). Deeper
+ * headings (`###`+) stay inside their parent section's body. Leading text
+ * before the first `##` heading (typically the `# Title` line and any
+ * intro line) becomes one section with `heading: null`.
+ */
+export function splitIntoSections(body: string): PageSection[] {
+  const lines = body.split("\n")
+  const sections: PageSection[] = []
+  let currentHeading: string | null = null
+  let currentLines: string[] = []
+
+  const flush = () => {
+    if (currentHeading !== null || currentLines.some((l) => l.trim() !== "")) {
+      sections.push({ heading: currentHeading, body: currentLines.join("\n") })
+    }
+  }
+
+  for (const line of lines) {
+    const match = line.match(/^##\s+(.+?)\s*$/)
+    if (match) {
+      flush()
+      currentHeading = match[1]
+      currentLines = []
+    } else {
+      currentLines.push(line)
+    }
+  }
+  flush()
+
+  return sections
+}
+
+/** One section-level conflict found by `reconcileSections`. */
+export interface SectionConflict {
+  heading: string | null
+  existingBody: string
+  incomingBody: string
+}
+
+/**
+ * Reconcile an incoming page body against what's on disk, section by
+ * section. A `## heading` present only in `incoming` is a pure addition —
+ * folded into `merged` immediately. A heading present in both with
+ * matching body (trimmed) is a no-op. A heading present in both with
+ * differing bodies is a conflict: `merged` keeps the EXISTING body for
+ * that heading (unchanged until the user resolves the proposal), and the
+ * section is also returned in `conflicts` for the caller to turn into a
+ * modification proposal.
+ *
+ * Section order in `merged` follows the existing page, with new
+ * (non-conflicting) incoming sections appended at the end in the order
+ * they appeared in `incoming`.
+ */
+export function reconcileSections(
+  existingBody: string,
+  incomingBody: string,
+): { merged: string; conflicts: SectionConflict[] } {
+  const existingSections = splitIntoSections(existingBody)
+  const incomingSections = splitIntoSections(incomingBody)
+
+  const incomingByHeading = new Map<string | null, PageSection>()
+  for (const s of incomingSections) {
+    if (!incomingByHeading.has(s.heading)) incomingByHeading.set(s.heading, s)
+  }
+
+  const conflicts: SectionConflict[] = []
+  const mergedSections: PageSection[] = []
+  const matchedHeadings = new Set<string | null>()
+
+  for (const existing of existingSections) {
+    const incoming = incomingByHeading.get(existing.heading)
+    if (!incoming) {
+      // Heading only exists on disk — keep as-is.
+      mergedSections.push(existing)
+      continue
+    }
+    matchedHeadings.add(existing.heading)
+    if (existing.body.trim() === incoming.body.trim()) {
+      mergedSections.push(existing)
+    } else {
+      conflicts.push({
+        heading: existing.heading,
+        existingBody: existing.body,
+        incomingBody: incoming.body,
+      })
+      // Keep the existing section in `merged` — the conflict isn't
+      // resolved until the user approves/rejects the proposal.
+      mergedSections.push(existing)
+    }
+  }
+
+  // New sections: present in incoming, absent from existing — append.
+  for (const incoming of incomingSections) {
+    if (matchedHeadings.has(incoming.heading)) continue
+    matchedHeadings.add(incoming.heading)
+    mergedSections.push(incoming)
+  }
+
+  const merged = mergedSections
+    .map((s) => (s.heading === null ? s.body : `## ${s.heading}\n${s.body}`))
+    .join("\n")
+
+  return { merged, conflicts }
+}
+
+/**
+ * Replace one `## heading` section's body in a page body with
+ * `newSectionBody`, leaving every other section untouched. Used when
+ * approving a section-scoped modification proposal — the draft only
+ * carries the one section the user resolved, so the rest of the page on
+ * disk must be preserved verbatim.
+ *
+ * If `heading` isn't found (page changed shape since the proposal was
+ * created), the section is appended at the end rather than silently
+ * dropping the user's approved edit.
+ */
+export function replaceSection(
+  body: string,
+  heading: string | null,
+  newSectionBody: string,
+): string {
+  const sections = splitIntoSections(body)
+  const idx = sections.findIndex((s) => s.heading === heading)
+  if (idx === -1) {
+    sections.push({ heading, body: newSectionBody })
+  } else {
+    sections[idx] = { heading, body: newSectionBody }
+  }
+  return sections
+    .map((s) => (s.heading === null ? s.body : `## ${s.heading}\n${s.body}`))
+    .join("\n")
 }
 
 async function writeFileBlocks(
@@ -1162,37 +1328,55 @@ async function writeFileBlocks(
         const { mergeSourcesIntoContent, mergeSourceRefsIntoContent } = await import("./sources-merge")
         const existing = await tryReadFile(fullPath)
 
-        // Modification proposal — conflict detection (db/ pages only).
-        // If the target already exists with materially different body
-        // content, refuse to overwrite. Park the incoming draft under
-        // `pending/_proposals/<run>-<idx>-<slug>.md` and record a
-        // proposal for the caller to surface as a modification review.
-        // Same-body re-ingests fall through to the source-merge path
-        // below — those aren't conflicts, just additional sources for
-        // the same page.
+        // Modification proposal — conflict detection (db/ pages only),
+        // scoped to `## heading` sections rather than the whole page.
+        // A `## heading` present only in the incoming content is a pure
+        // addition and gets applied immediately below. A heading present
+        // on both sides with the same body (trimmed) is a benign
+        // re-ingest. Only headings present on both sides with DIFFERENT
+        // bodies become a modification proposal — one per conflicting
+        // section, each parked under `pending/_proposals/<run>-<idx>-<slug>.md`.
         if (isDbPage && existing && !bodiesMatch(content, existing)) {
-          const slug = relativePath
-            .replace(/^db\//, "")
-            .replace(/\.md$/, "")
-            .replace(/\//g, "_")
-          proposalIdx++
-          const draftRel = `pending/_proposals/${runStamp}-${proposalIdx}-${slug}.md`
-          const draftAbs = `${projectPath}/${draftRel}`
-          await writeFile(draftAbs, content)
+          const { frontmatter: incomingFrontmatter } = splitFrontmatter(content)
+          const { merged, conflicts } = reconcileSections(stripFrontmatter(existing), stripFrontmatter(content))
 
-          const incomingRefs = parseSourceRefs(content)
-          const sourceRefs = incomingRefs.length > 0
-            ? incomingRefs
-            : [{ file: sourceFile }]
+          if (conflicts.length > 0) {
+            const slug = relativePath
+              .replace(/^db\//, "")
+              .replace(/\.md$/, "")
+              .replace(/\//g, "_")
+            const incomingRefs = parseSourceRefs(content)
+            const sourceRefs = incomingRefs.length > 0
+              ? incomingRefs
+              : [{ file: sourceFile }]
 
-          proposals.push({
-            targetPath: relativePath,
-            existingExcerpt: existing,
-            incomingExcerpt: content,
-            incomingDraftPath: draftRel,
-            sourceRefs,
-          })
-          writtenPaths.push(draftRel)
+            for (const conflict of conflicts) {
+              proposalIdx++
+              const draftRel = `pending/_proposals/${runStamp}-${proposalIdx}-${slug}.md`
+              const draftAbs = `${projectPath}/${draftRel}`
+              await writeFile(draftAbs, conflict.incomingBody)
+
+              proposals.push({
+                targetPath: relativePath,
+                existingExcerpt: conflict.existingBody,
+                incomingExcerpt: conflict.incomingBody,
+                incomingDraftPath: draftRel,
+                sourceRefs,
+                sectionHeading: conflict.heading,
+              })
+              writtenPaths.push(draftRel)
+            }
+          }
+
+          // Sections that didn't conflict (new headings, or matching
+          // bodies) are applied right away — same-transaction as the
+          // proposal park above, so a mixed incoming block never loses
+          // its non-conflicting parts while the conflicting section
+          // awaits review.
+          const mergedContent = incomingFrontmatter + merged
+          const toWrite = mergeSourceRefsIntoContent(mergedContent, existing)
+          await writeFile(fullPath, toWrite)
+          writtenPaths.push(relativePath)
           continue
         }
 

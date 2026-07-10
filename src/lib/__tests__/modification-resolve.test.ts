@@ -109,6 +109,32 @@ describe("approveModification", () => {
     )
     expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
   })
+
+  it("splices only the target section into the existing page when sectionHeading is set", async () => {
+    const proposal = makeProposal({
+      sectionHeading: "stats",
+      existingExcerpt: "\n- 레벨 10",
+      incomingExcerpt: "\n- 레벨 20",
+    })
+    const existingPage = "## stats\n\n- 레벨 10\n\n## drops\n\n- 골드 500"
+    mockReadFile
+      .mockResolvedValueOnce(proposal.incomingExcerpt) // draft (section body only)
+      .mockResolvedValueOnce(existingPage) // full existing page
+    mockFileExists.mockResolvedValue(true)
+
+    await approveModification("/proj", proposal)
+
+    expect(mockWriteFile).toHaveBeenCalledTimes(1)
+    const [writePath, writeContent] = mockWriteFile.mock.calls[0]
+    expect(writePath).toBe(`/proj/${proposal.targetPath}`)
+    expect(writeContent).toContain("레벨 20")
+    expect(writeContent).not.toContain("레벨 10")
+    // Untouched section survives verbatim.
+    expect(writeContent).toContain("## drops")
+    expect(writeContent).toContain("골드 500")
+
+    expect(mockDeleteFile).toHaveBeenCalledWith(`/proj/${proposal.incomingDraftPath}`)
+  })
 })
 
 describe("discardModification", () => {

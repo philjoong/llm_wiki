@@ -18,7 +18,6 @@ src-tauri/gen/
 .env.*.local
 
 # Internal docs (not shipped)
-docs/
 
 # Benchmark and test data (local only)
 tests/

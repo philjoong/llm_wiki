@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
-import type { Stage2Triple } from "./ingest"
+import type { GraphAssignmentTriple } from "./ingest"
 import { getGraphBackend } from "@/lib/graph-backend"
 import { upsertPageGraphIndex } from "@/lib/page-graph-index"
 import {
@@ -17,12 +17,12 @@ function debug(msg: string) {
 }
 
 /**
- * Synchronize Stage 2 triples to the configured graph backend.
+ * Synchronize graph assignment triples to the configured graph backend.
  */
 export async function syncGraphToBackend(
   projectPath: string,
   projectName: string,
-  triples: Stage2Triple[],
+  triples: GraphAssignmentTriple[],
   onProgress?: (message: string) => void,
 ): Promise<string> {
   if (triples.length === 0) {
@@ -30,7 +30,7 @@ export async function syncGraphToBackend(
     return "0 triples (nothing to sync)"
   }
 
-  const graphToTriples = new Map<string, Stage2Triple[]>()
+  const graphToTriples = new Map<string, GraphAssignmentTriple[]>()
   for (const triple of triples) {
     if (!triple.graph || !triple.subject || !triple.predicate || !triple.object) continue
     const list = graphToTriples.get(triple.graph) ?? []
@@ -80,8 +80,8 @@ export async function syncGraphToBackend(
 async function syncEntityDict(
   projectPath: string,
   projectName: string,
-  triples: Stage2Triple[],
-  graphToTriples: Map<string, Stage2Triple[]>,
+  triples: GraphAssignmentTriple[],
+  graphToTriples: Map<string, GraphAssignmentTriple[]>,
 ): Promise<void> {
   const backend = await getGraphBackend(projectPath)
   let dict = await loadEntityDict(projectPath)

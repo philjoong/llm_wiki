@@ -13,6 +13,10 @@ import {
 import { generateScenarios } from "@/lib/persona/generate"
 import { exportScenario } from "@/lib/persona/export"
 import { createPersona, type Persona, type PlayScenario } from "@/lib/persona/types"
+import { ChatPanel } from "@/components/chat/chat-panel"
+import { createChatStore } from "@/stores/chat-store"
+
+const usePersonaAskStore = createChatStore()
 
 const inputCls =
   "rounded border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
@@ -20,9 +24,10 @@ const inputCls =
 export function PersonaView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
+  const llmConfig = useWikiStore((s) => s.llmConfig)
   const projectPath = project ? normalizePath(project.path) : ""
 
-  const [tab, setTab] = useState<"manage" | "scenarios">("manage")
+  const [tab, setTab] = useState<"manage" | "scenarios" | "ask">("manage")
   const [personas, setPersonas] = useState<Persona[]>([])
   const [scenarios, setScenarios] = useState<PlayScenario[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -58,7 +63,7 @@ export function PersonaView() {
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-1 border-b px-4 py-2">
         <h2 className="mr-3 text-sm font-semibold">{t("persona.title")}</h2>
-        {(["manage", "scenarios"] as const).map((key) => (
+        {(["manage", "scenarios", "ask"] as const).map((key) => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -72,13 +77,15 @@ export function PersonaView() {
       </div>
       {tab === "manage" ? (
         <ManageTab personas={personas} onChange={(next) => void persistPersonas(next)} />
-      ) : (
+      ) : tab === "scenarios" ? (
         <ScenariosTab
           personas={personas}
           scenarios={scenarios}
           projectPath={projectPath}
           onChange={(next) => void persistScenarios(next)}
         />
+      ) : (
+        <ChatPanel useStore={usePersonaAskStore} graphPrefixFilter="persona_" />
       )}
     </div>
   )
@@ -254,6 +261,7 @@ function ScenariosTab({ personas, scenarios, projectPath, onChange }: {
 }) {
   const { t } = useTranslation()
   const llmConfig = useWikiStore((s) => s.llmConfig)
+  const projectName = useWikiStore((s) => s.project?.name || "default")
   const [personaId, setPersonaId] = useState(personas[0]?.id ?? "")
   const [featureInput, setFeatureInput] = useState("")
   const [count, setCount] = useState(3)
@@ -268,7 +276,7 @@ function ScenariosTab({ personas, scenarios, projectPath, onChange }: {
     setBusy(true)
     setError(null)
     try {
-      const generated = await generateScenarios(selected, featureInput, count, llmConfig, projectPath)
+      const generated = await generateScenarios(selected, featureInput, count, llmConfig, projectPath, projectName)
       onChange([...generated, ...scenarios])
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -285,7 +293,7 @@ function ScenariosTab({ personas, scenarios, projectPath, onChange }: {
 
   async function handleExport(s: PlayScenario) {
     try {
-      const rel = await exportScenario(projectPath, s, personaById.get(s.personaId))
+      const rel = await exportScenario(projectPath, project?.name || "default", s, personaById.get(s.personaId), llmConfig)
       window.alert(t("persona.exportDone", { path: rel }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

@@ -1,5 +1,5 @@
 /**
- * Stage 5 — actions for pending-view.
+ * Actions for pending-view.
  *
  * `pending/<slug>.md` is where modifications go when the user picks the
  * "Pending" branch on a modification card. The pending-view exposes
@@ -134,7 +134,7 @@ function walkDb(
 /**
  * Discard a pending entry: append a rejection-log line, delete the
  * file, commit. Mirrors `discardModification` so the same dismissal
- * context (Stage 5 prompt injection) picks it up.
+ * context (decomposition prompt injection) picks it up.
  */
 export async function discardPending(
   projectPath: string,
@@ -187,7 +187,7 @@ export async function promotePending(
 
 /**
  * Push a pending entry back into the modification review queue. Moves
- * the file to `pending/_proposals/<id>.md` so the existing Stage 4
+ * the file to `pending/_proposals/<id>.md` so the existing modification
  * resolver code paths (which expect drafts under that prefix) work
  * unchanged, then queues a fresh `modification` review item.
  */

@@ -66,9 +66,8 @@ export interface LintScenario {
 
 /**
  * Ingest scenarios exercise autoIngest end-to-end: a source document plus
- * existing project state, through Stage 1 (decomposition) and — only for
- * sections without a page_path — a legacy Stage 2 (graph assignment) call,
- * to the files written on disk and the review items injected into the store.
+ * existing project state, through decomposition and graph assignment, to
+ * the files written on disk and the review items injected into the store.
  */
 export interface IngestScenario {
   name: string
@@ -81,10 +80,8 @@ export interface IngestScenario {
     path: string
     content: string
   }
-  /** Raw LLM response for stage 1 (decomposition) — SECTION delimiter format. */
+  /** Raw LLM response for decomposition — SECTION delimiter format. Every section must carry a page_path. */
   analysisResponse: string
-  /** Raw LLM response for legacy stage 2 (only consumed for sections with no page_path). Leave "" when Stage 1 assigns a page_path to every section. */
-  generationResponse: string
   expected: {
     /** File paths (relative to project root) that must be written. */
     writtenPaths: string[]

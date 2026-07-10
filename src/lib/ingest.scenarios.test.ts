@@ -2,11 +2,10 @@
  * Scenario-driven tests for autoIngest.
  *
  * Each scenario materializes an initial project, a source document, and a
- * canned Stage 1 (decomposition) response in the SECTION delimiter format.
- * Sections that carry a page_path go straight to Stage 3 (file write) with
- * no further LLM call; a canned Stage 2 (legacy, no-path) response is only
- * consumed when a scenario's sections omit page_path. The runner mocks
- * streamChat to emit the canned responses sequentially.
+ * canned decomposition response in the SECTION delimiter format. Every
+ * section carries a page_path, so ingest goes straight to file write with
+ * no further LLM call for content. The runner mocks streamChat to emit the
+ * canned response.
  *
  * After ingest runs, the runner asserts:
  *   - expected files exist on disk with expected substrings
@@ -22,9 +21,9 @@ import type { IngestScenario } from "@/test-helpers/scenarios/types"
 
 vi.mock("@/commands/fs", () => realFs)
 
-// Stage 3 ingest now drives a git commit at the end of every run. The
-// real gitCommit goes through @tauri-apps/api/core::invoke, which hangs
-// in a node test environment with no Tauri host. Stub it.
+// Ingest now drives a git commit at the end of every run. The real
+// gitCommit goes through @tauri-apps/api/core::invoke, which hangs in a
+// node test environment with no Tauri host. Stub it.
 vi.mock("@/commands/git", () => ({
   gitInit: vi.fn(async () => undefined),
   gitCommit: vi.fn(async () => ({ committed: true, commitHash: "test1234" })),
@@ -32,9 +31,8 @@ vi.mock("@/commands/git", () => ({
   gitLog: vi.fn(async () => []),
 }))
 
-// Sequenced streamChat: stage-1 returns analysisResponse, stage-2 returns
-// generationResponse. Any further calls return empty (shouldn't happen in a
-// typical autoIngest run).
+// Sequenced streamChat: returns analysisResponse (decomposition). Any
+// further calls return empty (shouldn't happen in a typical autoIngest run).
 let pendingResponses: string[] = []
 vi.mock("./llm-client", () => ({
   streamChat: vi.fn(async (_cfg, _msgs, cb) => {
@@ -112,16 +110,12 @@ async function setup(scenario: IngestScenario): Promise<Ctx> {
     maxContextSize: 128000,
   })
 
-  // Queue up the two sequenced LLM responses
+  // Queue up the decomposition response
   const analysis = await fs.readFile(
     path.join(FIXTURES_ROOT, scenario.name, "llm-analysis.txt"),
     "utf-8",
   )
-  const generation = await fs.readFile(
-    path.join(FIXTURES_ROOT, scenario.name, "llm-generation.txt"),
-    "utf-8",
-  )
-  pendingResponses = [analysis, generation]
+  pendingResponses = [analysis]
 
   return { tmp }
 }

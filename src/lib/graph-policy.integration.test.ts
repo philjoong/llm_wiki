@@ -108,4 +108,28 @@ describe("buildGraphPolicyPrompt — no global seed", () => {
     expect(prompt).toContain("combat_graph: WEAK_AGAINST, USES_SKILL")
     expect(prompt).not.toContain("Allowed relation types")
   })
+
+  it("includes the purpose-prefix naming guide for new graphs", () => {
+    const prompt = buildGraphPolicyPrompt({
+      managedGraphs: ["combat_graph"],
+      graphRelationTypes: {},
+    })
+    expect(prompt).toContain("{purpose}_{domain-or-action}")
+  })
+
+  it("surfaces existing purpose prefixes so the LLM reuses them", () => {
+    const prompt = buildGraphPolicyPrompt({
+      managedGraphs: ["casemap_use_item", "casemap_move_server", "combat_graph"],
+      graphRelationTypes: {},
+    })
+    expect(prompt).toContain("Existing purpose prefixes already in use: casemap, combat")
+  })
+
+  it("omits the prefix-reuse line when no managed graph has a prefix yet", () => {
+    const prompt = buildGraphPolicyPrompt({
+      managedGraphs: ["wiki"],
+      graphRelationTypes: {},
+    })
+    expect(prompt).not.toContain("Existing purpose prefixes already in use")
+  })
 })

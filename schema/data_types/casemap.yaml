@@ -1,0 +1,6 @@
+name: "Casemap Test Plan"
+description: "A finalized QA test plan produced by the Casemap wizard: the feature under test, its abstraction tags, and the confirmed test cases (combination, purpose, preconditions, steps, expected results, risk)."
+fields:
+  기능 정보: "The feature description this test plan was built for, verbatim from the wizard's feature input step."
+  특성: "The abstraction tags assigned to the feature (e.g. 상태 변경, 네트워크 의존), comma-separated."
+  테스트케이스: "The confirmed, non-excluded test cases. Each case includes its axis/value combination, test purpose, preconditions, test steps, expected results, and risk level (High/Medium/Low)."

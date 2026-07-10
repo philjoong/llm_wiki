@@ -63,7 +63,6 @@ export function DataTypesSection() {
       name: "New Data Type",
       description: "",
       fields: { title: "Document title", summary: "Short summary" },
-      _source: "project",
       _filePath: "",
     }, true)
   }
@@ -77,9 +76,7 @@ export function DataTypesSection() {
       const doc = { name, description, fields }
       const yamlText = yaml.dump(doc)
 
-      const savePath = editing._source === "user"
-        ? `${projectPath}/.llm-wiki/data-types/${id}.yaml`
-        : `${projectPath}/data_types/${id}.yaml`
+      const savePath = `${projectPath}/data_types/${id}.yaml`
 
       const dir = savePath.substring(0, savePath.lastIndexOf("/"))
       if (!(await fileExists(dir))) await createDirectory(dir)
@@ -110,7 +107,7 @@ export function DataTypesSection() {
         <div>
           <h3 className="text-lg font-medium">{t("settings.dataTypes.title", "Data Types")}</h3>
           <p className="text-sm text-muted-foreground">
-            {t("settings.dataTypes.description", "Define schemas for structured extraction during ingest. When selected, Stage 1 fills each field instead of free-form decomposition.")}
+            {t("settings.dataTypes.description", "Define schemas for structured extraction during ingest. When selected, this fills each field instead of running free-form decomposition.")}
           </p>
         </div>
         <Button onClick={handleNew} size="sm" variant="outline" className="gap-2">
@@ -222,9 +219,6 @@ export function DataTypesSection() {
                   <span className="font-medium">{dt.name}</span>
                   <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase font-mono tracking-tighter">
                     {dt.id}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground/60 bg-muted/50 px-1.5 py-0.5 rounded font-mono tracking-tighter">
-                    {dt._source}
                   </span>
                 </div>
                 {dt.description && (

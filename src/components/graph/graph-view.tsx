@@ -16,11 +16,15 @@ import { graphSnapshotToCanvas } from "@/lib/graph-backend/graph-result-mappers"
 import { cleanupOrphanGraphs } from "@/lib/graph-sync"
 import { loadGraphPolicy, type GraphPolicy } from "@/lib/graph-policy"
 import { removePageFromIndex } from "@/lib/page-graph-index"
-import { loadEntityDict, saveEntityDict, findEntityByGraphNode, renameEntity, unlinkGraphNode } from "@/lib/entity-dict"
+import { loadEntityDict, saveEntityDict, findEntityByGraphNode, renameEntity, unlinkGraphNode, resolveEntitySeeds, type EntityDict } from "@/lib/entity-dict"
+import { filterSnapshotByHops, mergeSnapshots } from "@/lib/graph-hop"
+import type { GraphSnapshot } from "@/lib/graph-backend"
 import { cn } from "@/lib/utils"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { GraphsTab } from "@/components/layout/graphs-tab"
 import { EntityView } from "@/components/entity/entity-view"
+
+type HopValue = 1 | 2 | 3 | typeof Infinity
 
 type TabId = "knowledge" | "files" | "graphs" | "entity"
 
@@ -71,6 +75,13 @@ export function GraphView() {
   const [selectedElement, setSelectedElement] = useState<any>(null)
   const [graphPolicy, setGraphPolicy] = useState<GraphPolicy | null>(null)
   const lastLoadedVersion = useRef(-1)
+
+  // Entity-centric merged view (Phase G)
+  const [entityDict, setEntityDict] = useState<EntityDict>({})
+  const [selectedEntityId, setSelectedEntityId] = useState<string>("")
+  const [maxHops, setMaxHops] = useState<HopValue>(Infinity)
+  const [rawSnapshots, setRawSnapshots] = useState<{ graphName: string; snapshot: GraphSnapshot }[]>([])
+  const [entityLoading, setEntityLoading] = useState(false)
 
   // Live graphs from the graph backend (only graphs that actually have nodes)
   const [liveGraphs, setLiveGraphs] = useState<string[]>(() =>
@@ -128,11 +139,86 @@ export function GraphView() {
 
   // Reload when selectedGraph changes (Knowledge tab)
   useEffect(() => {
-    if (activeTab === "knowledge") {
+    if (activeTab === "knowledge" && !selectedEntityId) {
       lastLoadedVersion.current = -1
       loadGraph(selectedGraph)
     }
   }, [selectedGraph]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load entity dictionary for the entity dropdown (Phase G)
+  useEffect(() => {
+    if (!project) return
+    loadEntityDict(project.path).then(setEntityDict).catch(() => setEntityDict({}))
+  }, [project, dataVersion])
+
+  const entityOptions = useMemo(() => {
+    return Object.values(entityDict)
+      .filter((e) => e.graphNodes.length > 0)
+      .sort((a, b) => a.canonicalName.localeCompare(b.canonicalName))
+  }, [entityDict])
+
+  // Fetch every graph the selected entity appears in (Phase G — entity-centric merged view)
+  const loadEntitySnapshots = useCallback(async (entityId: string) => {
+    if (!project) return
+    const entry = entityDict[entityId]
+    if (!entry) return
+    setEntityLoading(true)
+    setError(null)
+    try {
+      const backend = await getGraphBackend(project.path)
+      const graphNames = Array.from(new Set(entry.graphNodes.map((r) => r.graphName)))
+      const parts = await Promise.all(
+        graphNames.map(async (graphName) => ({
+          graphName,
+          snapshot: await backend.queryGraph(project.name, graphName, { type: "all" }),
+        }))
+      )
+      setRawSnapshots(parts)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load entity graphs")
+      setRawSnapshots([])
+    } finally {
+      setEntityLoading(false)
+    }
+  }, [project, entityDict])
+
+  useEffect(() => {
+    if (activeTab === "knowledge" && selectedEntityId) {
+      void loadEntitySnapshots(selectedEntityId)
+    }
+  }, [activeTab, selectedEntityId, loadEntitySnapshots])
+
+  // hop filter -> merge -> canvas conversion, derived without re-querying (Phase G)
+  const entityCanvasData = useMemo(() => {
+    if (!selectedEntityId || rawSnapshots.length === 0) return null
+    const entry = entityDict[selectedEntityId]
+    if (!entry) return null
+    const filteredParts = rawSnapshots.map(({ graphName, snapshot }) => ({
+      graphName,
+      snapshot: filterSnapshotByHops(snapshot, resolveEntitySeeds(entry, graphName, snapshot), maxHops),
+    }))
+    const merged = mergeSnapshots(filteredParts)
+    const { data: colored, relationColorMap: colorMap } = assignColors(graphSnapshotToCanvas(merged))
+    return { colored, colorMap }
+  }, [selectedEntityId, rawSnapshots, entityDict, maxHops])
+
+  useEffect(() => {
+    if (entityCanvasData) {
+      setGraphData(entityCanvasData.colored)
+      setRelationColorMap(entityCanvasData.colorMap)
+      setSelectedRelationType("all")
+    }
+  }, [entityCanvasData])
+
+  const handleEntitySelect = useCallback((entityId: string) => {
+    setSelectedElement(null)
+    setSelectedEntityId(entityId)
+    if (!entityId) {
+      setRawSnapshots([])
+      lastLoadedVersion.current = -1
+      void loadGraph(selectedGraph)
+    }
+  }, [selectedGraph, loadGraph])
 
   const handleNodeClick = useCallback(async (node: any) => {
     setSelectedElement(node)
@@ -374,14 +460,41 @@ export function GraphView() {
           {/* Graph selector + stats */}
           <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
             <select
-              value={selectedGraph}
+              value={selectedEntityId ? "" : selectedGraph}
               onChange={(e) => setSelectedGraph(e.target.value)}
+              disabled={Boolean(selectedEntityId)}
+              className="h-7 rounded border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+            >
+              {selectedEntityId ? (
+                <option value="">전체 그래프</option>
+              ) : (
+                allGraphs.map((g) => (
+                  <option key={g} value={g}>{g}</option>
+                ))
+              )}
+            </select>
+            <select
+              value={selectedEntityId}
+              onChange={(e) => handleEntitySelect(e.target.value)}
               className="h-7 rounded border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              {allGraphs.map((g) => (
-                <option key={g} value={g}>{g}</option>
+              <option value="">엔티티: (없음)</option>
+              {entityOptions.map((e) => (
+                <option key={e.id} value={e.id}>{e.canonicalName}</option>
               ))}
             </select>
+            {selectedEntityId && (
+              <select
+                value={maxHops === Infinity ? "all" : String(maxHops)}
+                onChange={(e) => setMaxHops(e.target.value === "all" ? Infinity : (Number(e.target.value) as HopValue))}
+                className="h-7 rounded border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="1">hop: 1</option>
+                <option value="2">hop: 2</option>
+                <option value="3">hop: 3</option>
+                <option value="all">hop: 전체</option>
+              </select>
+            )}
             <span className="text-xs text-muted-foreground">
               {graphData.nodes.length} nodes - {graphData.links.length} links
             </span>
@@ -389,7 +502,7 @@ export function GraphView() {
 
           {/* Canvas */}
           <div className="relative flex-1 min-h-0 overflow-hidden bg-slate-50 dark:bg-slate-950">
-            {loading ? (
+            {loading || entityLoading ? (
               <div className="flex h-full items-center justify-center gap-3 text-muted-foreground">
                 <RefreshCw className="h-6 w-6 animate-spin opacity-50" />
                 <span className="text-sm">Loading...</span>
@@ -397,7 +510,7 @@ export function GraphView() {
             ) : error ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
                 <p className="text-sm text-destructive">{error}</p>
-                <Button variant="outline" size="sm" onClick={() => loadGraph()}>Retry</Button>
+                <Button variant="outline" size="sm" onClick={() => (selectedEntityId ? loadEntitySnapshots(selectedEntityId) : loadGraph())}>Retry</Button>
               </div>
             ) : (
               <ErrorBoundary>
@@ -408,9 +521,9 @@ export function GraphView() {
               element={selectedElement}
               onClose={() => setSelectedElement(null)}
               project={project}
-              graphName={selectedGraph}
+              graphName={(selectedElement?.data?.graphName as string | undefined) ?? selectedGraph}
               graphPolicy={graphPolicy}
-              onGraphChanged={() => { void loadGraph(selectedGraph) }}
+              onGraphChanged={() => { selectedEntityId ? void loadEntitySnapshots(selectedEntityId) : void loadGraph(selectedGraph) }}
             />
             {relationColorMap.size > 1 && (
               <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 rounded-md border bg-background/90 p-2 text-xs backdrop-blur-sm">
@@ -623,12 +736,13 @@ function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, o
     setSaving(true)
     setError(null)
     try {
+      const backendId = String(element.data?.rawId ?? element.data?.id ?? element.id)
       const pagePath = element.data?.page_path as string | undefined
       const backend = await getGraphBackend(project.path)
       if (isNode) {
-        await backend.deleteNode(project.name, graphName, String(element.id))
+        await backend.deleteNode(project.name, graphName, backendId)
       } else {
-        await backend.deleteEdge(project.name, graphName, String(element.id))
+        await backend.deleteEdge(project.name, graphName, backendId)
       }
       // Disconnect from page-graph-index if this edge had a page_path
       if (pagePath) {
@@ -640,7 +754,7 @@ function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, o
       if (isNode) {
         try {
           const dict = await loadEntityDict(project.path)
-          await saveEntityDict(project.path, unlinkGraphNode(graphName, String(element.id), dict))
+          await saveEntityDict(project.path, unlinkGraphNode(graphName, backendId, dict))
         } catch { /* non-fatal */ }
       }
       onClose()
@@ -657,19 +771,20 @@ function SelectionOverlay({ element, onClose, project, graphName, graphPolicy, o
     setSaving(true)
     setError(null)
     try {
+      const backendId = String(element.data?.rawId ?? element.data?.id ?? element.id)
       const pagePath = element.data?.page_path as string | undefined
       const backend = await getGraphBackend(project.path)
       if (isNode) {
-        await backend.updateNodeName(project.name, graphName, String(element.id), nodeName.trim())
+        await backend.updateNodeName(project.name, graphName, backendId, nodeName.trim())
         try {
           const dict = await loadEntityDict(project.path)
-          const entry = findEntityByGraphNode(graphName, String(element.id), dict)
+          const entry = findEntityByGraphNode(graphName, backendId, dict)
           if (entry) {
             await saveEntityDict(project.path, renameEntity(entry.id, nodeName.trim(), dict))
           }
         } catch { /* non-fatal */ }
       } else {
-        await backend.updateEdge(project.name, graphName, String(element.id), edgeRelType)
+        await backend.updateEdge(project.name, graphName, backendId, edgeRelType)
       }
       // Manual edit severs the document link — remove from page-graph-index
       if (pagePath) {

@@ -66,7 +66,6 @@ export function QuestionTypesSection() {
       description: "",
       fields: { answer: "Description" },
       promptTemplate: "",
-      _source: "project",
       _filePath: "",
     }, true)
   }
@@ -80,9 +79,7 @@ export function QuestionTypesSection() {
       if (promptTemplate.trim()) doc.prompt_template = promptTemplate
       const yamlText = yaml.dump(doc)
 
-      const savePath = editing._source === "user"
-        ? `${projectPath}/.llm-wiki/question-types/${id}.yaml`
-        : `${projectPath}/question_types/${id}.yaml`
+      const savePath = `${projectPath}/question_types/${id}.yaml`
 
       const dir = savePath.substring(0, savePath.lastIndexOf("/"))
       if (!(await fileExists(dir))) await createDirectory(dir)
@@ -106,8 +103,6 @@ export function QuestionTypesSection() {
   const removeFieldRow = (i: number) => setFieldRows((r) => r.filter((_, idx) => idx !== i))
   const updateFieldRow = (i: number, patch: Partial<FieldRow>) =>
     setFieldRows((r) => r.map((row, idx) => idx === i ? { ...row, ...patch } : row))
-
-  const sourceLabel = (qt: QuestionType) => qt._source === "project" ? "project" : "user"
 
   return (
     <div className="space-y-6">
@@ -239,9 +234,6 @@ export function QuestionTypesSection() {
                   <span className="font-medium">{qt.name}</span>
                   <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase font-mono tracking-tighter">
                     {qt.id}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground/60 bg-muted/50 px-1.5 py-0.5 rounded font-mono tracking-tighter">
-                    {sourceLabel(qt)}
                   </span>
                 </div>
                 <p className="truncate text-xs text-muted-foreground mt-0.5">

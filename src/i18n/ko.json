@@ -81,6 +81,10 @@
     "noProject": "열린 프로젝트가 없습니다.",
     "loading": "로딩 중...",
     "title": "경우의 수 맵핑 — 테스트 플랜",
+    "tab": {
+      "ask": "질의",
+      "list": "플랜 목록"
+    },
     "planNamePlaceholder": "새 플랜 이름 (예: 파이어볼 스킬)",
     "newPlan": "새 플랜",
     "noPlans": "테스트 플랜이 없습니다. 위에 이름을 입력해 생성하세요.",
@@ -155,7 +159,8 @@
     "title": "페르소나 플레이 시나리오",
     "tab": {
       "manage": "페르소나 관리",
-      "scenarios": "시나리오"
+      "scenarios": "시나리오",
+      "ask": "질의"
     },
     "searchPlaceholder": "페르소나 검색",
     "addPersona": "신규 페르소나",

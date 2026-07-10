@@ -5,6 +5,7 @@ import { streamCodexCli } from "@/lib/codex-cli-transport"
 import type { ChatMessage } from "@/lib/llm-providers"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { buildLanguageDirective } from "@/lib/output-language"
+import { getGraphContext, formatGraphContextBlocks } from "@/lib/graph-qna"
 import { buildScenarioPrompt, parseScenarioResponse } from "./prompts"
 import type { Persona, PlayScenario } from "./types"
 
@@ -68,22 +69,31 @@ async function callModel(
   return buffer
 }
 
-/** Generate `count` play scenarios for a persona against a feature/situation. */
+/**
+ * Generate `count` play scenarios for a persona against a feature/situation.
+ * Looks up existing persona_* graph context for the target description
+ * first (other personas' finalized scenarios) so generation doesn't ignore
+ * scenarios already covered for the same feature/situation.
+ */
 export async function generateScenarios(
   persona: Persona,
   featureInput: string,
   count: number,
   llmConfig: LlmConfig,
   projectPath: string,
+  projectName: string,
   signal?: AbortSignal,
 ): Promise<PlayScenario[]> {
+  const graphBlocks = await getGraphContext(featureInput, projectPath, projectName, llmConfig, "persona_")
+  const graphContext = formatGraphContextBlocks(graphBlocks)
   const { system, user } = buildScenarioPrompt(
     persona,
     featureInput,
     count,
     buildLanguageDirective(featureInput),
   )
-  const raw = await callModel(llmConfig, system, user, signal, projectPath)
+  const userWithContext = graphContext ? `${user}\n\n${graphContext}` : user
+  const raw = await callModel(llmConfig, system, userWithContext, signal, projectPath)
   return parseScenarioResponse(raw).map((s) => ({
     id: crypto.randomUUID(),
     personaId: persona.id,

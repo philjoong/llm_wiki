@@ -29,9 +29,11 @@ import {
   buildEntityHintsForPrompt,
   findEntityByGraphNode,
   unlinkGraphNode,
+  resolveEntitySeeds,
   type EntityDict,
   type EntityEntry,
 } from "./entity-dict"
+import type { GraphSnapshot, GraphNodeRecord } from "@/lib/graph-backend"
 
 function makeEntry(overrides: Partial<EntityEntry> & { id: string; canonicalName: string }): EntityEntry {
   return {
@@ -40,6 +42,18 @@ function makeEntry(overrides: Partial<EntityEntry> & { id: string; canonicalName
     graphNodes: [],
     ...overrides,
   }
+}
+
+function makeNode(overrides: Partial<GraphNodeRecord> & { id: string; name: string }): GraphNodeRecord {
+  return {
+    labels: ["Page"],
+    properties: {},
+    ...overrides,
+  }
+}
+
+function makeSnapshot(nodes: GraphNodeRecord[]): GraphSnapshot {
+  return { nodes, edges: [] }
 }
 
 beforeEach(() => {
@@ -325,5 +339,66 @@ describe("findEntityByGraphNode / unlinkGraphNode", () => {
     }
     const next = unlinkGraphNode("g", "1", dict)
     expect(next["id-1"]).toBeUndefined()
+  })
+})
+
+describe("resolveEntitySeeds", () => {
+  it("resolves a linked graphNodes ref present in the snapshot", () => {
+    const entry = makeEntry({
+      id: "id-1",
+      canonicalName: "스킬A",
+      graphNodes: [{ graphName: "g", nodeId: "1" }],
+    })
+    const snapshot = makeSnapshot([makeNode({ id: "1", name: "스킬A" })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual(["스킬A"])
+  })
+
+  it("ignores a stale nodeId not present in the snapshot", () => {
+    const entry = makeEntry({
+      id: "id-1",
+      canonicalName: "스킬A",
+      graphNodes: [{ graphName: "g", nodeId: "999" }],
+    })
+    const snapshot = makeSnapshot([makeNode({ id: "1", name: "스킬B" })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual([])
+  })
+
+  it("ignores a graphNodes ref for a different graph (falls back to name match against the given graph's snapshot)", () => {
+    const entry = makeEntry({
+      id: "id-1",
+      canonicalName: "스킬A",
+      graphNodes: [{ graphName: "other-graph", nodeId: "1" }],
+    })
+    // Node "1" in `other-graph" is irrelevant here — `snapshot` belongs to "g" and has no node id "1".
+    const snapshot = makeSnapshot([makeNode({ id: "2", name: "스킬B" })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual([])
+  })
+
+  it("adds a node matched by canonicalName exact match even without a graphNodes ref", () => {
+    const entry = makeEntry({ id: "id-1", canonicalName: "스킬A" })
+    const snapshot = makeSnapshot([makeNode({ id: "1", name: "  스킬A  " })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual(["  스킬A  "])
+  })
+
+  it("adds a node matched by alias exact match", () => {
+    const entry = makeEntry({ id: "id-1", canonicalName: "스킬A", aliases: ["Skill A"] })
+    const snapshot = makeSnapshot([makeNode({ id: "1", name: "SKILL A" })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual(["SKILL A"])
+  })
+
+  it("does not duplicate a node matched by both graphNodes ref and name", () => {
+    const entry = makeEntry({
+      id: "id-1",
+      canonicalName: "스킬A",
+      graphNodes: [{ graphName: "g", nodeId: "1" }],
+    })
+    const snapshot = makeSnapshot([makeNode({ id: "1", name: "스킬A" })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual(["스킬A"])
+  })
+
+  it("returns an empty array (not an error) when nothing matches", () => {
+    const entry = makeEntry({ id: "id-1", canonicalName: "스킬A" })
+    const snapshot = makeSnapshot([makeNode({ id: "1", name: "스킬B" })])
+    expect(resolveEntitySeeds(entry, "g", snapshot)).toEqual([])
   })
 })

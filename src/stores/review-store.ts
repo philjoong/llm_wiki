@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
 import type { SourceRef } from "@/lib/source-ref"
-import type { Stage1Section, Stage2Triple } from "@/lib/ingest"
+import type { GraphAssignmentTriple } from "@/lib/ingest"
 import type { EntityCandidate } from "@/lib/entity-dict"
 
 export interface ReviewOption {
@@ -10,7 +10,7 @@ export interface ReviewOption {
 }
 
 /**
- * Stage 4 modification proposals carry the data needed to render the
+ * Modification proposals carry the data needed to render the
  * existing-vs-incoming diff in the review card and resolve the
  * proposal back into the wiki tree.
  *
@@ -30,14 +30,10 @@ export interface ModificationProposal {
   incomingExcerpt: string
   incomingDraftPath: string
   sourceRefs: SourceRef[]
-  /** Stage 1 sections for this page_path, preserved so Stage 2 can run
-   *  after the user Approves the proposal. Absent on legacy proposals
-   *  (created before the pipeline reorder) and on the re-review path. */
-  pendingSections?: Stage1Section[]
 }
 
 /**
- * One entry per overflow failure from Stage 2 validation.
+ * One entry per overflow failure from graph assignment validation.
  * Carries enough info so the review card can offer "create new graph" as an
  * actionable resolution instead of just Dismiss.
  */
@@ -63,7 +59,7 @@ export interface EntityConfirmationItem {
   incomingName: string
   /** Matched dictionary entries, each with the match kind and the name that matched. */
   candidates: EntityCandidate[]
-  triples: Stage2Triple[]
+  triples: GraphAssignmentTriple[]
   pagePaths: string[]
 }
 
@@ -74,8 +70,8 @@ export interface ReviewItem {
     | "modification"
     | "entity_confirmation"
   /**
-   * Stage 4 two-step decision tree. Only meaningful for `type:
-   * "modification"`. `"primary"` shows [Approve | Merge | Reject];
+   * Modification-proposal two-step decision tree. Only meaningful for
+   * `type: "modification"`. `"primary"` shows [Approve | Merge | Reject];
    * `"rejection-handling"` shows [Discard | Pending | Counterexample]
    * after the user clicks Reject. Other types stay implicitly in a
    * single-stage flow.
@@ -84,7 +80,7 @@ export interface ReviewItem {
   /** Modification-only payload — the diff data and the parked draft. */
   proposal?: ModificationProposal
   /** Overflow-only payload — one entry per overflowed graph. Only present on
-   *  suggestion items that come from Stage 2 relation-type overflow. */
+   *  suggestion items that come from graph assignment relation-type overflow. */
   overflowEntries?: OverflowEntry[]
   /** entity_confirmation-only payload — the fuzzy-matched name and the triples that used it. */
   entityConfirmation?: EntityConfirmationItem
@@ -105,7 +101,7 @@ interface ReviewState {
   setItems: (items: ReviewItem[]) => void
   resolveItem: (id: string, action: string) => void
   /**
-   * Stage 4: flip a `modification` review from `"primary"` to
+   * Modification-proposal: flip a `modification` review from `"primary"` to
    * `"rejection-handling"` without resolving it. The card stays open
    * but its action set switches to [Discard | Pending | Counterexample].
    */

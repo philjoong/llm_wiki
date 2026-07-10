@@ -315,7 +315,7 @@ describe("Regression: the data-loss path in the user's diagnosis", () => {
   })
 })
 
-// ── Stage 3: SourceRef-aware variants ──────────────────────────────────
+// ── SourceRef-aware variants ──────────────────────────────────
 
 describe("parseSourceRefs — accepts every form the LLM might emit", () => {
   it("parses inline string array (legacy)", () => {
@@ -333,7 +333,7 @@ describe("parseSourceRefs — accepts every form the LLM might emit", () => {
     ])
   })
 
-  it("parses Stage 3 multi-line object form (file + range)", () => {
+  it("parses multi-line object form (file + range)", () => {
     const fm = [
       "sources:",
       "  - file: design.md",
@@ -500,8 +500,8 @@ describe("mergeSourceRefsLists", () => {
   })
 
   it("keeps entries with the same file but different ranges", () => {
-    // This is the central Stage 3 case: two different sections of the
-    // same raw file landing on the same page must both be remembered.
+    // This is the central multi-section case: two different sections of
+    // the same raw file landing on the same page must both be remembered.
     expect(
       mergeSourceRefsLists(
         [{ file: "design.md", range: "section 1" }],

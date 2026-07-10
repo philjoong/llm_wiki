@@ -1,6 +1,6 @@
 import { readFile, writeFile, createDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { getGraphBackend } from "@/lib/graph-backend"
+import { getGraphBackend, type GraphSnapshot } from "@/lib/graph-backend"
 
 const DICT_PATH = ".llm-wiki/entity-dict.json"
 const MAX_HINT_NAMES = 200
@@ -265,4 +265,35 @@ export function splitEntity(
 export function buildEntityHintsForPrompt(dict: EntityDict): string {
   const names = Object.values(dict).flatMap((e) => [e.canonicalName, ...e.aliases])
   return names.slice(0, MAX_HINT_NAMES).join(", ")
+}
+
+/**
+ * Resolve an entity's seed node names within a specific graph. Pulls
+ * `entry.graphNodes` entries for `graphName`, drops any whose `nodeId` is not
+ * present in `snapshot` (stale — left behind by manual edits or re-ingest
+ * outside the dictionary-linking path), then adds any node in `snapshot`
+ * whose name matches `entry.canonicalName`/`aliases` exactly
+ * (trim+lowercase normalized) but wasn't already linked. Returns node
+ * *names* (not ids) since backend node queries match by name.
+ */
+export function resolveEntitySeeds(
+  entry: EntityEntry,
+  graphName: string,
+  snapshot: GraphSnapshot,
+): string[] {
+  const nodesById = new Map(snapshot.nodes.map((n) => [n.id, n]))
+  const names = new Set<string>()
+
+  for (const ref of entry.graphNodes) {
+    if (ref.graphName !== graphName) continue
+    const node = nodesById.get(ref.nodeId)
+    if (node) names.add(node.name)
+  }
+
+  const entityNames = [entry.canonicalName, ...entry.aliases].map(normalizeForCompare)
+  for (const node of snapshot.nodes) {
+    if (entityNames.includes(normalizeForCompare(node.name))) names.add(node.name)
+  }
+
+  return Array.from(names)
 }

@@ -3,19 +3,16 @@ import type { IngestScenario } from "./types"
 /**
  * Ingest scenarios drive autoIngest end-to-end.
  *
- * Stage 1 now decides page_path per section and emits verbatim source
- * text directly — sections with a page_path go straight to Stage 3
+ * Decomposition decides page_path per section and emits verbatim source
+ * text directly — sections go straight to file write
  * (buildFileBlocksFromSections), which builds FILE content from the
  * section body/frontmatter without a second LLM call. `analysisResponse`
- * therefore uses the SECTION delimiter format:
+ * therefore uses the SECTION delimiter format, and every section must
+ * carry a page_path (a section without one fails its chunk):
  *
  *   ---SECTION: source_range | db/path/to/page.md---
  *   (verbatim source text for this section)
  *   ---END SECTION---
- *
- * `generationResponse` is legacy (Stage 2 FILE/REVIEW block format) and is
- * only consumed when a section has no page_path — leave it "" for
- * scenarios where every section carries one.
  */
 
 const BASIC_PURPOSE = `# Purpose
@@ -43,8 +40,8 @@ export const ingestScenarios: IngestScenario[] = [
   {
     name: "basic-new-source",
     description:
-      "Stage 2 emits a single concept page + a source summary page. No " +
-      "REVIEW blocks. The runner must see both files on disk and zero " +
+      "Decomposition emits a single concept page + a source summary page. " +
+      "No REVIEW blocks. The runner must see both files on disk and zero " +
       "reviews in the store.",
     initialWiki: {
       "purpose.md": BASIC_PURPOSE,
@@ -61,10 +58,10 @@ export const ingestScenarios: IngestScenario[] = [
         "supports variable-length contexts and is now standard in LLMs.",
       ].join("\n"),
     },
-    // Stage 1 now decides page_path directly and emits verbatim source text
-    // per SECTION — there is no separate Stage 2 "generation" call when
-    // every section carries a page_path, so this scenario's file content
-    // comes entirely from buildFileBlocksFromSections(), not from LLM prose.
+    // Decomposition decides page_path directly and emits verbatim source
+    // text per SECTION — there is no separate graph-assignment "generation"
+    // call involved in file content, so this scenario's file content comes
+    // entirely from buildFileBlocksFromSections(), not from LLM prose.
     analysisResponse: [
       "---SECTION: Rotary Position Embedding | db/concepts/rope.md---",
       "RoPE rotates pairs of dimensions in [[attention]] queries and keys",
@@ -75,7 +72,6 @@ export const ingestScenarios: IngestScenario[] = [
       "Paper introducing [[Rotary Position Embedding]].",
       "---END SECTION---",
     ].join("\n"),
-    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/concepts/rope.md",
@@ -88,10 +84,10 @@ export const ingestScenarios: IngestScenario[] = [
         ],
         "db/sources/rope-paper.md": ["rope-paper.md"],
       },
-      // No graph policy is seeded for this scenario, so Stage 2 (graph
-      // assignment) has no managed graphs to assign triples to — it
-      // reports back a "no graph assignments produced" suggestion. This
-      // is orthogonal to what this scenario actually tests (file writing).
+      // No graph policy is seeded for this scenario, so graph assignment
+      // has no managed graphs to assign triples to — it reports back a
+      // "no graph assignments produced" suggestion. This is orthogonal to
+      // what this scenario actually tests (file writing).
       reviewsCreated: [
         { type: "suggestion", titleContains: "no graph assignments produced" },
       ],
@@ -124,7 +120,6 @@ export const ingestScenarios: IngestScenario[] = [
       "Source for multi-head [[attention]].",
       "---END SECTION---",
     ].join("\n"),
-    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/concepts/multi-head-attention.md",
@@ -133,7 +128,7 @@ export const ingestScenarios: IngestScenario[] = [
       fileContains: {
         "db/concepts/multi-head-attention.md": ["[[attention]]"],
       },
-      // No graph policy seeded — Stage 2 reports "no graph assignments
+      // No graph policy seeded — graph assignment reports "no graph assignments
       // produced" rather than actually assigning triples. See scenario 1.
       reviewsCreated: [
         { type: "suggestion", titleContains: "no graph assignments produced" },
@@ -141,7 +136,7 @@ export const ingestScenarios: IngestScenario[] = [
     },
   },
 
-  // 3. game-dev/instance-server — Stage 3 decomposition into db/ paths.
+  // 3. game-dev/instance-server — decomposition into db/ paths.
   //
   // The source document mixes 4 distinct semantic units that schema.md
   // routes to 4 different db/ subtrees. The ingest pipeline must:
@@ -207,7 +202,6 @@ export const ingestScenarios: IngestScenario[] = [
       "- 스폰 위치는 5곳 랜덤",
       "---END SECTION---",
     ].join("\n"),
-    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/systems/instance_server/server_structure.md",
@@ -226,7 +220,7 @@ export const ingestScenarios: IngestScenario[] = [
           "gRPC",
         ],
       },
-      // No graph policy seeded — Stage 2 reports "no graph assignments
+      // No graph policy seeded — graph assignment reports "no graph assignments
       // produced" rather than actually assigning triples. See scenario 1.
       reviewsCreated: [
         { type: "suggestion", titleContains: "no graph assignments produced" },
@@ -258,7 +252,6 @@ export const ingestScenarios: IngestScenario[] = [
       "关于 [[Transformer]] 的综述。",
       "---END SECTION---",
     ].join("\n"),
-    generationResponse: "",
     expected: {
       writtenPaths: [
         "db/concepts/transformer.md",
@@ -270,7 +263,7 @@ export const ingestScenarios: IngestScenario[] = [
           "[[注意力机制]]",
         ],
       },
-      // No graph policy seeded — Stage 2 reports "no graph assignments
+      // No graph policy seeded — graph assignment reports "no graph assignments
       // produced" rather than actually assigning triples. See scenario 1.
       reviewsCreated: [
         { type: "suggestion", titleContains: "no graph assignments produced" },

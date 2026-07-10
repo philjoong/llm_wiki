@@ -1,5 +1,7 @@
 import { writeFile, createDirectory } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
+import { reIngestDocument } from "@/lib/ingest"
+import type { LlmConfig } from "@/stores/wiki-store"
 import { renderCombination } from "./prompts"
 import type { TestPlan } from "./types"
 
@@ -49,11 +51,54 @@ export function sanitizeFileName(name: string): string {
   return cleaned || "test-plan"
 }
 
-/** Write the markdown export to `qa/test-plans/<name>.md`; returns the relative path. */
-export async function exportTestPlan(projectPath: string, plan: TestPlan): Promise<string> {
+/**
+ * Render the finalized plan as narrative field content for the graph
+ * pipeline (`db/casemap/<name>.md`, data type "casemap"). Unlike
+ * buildTestPlanMarkdown(), this only carries the feature description,
+ * abstraction tags, and confirmed test cases as prose — no axes, rules,
+ * or risk-grading intermediates.
+ */
+export function buildTestPlanDbFields(plan: TestPlan): Record<string, string> {
+  const included = plan.cases.filter((c) => c.status !== "excluded")
+  const cases = included.map((tc, i) => {
+    const combo = renderCombination(tc.combination, plan.axes)
+    const lines = [
+      `${i + 1}. [${RISK_LABEL[tc.risk]}] ${tc.purpose}`,
+      combo ? `조합: ${combo}` : null,
+      `사전 조건: ${tc.preconditions.join("; ")}`,
+      `절차: ${tc.steps.join("; ")}`,
+      `기대 결과: ${tc.expected.join("; ")}`,
+    ].filter(Boolean)
+    return lines.join("\n   ")
+  })
+  return {
+    "기능 정보": plan.featureInput.trim(),
+    "특성": plan.abstraction.join(", "),
+    "테스트케이스": cases.join("\n\n"),
+  }
+}
+
+/**
+ * Write the markdown export to `qa/test-plans/<name>.md`, then render the
+ * same plan as a narrative `db/casemap/<name>.md` doc and re-ingest it so
+ * the graph pipeline picks up the finalized test cases. Returns the
+ * `qa/test-plans` relative path (unchanged from before this doc-sync was
+ * added).
+ */
+export async function exportTestPlan(
+  projectPath: string,
+  projectName: string,
+  plan: TestPlan,
+  llmConfig: LlmConfig,
+): Promise<string> {
   const pp = normalizePath(projectPath)
   const rel = `qa/test-plans/${sanitizeFileName(plan.name)}.md`
   await createDirectory(`${pp}/qa/test-plans`)
   await writeFile(`${pp}/${rel}`, buildTestPlanMarkdown(plan))
+
+  const dbFields = buildTestPlanDbFields(plan)
+  const dbPagePath = `db/casemap/${sanitizeFileName(plan.name)}.md`
+  await reIngestDocument(pp, projectName, dbPagePath, "", llmConfig, "casemap", dbFields)
+
   return rel
 }

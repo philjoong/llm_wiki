@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
-import type { Stage2Triple } from "@/lib/ingest"
+import type { GraphAssignmentTriple } from "@/lib/ingest"
 import type { GraphBackend, GraphQuery, GraphSnapshot } from "./types"
 
 export function createSqliteGraphBackend(projectPath: string): GraphBackend {
@@ -11,7 +11,7 @@ export function createSqliteGraphBackend(projectPath: string): GraphBackend {
     listGraphs: (projectName) => invoke<string[]>("graph_sqlite_list", { ...base, projectName }),
     createGraph: (projectName, graphName) => invoke<void>("graph_sqlite_create", { ...base, projectName, graphName }),
     deleteGraph: (projectName, graphName) => invoke<void>("graph_sqlite_delete", { ...base, projectName, graphName }),
-    upsertTriples: (projectName: string, triples: Stage2Triple[]) =>
+    upsertTriples: (projectName: string, triples: GraphAssignmentTriple[]) =>
       invoke<number>("graph_sqlite_upsert_triples", { ...base, projectName, triples }),
     queryGraph: (projectName: string, graphName: string, query: GraphQuery) =>
       invoke<GraphSnapshot>("graph_sqlite_query", { ...base, projectName, graphName, query }),

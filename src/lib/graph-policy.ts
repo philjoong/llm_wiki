@@ -72,10 +72,19 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
   const parts: string[] = []
 
   if (policy.managedGraphs.length > 0) {
+    const prefixes = Array.from(
+      new Set(policy.managedGraphs.filter((g) => g.includes("_")).map((g) => g.split("_")[0]))
+    )
     parts.push(
       "## Managed Graphs (project-defined)",
-      "For each Stage 2 triple, set its `graph` field to the graph whose domain best matches that relationship.",
+      "For each triple, set its `graph` field to the graph whose domain best matches that relationship.",
       "If no existing graph fits, create a new graph assignment with `new_graph: true`.",
+      "When naming a new graph, use a `{purpose}_{domain-or-action}` snake_case name (e.g. `casemap_use_item`, `playlog_move_server`).",
+    )
+    if (prefixes.length > 0) {
+      parts.push(`Existing purpose prefixes already in use: ${prefixes.join(", ")}. Prefer reusing one of these over inventing a new prefix.`)
+    }
+    parts.push(
       `Available graphs: ${policy.managedGraphs.join(", ")}`,
       "",
       "## Per-Graph Relation Types (project-defined)",
@@ -85,7 +94,7 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
       "If the matching graph has fewer than 4 relation types and needs a new type, you may extend that graph by returning the full expanded `graph_relation_types` list.",
       "If the matching graph already has 4 relation types and a new type is required, do not force the relationship into that graph; create a new graph instead.",
       "Use the relation type as the triple's `predicate`; do not encode relation types as wikilinks.",
-      "Do not omit meaningful relation types from Stage 2 assignments; typed relationships are required for meaningful node/edge/node facts.",
+      "Do not omit meaningful relation types from graph assignments; typed relationships are required for meaningful node/edge/node facts.",
     )
 
     for (const g of policy.managedGraphs) {
@@ -96,8 +105,8 @@ export function buildGraphPolicyPrompt(policy: GraphPolicy): string {
     }
   }
   // No managed graphs (first ingest of a new project) — no relation policy
-  // block; Stage 2's base instructions (`new_graph` + `graph_relation_types`)
-  // handle proposing graphs and their types.
+  // block; graph assignment's base instructions (`new_graph` +
+  // `graph_relation_types`) handle proposing graphs and their types.
 
   return parts.join("\n")
 }

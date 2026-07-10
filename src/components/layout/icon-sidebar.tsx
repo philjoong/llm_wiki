@@ -91,7 +91,7 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
     if (!project || !pendingInjection) return
     const rels = pendingInjection.rels
     // No data type selected → ingest once per file with the standard
-    // (non-structured) Stage 1. Otherwise ingest once per file PER
+    // (non-structured) decomposition. Otherwise ingest once per file PER
     // selected data type, so N selected types produce N documents.
     const dataTypeIds = selectedDataTypeIds.length > 0 ? selectedDataTypeIds : [undefined]
     setInjecting(pendingInjection.source === "file")

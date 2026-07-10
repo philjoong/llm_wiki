@@ -1,7 +1,7 @@
 /**
- * Stage 4 — modification resolution actions.
+ * Modification resolution actions.
  *
- * When a Stage 3 ingest run wants to write a db/ page that already exists
+ * When an ingest run wants to write a db/ page that already exists
  * with materially different content, the writer parks the incoming draft
  * under `pending/_proposals/<id>.md` and queues a `modification` review
  * card instead of overwriting. This module is what the card's buttons
@@ -18,7 +18,8 @@
  *   - Pending  — move the proposal to `pending/<slug>.md` for human triage,
  *                commit.
  *   - Counterexample — move the proposal to `counterexamples/<slug>.md`,
- *                commit. Stage 5 will inject these back into the prompt.
+ *                commit. The dismissal-context loader will inject these
+ *                back into the decomposition prompt.
  *
  * File moves are handled here; git commits are deferred to Sync to Remote.
  */
@@ -58,7 +59,7 @@ function primarySourceRef(proposal: ModificationProposal): SourceRef {
 export async function approveModification(
   projectPath: string,
   proposal: ModificationProposal,
-): Promise<void> {
+): Promise<{ targetPath: string; content: string }> {
   const pp = normalizePath(projectPath)
   const draftAbs = `${pp}/${proposal.incomingDraftPath}`
   const targetAbs = `${pp}/${proposal.targetPath}`
@@ -69,6 +70,8 @@ export async function approveModification(
 
   await writeFile(targetAbs, merged)
   await deleteFile(draftAbs)
+
+  return { targetPath: proposal.targetPath, content: merged }
 }
 
 export async function discardModification(

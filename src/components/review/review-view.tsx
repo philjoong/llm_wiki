@@ -22,7 +22,7 @@ import {
   counterexampleModification,
 } from "@/lib/modification-resolve"
 import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
-import { runStage2ForApprovedDoc } from "@/lib/ingest"
+import { reIngestDocument } from "@/lib/ingest"
 import { syncGraphToBackend } from "@/lib/graph-sync"
 import { loadEntityDict, saveEntityDict, addAlias, upsertEntity } from "@/lib/entity-dict"
 import { PendingView } from "@/components/review/pending-view"
@@ -47,7 +47,7 @@ export function ReviewView() {
     const pp = project ? normalizePath(project.path) : ""
     const projectName = project?.name || "default"
 
-    // Stage 4 — modification flow. Hand off to the dedicated resolver
+    // Modification proposal flow. Hand off to the dedicated resolver
     // module (file moves + git commits) and refresh the file tree so
     // the sidebar reflects the new state of pending/_proposals/...
     const item = items.find((i) => i.id === id)
@@ -60,17 +60,15 @@ export function ReviewView() {
       }
       try {
         if (action === "modification:approve") {
-          await approveModification(pp, proposal)
-          // If the proposal carries Stage 1 sections, run Stage 2 now so
-          // graph sync happens on the confirmed document, not before.
-          if (proposal.pendingSections && proposal.pendingSections.length > 0) {
-            try {
-              const llmConfig = useWikiStore.getState().llmConfig
-              const graphPolicy = await loadGraphPolicy(pp)
-              await runStage2ForApprovedDoc(pp, projectName, proposal.pendingSections, graphPolicy, llmConfig)
-            } catch (err) {
-              console.warn("[review] runStage2ForApprovedDoc failed:", err)
-            }
+          const { targetPath, content } = await approveModification(pp, proposal)
+          // Re-decompose the approved final content so graph assignment
+          // reflects what the user actually approved (post hand-edit),
+          // not the pre-conflict draft.
+          try {
+            const llmConfig = useWikiStore.getState().llmConfig
+            await reIngestDocument(pp, projectName, targetPath, content, llmConfig)
+          } catch (err) {
+            console.warn("[review] reIngestDocument failed:", err)
           }
           resolveItem(id, "Approved")
         } else if (action === "modification:merge") {
@@ -88,7 +86,7 @@ export function ReviewView() {
           }
           return
         } else if (action === "modification:reject") {
-          // Stage 1 → Stage 2 of the decision tree. No file effect.
+          // Primary → rejection-handling step of the decision tree. No file effect.
           transitionToRejectionHandling(id)
           return
         } else if (action === "modification:discard") {
@@ -524,7 +522,7 @@ function ReviewCard({
 }
 
 /**
- * Two-pane diff for a Stage 4 modification proposal. Shows the existing
+ * Two-pane diff for a modification proposal. Shows the existing
  * page on the left and the parked draft on the right. Truncated to keep
  * the card sane; the full content lives in `pending/_proposals/...`.
  */

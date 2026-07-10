@@ -1,8 +1,8 @@
 /**
- * Stage 5 — pending-view tab inside ReviewView.
+ * Dismissal context — pending-view tab inside ReviewView.
  *
  * Lists every entry under `pending/<slug>.md` (top-level only — the
- * `pending/_proposals/` drafts are still mid-flight Stage 4 modification
+ * `pending/_proposals/` drafts are still mid-flight modification proposal
  * cards and don't belong here). Each row exposes Re-review / Promote /
  * Discard.
  */

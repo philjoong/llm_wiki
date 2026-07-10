@@ -1,6 +1,7 @@
 /**
- * Stage 4 — `modification` review items are NEVER auto-resolved by the
- * sweep pass. The sweep is allowed to clean up stale cards via LLM
+ * Modification proposal — `modification` review items are NEVER
+ * auto-resolved by the sweep pass. The sweep is allowed to clean up stale
+ * cards via LLM
  * judgment, but a modification proposal carries a parked draft file
  * that only the user can resolve.
  *

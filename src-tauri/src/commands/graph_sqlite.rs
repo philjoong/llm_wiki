@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Deserialize)]
-pub struct Stage2TripleInput {
+pub struct GraphAssignmentTripleInput {
     subject: String,
     predicate: String,
     object: String,
@@ -31,6 +31,14 @@ pub enum GraphQueryInput {
     Node {
         #[serde(rename = "nodeName", alias = "node_name")]
         node_name: String,
+    },
+    Path {
+        #[serde(rename = "fromNode", alias = "from_node")]
+        from_node: String,
+        #[serde(rename = "toNode", alias = "to_node")]
+        to_node: String,
+        #[serde(rename = "maxDepth", alias = "max_depth")]
+        max_depth: u8,
     },
 }
 
@@ -300,7 +308,7 @@ pub async fn graph_sqlite_list(project_path: String, project_name: String) -> Re
 pub async fn graph_sqlite_upsert_triples(
     project_path: String,
     project_name: String,
-    triples: Vec<Stage2TripleInput>,
+    triples: Vec<GraphAssignmentTripleInput>,
 ) -> Result<u32, String> {
     let conn = open_db(&project_path)?;
     let mut count = 0;
@@ -395,7 +403,93 @@ pub async fn graph_sqlite_query(
                 .collect();
             snapshot_for_node_ids(&conn, gid, expand_neighbors(&conn, gid, seed_ids, depth.min(2))?)
         }
+        GraphQueryInput::Path { from_node, to_node, max_depth } => {
+            let from_ids = find_node_ids_by_name(&conn, gid, &from_node)?;
+            let to_ids = find_node_ids_by_name(&conn, gid, &to_node)?;
+            if from_ids.is_empty() || to_ids.is_empty() {
+                return Ok(GraphSnapshot { nodes: vec![], edges: vec![] });
+            }
+            let path_ids = find_path(&conn, gid, from_ids, &to_ids, max_depth.min(10))?;
+            snapshot_for_node_ids(&conn, gid, path_ids)
+        }
     }
+}
+
+fn find_node_ids_by_name(conn: &Connection, graph_id: i64, name: &str) -> Result<Vec<i64>, String> {
+    let like = format!("%{}%", name);
+    let mut stmt = conn
+        .prepare("SELECT id FROM nodes WHERE graph_id = ?1 AND name LIKE ?2 LIMIT 20")
+        .map_err(|e| e.to_string())?;
+    let ids = stmt
+        .query_map(params![graph_id, like], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<i64>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(ids)
+}
+
+/// BFS from `from_ids` stopping as soon as any `to_ids` node is reached.
+/// Returns the node ids on that shortest path, or an empty vec if no path is
+/// found within `max_depth` hops.
+fn find_path(
+    conn: &Connection,
+    graph_id: i64,
+    from_ids: Vec<i64>,
+    to_ids: &[i64],
+    max_depth: u8,
+) -> Result<Vec<i64>, String> {
+    let to_set: std::collections::HashSet<i64> = to_ids.iter().copied().collect();
+
+    for &start in &from_ids {
+        if to_set.contains(&start) {
+            return Ok(vec![start]);
+        }
+    }
+
+    let mut visited: std::collections::HashSet<i64> = from_ids.iter().copied().collect();
+    let mut parent: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut frontier = from_ids;
+
+    for _ in 0..max_depth {
+        if frontier.is_empty() {
+            break;
+        }
+        let ids_csv = frontier.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT source_node_id, target_node_id FROM edges WHERE graph_id = ?1 AND (source_node_id IN ({ids_csv}) OR target_node_id IN ({ids_csv})) LIMIT 80"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let edge_pairs = stmt
+            .query_map(params![graph_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<(i64, i64)>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let mut next_frontier = Vec::new();
+        for (a, b) in edge_pairs {
+            for (from, to) in [(a, b), (b, a)] {
+                if !frontier.contains(&from) || visited.contains(&to) {
+                    continue;
+                }
+                visited.insert(to);
+                parent.insert(to, from);
+                if to_set.contains(&to) {
+                    let mut path = vec![to];
+                    let mut cur = to;
+                    while let Some(&p) = parent.get(&cur) {
+                        path.push(p);
+                        cur = p;
+                    }
+                    path.reverse();
+                    return Ok(path);
+                }
+                next_frontier.push(to);
+            }
+        }
+        frontier = next_frontier;
+    }
+
+    Ok(vec![])
 }
 
 fn expand_neighbors(conn: &Connection, graph_id: i64, seeds: Vec<i64>, depth: u8) -> Result<Vec<i64>, String> {
@@ -684,4 +778,150 @@ pub async fn graph_sqlite_add_node(
     let props = json!({ "label": name.trim() });
     let id = upsert_node(&conn, gid, name.trim(), None, props)?;
     Ok(id)
+}
+
+#[cfg(test)]
+mod path_search_tests {
+    use super::*;
+
+    fn tmp_project() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let p = std::env::temp_dir().join(format!("llm-wiki-pathtest-{}-{}", ts, id));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// Chains `names[0] --REL--> names[1] --REL--> names[2] --> ...` in `gid`, returning each node's id.
+    fn make_chain(conn: &Connection, gid: i64, names: &[&str]) -> Vec<i64> {
+        let ids: Vec<i64> = names
+            .iter()
+            .map(|n| upsert_node(conn, gid, n, None, json!({})).unwrap())
+            .collect();
+        for i in 0..ids.len().saturating_sub(1) {
+            conn.execute(
+                "INSERT INTO edges (graph_id, source_node_id, target_node_id, relation_type, properties_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![gid, ids[i], ids[i + 1], "REL", json!({ "subject": names[i], "object": names[i + 1] }).to_string()],
+            )
+            .unwrap();
+        }
+        ids
+    }
+
+    #[test]
+    fn finds_a_direct_two_hop_path() {
+        let dir = tmp_project();
+        let conn = open_db(dir.to_str().unwrap()).unwrap();
+        let gid = graph_id(&conn, "p", "g").unwrap();
+        let ids = make_chain(&conn, gid, &["A", "B", "C"]);
+
+        let path = find_path(&conn, gid, vec![ids[0]], &[ids[2]], 6).unwrap();
+        assert_eq!(path, vec![ids[0], ids[1], ids[2]]);
+    }
+
+    #[test]
+    fn finds_a_four_hop_path() {
+        let dir = tmp_project();
+        let conn = open_db(dir.to_str().unwrap()).unwrap();
+        let gid = graph_id(&conn, "p", "g").unwrap();
+        let ids = make_chain(&conn, gid, &["A", "B", "C", "D", "E"]);
+
+        let path = find_path(&conn, gid, vec![ids[0]], &[ids[4]], 6).unwrap();
+        assert_eq!(path, ids);
+    }
+
+    #[test]
+    fn returns_empty_when_nodes_are_in_disconnected_components() {
+        let dir = tmp_project();
+        let conn = open_db(dir.to_str().unwrap()).unwrap();
+        let gid = graph_id(&conn, "p", "g").unwrap();
+        let left = make_chain(&conn, gid, &["A", "B"]);
+        let right = make_chain(&conn, gid, &["X", "Y"]);
+
+        let path = find_path(&conn, gid, vec![left[0]], &[right[1]], 10).unwrap();
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn returns_empty_when_path_exceeds_max_depth() {
+        let dir = tmp_project();
+        let conn = open_db(dir.to_str().unwrap()).unwrap();
+        let gid = graph_id(&conn, "p", "g").unwrap();
+        // A chain of 5 edges (6 nodes) needs max_depth >= 5.
+        let ids = make_chain(&conn, gid, &["A", "B", "C", "D", "E", "F"]);
+
+        let path = find_path(&conn, gid, vec![ids[0]], &[ids[5]], 3).unwrap();
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn returns_the_seed_directly_when_from_and_to_overlap() {
+        let dir = tmp_project();
+        let conn = open_db(dir.to_str().unwrap()).unwrap();
+        let gid = graph_id(&conn, "p", "g").unwrap();
+        let ids = make_chain(&conn, gid, &["A", "B"]);
+
+        let path = find_path(&conn, gid, vec![ids[0]], &[ids[0]], 6).unwrap();
+        assert_eq!(path, vec![ids[0]]);
+    }
+
+    #[tokio::test]
+    async fn graph_sqlite_query_path_returns_edges_along_the_shortest_route() {
+        let dir = tmp_project();
+        let project_path = dir.to_str().unwrap().to_string();
+        {
+            let conn = open_db(&project_path).unwrap();
+            let gid = graph_id(&conn, "p", "g").unwrap();
+            make_chain(&conn, gid, &["스킬A", "넉백", "스킬B"]);
+        }
+
+        let snapshot = graph_sqlite_query(
+            project_path,
+            "p".to_string(),
+            "g".to_string(),
+            GraphQueryInput::Path {
+                from_node: "스킬A".to_string(),
+                to_node: "스킬B".to_string(),
+                max_depth: 6,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(snapshot.edges.len(), 2);
+        assert_eq!(snapshot.nodes.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn graph_sqlite_query_path_returns_empty_snapshot_when_unconnected() {
+        let dir = tmp_project();
+        let project_path = dir.to_str().unwrap().to_string();
+        {
+            let conn = open_db(&project_path).unwrap();
+            let gid = graph_id(&conn, "p", "g").unwrap();
+            make_chain(&conn, gid, &["스킬A", "넉백"]);
+            make_chain(&conn, gid, &["스킬C", "화염"]);
+        }
+
+        let snapshot = graph_sqlite_query(
+            project_path,
+            "p".to_string(),
+            "g".to_string(),
+            GraphQueryInput::Path {
+                from_node: "스킬A".to_string(),
+                to_node: "스킬C".to_string(),
+                max_depth: 6,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(snapshot.nodes.is_empty());
+        assert!(snapshot.edges.is_empty());
+    }
 }

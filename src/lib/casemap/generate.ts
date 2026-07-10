@@ -5,6 +5,7 @@ import { streamCodexCli } from "@/lib/codex-cli-transport"
 import type { ChatMessage } from "@/lib/llm-providers"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { buildLanguageDirective } from "@/lib/output-language"
+import { getGraphContext, formatGraphContextBlocks } from "@/lib/graph-qna"
 import { generatePairwise } from "./pairwise"
 import {
   buildAbstractionPrompt,
@@ -98,15 +99,24 @@ function chunk<T>(items: T[], size: number): T[][] {
 export interface StepContext {
   llmConfig: LlmConfig
   projectPath: string
+  projectName: string
   signal?: AbortSignal
   /** Batched steps report progress after each batch (done, total = batch counts). */
   onProgress?: (done: number, total: number) => void
 }
 
-/** Step 2: feature abstraction → characteristic tags. */
+/**
+ * Step 2: feature abstraction → characteristic tags. Looks up existing
+ * casemap_* graph context for the feature description first (other
+ * features' finalized test plans) so the abstraction step doesn't ignore
+ * prior coverage of the same or related features.
+ */
 export async function runAbstraction(featureInput: string, ctx: StepContext): Promise<string[]> {
+  const graphBlocks = await getGraphContext(featureInput, ctx.projectPath, ctx.projectName, ctx.llmConfig, "casemap_")
+  const graphContext = formatGraphContextBlocks(graphBlocks)
   const { system, user } = buildAbstractionPrompt(featureInput, buildLanguageDirective(featureInput))
-  const raw = await callModel(ctx.llmConfig, system, user, ctx.signal, ctx.projectPath)
+  const userWithContext = graphContext ? `${user}\n\n${graphContext}` : user
+  const raw = await callModel(ctx.llmConfig, system, userWithContext, ctx.signal, ctx.projectPath)
   return parseAbstractionResponse(raw)
 }
 

@@ -1,5 +1,5 @@
 /**
- * Stage 5 — counterexample / rejection-log context loader.
+ * Dismissal context — counterexample / rejection-log context loader.
  *
  * When an ingest re-runs over a raw range that the user has already
  * rejected (Discard) or marked as a Counterexample (the existing page is
@@ -9,7 +9,7 @@
  *
  * Two persisted artifacts contribute:
  *   - `counterexamples/*.md` — full pages the user marked as wrong.
- *     Frontmatter carries `title` + `sources` (Stage 3 object form).
+ *     Frontmatter carries `title` + `sources` (ingest object form).
  *   - `.llm-wiki/rejection-log.jsonl` — one JSON object per Discard,
  *     written by `discardModification` in modification-resolve.ts.
  *

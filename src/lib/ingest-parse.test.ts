@@ -18,7 +18,7 @@
  * to dropping pages without telling anyone.
  */
 import { describe, it, expect } from "vitest"
-import { parseFileBlocks, isSafeIngestPath, parseStage1Sections } from "./ingest"
+import { parseFileBlocks, isSafeIngestPath, parseDecomposedSections } from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
 
@@ -449,14 +449,14 @@ describe("parseFileBlocks — path-traversal guard end-to-end", () => {
   })
 })
 
-describe("parseStage1Sections — delimiter format (Fix 25)", () => {
+describe("parseDecomposedSections — delimiter format (Fix 25)", () => {
   it("parses one SECTION block into a section", () => {
     const text = [
       "---SECTION: ## 고블린 전사---",
       "고블린 전사는 불에 약하다.",
       "---END SECTION---",
     ].join("\n")
-    const sections = parseStage1Sections(text)
+    const sections = parseDecomposedSections(text)
     expect(sections).toEqual([
       { source_range: "## 고블린 전사", source_text: "고블린 전사는 불에 약하다." },
     ])
@@ -472,18 +472,18 @@ describe("parseStage1Sections — delimiter format (Fix 25)", () => {
       "beta",
       "---END SECTION---",
     ].join("\n")
-    const sections = parseStage1Sections(text)
+    const sections = parseDecomposedSections(text)
     expect(sections.map((s) => s.source_range)).toEqual(["## A", "## B"])
     expect(sections.map((s) => s.source_text)).toEqual(["alpha", "beta"])
   })
 
   it("preserves verbatim markdown escapes that used to crash JSON.parse", () => {
-    // The exact class of input that broke the old JSON Stage 1: backslash
-    // escapes (`\[`, `\]`, `\(`, `\)`) are invalid JSON escapes. The
-    // delimiter format carries them through untouched.
+    // The exact class of input that broke the old JSON decomposition format:
+    // backslash escapes (`\[`, `\]`, `\(`, `\)`) are invalid JSON escapes.
+    // The delimiter format carries them through untouched.
     const body = "리니지\\(게임\\)는 흥행했다.[\\[8\\]](#fn-8 \"각주\")"
     const text = ["---SECTION: ## 리니지---", body, "---END SECTION---"].join("\n")
-    const sections = parseStage1Sections(text)
+    const sections = parseDecomposedSections(text)
     expect(sections).toHaveLength(1)
     expect(sections[0].source_text).toBe(body)
   })
@@ -496,7 +496,7 @@ describe("parseStage1Sections — delimiter format (Fix 25)", () => {
       "line three",
       "---END SECTION---",
     ].join("\n")
-    const sections = parseStage1Sections(text)
+    const sections = parseDecomposedSections(text)
     expect(sections[0].source_text).toBe("line one\n\nline three")
   })
 
@@ -506,20 +506,20 @@ describe("parseStage1Sections — delimiter format (Fix 25)", () => {
       "body\r",
       "--- END  SECTION ---\r",
     ].join("\n")
-    const sections = parseStage1Sections(text)
+    const sections = parseDecomposedSections(text)
     expect(sections).toEqual([{ source_range: "## Range", source_text: "body" }])
   })
 
   it("skips empty-body sections and returns [] for non-SECTION text", () => {
-    expect(parseStage1Sections("just some prose, no markers")).toEqual([])
-    expect(parseStage1Sections('{"sections":[]}')).toEqual([])
+    expect(parseDecomposedSections("just some prose, no markers")).toEqual([])
+    expect(parseDecomposedSections('{"sections":[]}')).toEqual([])
     const emptyBody = ["---SECTION: ## X---", "   ", "---END SECTION---"].join("\n")
-    expect(parseStage1Sections(emptyBody)).toEqual([])
+    expect(parseDecomposedSections(emptyBody)).toEqual([])
   })
 
   it("truncation-tolerant: an unclosed trailing block still yields its body", () => {
     const text = ["---SECTION: ## Cut---", "partial body before stream ended"].join("\n")
-    const sections = parseStage1Sections(text)
+    const sections = parseDecomposedSections(text)
     expect(sections).toEqual([
       { source_range: "## Cut", source_text: "partial body before stream ended" },
     ])

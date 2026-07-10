@@ -14,6 +14,17 @@ export interface SearchResult {
 const MAX_RESULTS = 20
 const SNIPPET_CONTEXT = 80
 
+// ── Relevance threshold ────────────────────────────────────────────────────
+// A result is kept only if its RAW (pre-RRF) token score or vector cosine
+// similarity clears one of these bars. RRF's fused score is rank-only and
+// carries no absolute meaning (see RRF comment below), so there is no
+// principled cutoff to apply to it directly — the threshold has to be
+// checked against the underlying scores before fusion overwrites them.
+// Values are conservative starting points (see docs/entity-relation-plan.md
+// "열린 질문" — 실측 후 조정).
+const MIN_TOKEN_SCORE = 1
+const MIN_VECTOR_SIMILARITY = 0.3
+
 // ── Reciprocal Rank Fusion ─────────────────────────────────────────────────
 // Token search and vector search produce two independently-ranked lists.
 // Their absolute scores are incommensurable (token score: 1-400, vector
@@ -222,9 +233,17 @@ async function fuseTokenAndVector(
   query: string,
   restrictedPaths: ReadonlySet<string> | null,
 ): Promise<void> {
-  // Snapshot token ranks BEFORE vector materialization so newly-added
-  // vector-only pages don't shift token ranks under us.
-  const tokenSorted = [...results].sort((a, b) => b.score - a.score)
+  // ── Threshold gate on RAW scores (pre-RRF) ────────────────────────────
+  // `results[].score` at this point is still the raw token/phrase score
+  // from searchFiles(). Drop anything below MIN_TOKEN_SCORE from the token
+  // ranking entirely — a weak match must not get a token rank at all, or
+  // it would still earn an RRF contribution from that list. Below, vector
+  // hits below MIN_VECTOR_SIMILARITY are excluded from vectorRank/
+  // materialization the same way. A result surviving in NEITHER list is
+  // filtered out of `results` at the end of this function.
+  const tokenSorted = [...results]
+    .filter((r) => r.score >= MIN_TOKEN_SCORE)
+    .sort((a, b) => b.score - a.score)
   const tokenRank = new Map<string, number>()
   tokenSorted.forEach((r, i) => {
     tokenRank.set(normalizePath(r.path), i + 1) // 1-indexed
@@ -271,10 +290,12 @@ async function fuseTokenAndVector(
       }
 
       // Filter and rank the vector results that resolve into the
-      // allowed set. searchByEmbedding returns results pre-sorted by
-      // descending similarity; preserve order while skipping unresolved.
+      // allowed set AND clear the raw similarity threshold. searchByEmbedding
+      // returns results pre-sorted by descending similarity; preserve order
+      // while skipping unresolved/weak ones.
+      const strongVectorResults = vectorResults.filter((vr) => vr.score >= MIN_VECTOR_SIMILARITY)
       let rank = 0
-      for (const vr of vectorResults) {
+      for (const vr of strongVectorResults) {
         if (!idToPath.has(vr.id)) continue
         rank++
         vectorRank.set(vr.id, rank)
@@ -285,7 +306,7 @@ async function fuseTokenAndVector(
       // them and they can't surface even with a top vector rank.
       const knownIds = new Set(results.map((r) => pageIdFromRelPath(r.path)))
       let added = 0
-      for (const vr of vectorResults) {
+      for (const vr of strongVectorResults) {
         if (knownIds.has(vr.id)) continue
         const tryPath = idToPath.get(vr.id)
         if (!tryPath) continue
@@ -313,6 +334,19 @@ async function fuseTokenAndVector(
     console.log(`[Vector Search] Skipped: ${err instanceof Error ? err.message : "not available"}`)
     vectorRank = new Map()
   }
+
+  // Drop anything that didn't clear the threshold in EITHER list — a
+  // weak token score below MIN_TOKEN_SCORE with no vector list membership
+  // (or vice versa) must not survive into the fused results. This is the
+  // enforcement point for "관련 없으면 아무것도 반환하지 않는다": without
+  // it, every token-matched page (however weak) was unconditionally kept.
+  const survivors = results.filter((r) => {
+    const tRank = tokenRank.get(normalizePath(r.path))
+    const vRank = vectorRank.get(pageIdFromRelPath(r.path))
+    return tRank !== undefined || vRank !== undefined
+  })
+  results.length = 0
+  results.push(...survivors)
 
   // RRF fusion: replace each result's score with
   //   1/(K + token_rank) + 1/(K + vector_rank)

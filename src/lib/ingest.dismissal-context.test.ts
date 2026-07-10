@@ -1,11 +1,13 @@
 /**
- * Stage 5 — verify that prior dismissals (counterexamples + rejection
- * log) reach the LLM by checking the system prompt sent to streamChat.
+ * Dismissal context — verify that prior dismissals (counterexamples +
+ * rejection log) reach the LLM by checking the system prompt sent to
+ * streamChat.
  *
  * The prompt-injection effect on the model output is non-deterministic,
  * so this test only confirms the *prompt context* is correct — that's
- * what Stage 5 needs to guarantee. The downstream "LLM dismisses" step
- * is best-effort (see development-plan.md §Stage 5 완료 조건).
+ * what dismissal context needs to guarantee. The downstream "LLM
+ * dismisses" step is best-effort (see development-plan.md §Dismissal
+ * Context 완료 조건).
  */
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
@@ -82,7 +84,7 @@ beforeEach(() => {
   __resetProjectLocksForTesting()
 })
 
-describe("Stage 5 dismissal context injection", () => {
+describe("dismissal context injection", () => {
   it("includes counterexample title + sources in the analysis prompt", async () => {
     const counterexample = [
       "---",

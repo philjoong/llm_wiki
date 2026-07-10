@@ -1,0 +1,5 @@
+name: "Persona Play Scenario"
+description: "A play scenario generated for a persona: which persona it targets and the ordered sequence of play steps the persona is expected to perform."
+fields:
+  페르소나: "The persona's name and description this scenario was generated for (e.g. skill level, play habits, traits)."
+  시나리오: "The scenario title and its ordered step sequence describing what the persona does during play."

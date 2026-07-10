@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildTestPlanMarkdown, sanitizeFileName } from "./export"
+import { buildTestPlanMarkdown, buildTestPlanDbFields, sanitizeFileName } from "./export"
 import { createEmptyPlan } from "./types"
 import type { TestCase } from "./types"
 
@@ -59,6 +59,45 @@ describe("buildTestPlanMarkdown", () => {
     expect(md).toContain("테스트케이스 (1건)")
     // the excluded case is still present on the plan object itself
     expect(plan.cases.some((c) => c.status === "excluded")).toBe(true)
+  })
+})
+
+describe("buildTestPlanDbFields", () => {
+  it("carries feature input and abstraction tags verbatim as narrative fields", () => {
+    const plan = createEmptyPlan("파이어볼")
+    plan.featureInput = "  파이어볼 스킬 설명  "
+    plan.abstraction = ["시전형 스킬", "쿨타임 존재"]
+    plan.cases = [makeCase({ purpose: "기본 동작 확인" })]
+
+    const fields = buildTestPlanDbFields(plan)
+
+    expect(fields["기능 정보"]).toBe("파이어볼 스킬 설명")
+    expect(fields["특성"]).toBe("시전형 스킬, 쿨타임 존재")
+    expect(Object.keys(fields)).toEqual(["기능 정보", "특성", "테스트케이스"])
+  })
+
+  it("excludes cases with status 'excluded' from the 테스트케이스 field", () => {
+    const plan = createEmptyPlan("파이어볼")
+    plan.cases = [
+      makeCase({ purpose: "포함 케이스" }),
+      makeCase({ purpose: "제외 케이스", status: "excluded" }),
+    ]
+
+    const fields = buildTestPlanDbFields(plan)
+
+    expect(fields["테스트케이스"]).toContain("포함 케이스")
+    expect(fields["테스트케이스"]).not.toContain("제외 케이스")
+  })
+
+  it("includes the axis/value combination and risk label per case", () => {
+    const plan = createEmptyPlan("파이어볼")
+    plan.axes = [{ id: "a1", name: "상태", values: ["사망"], enabled: true }]
+    plan.cases = [makeCase({ combination: { a1: "사망" }, risk: "high" })]
+
+    const fields = buildTestPlanDbFields(plan)
+
+    expect(fields["테스트케이스"]).toContain("상태=사망")
+    expect(fields["테스트케이스"]).toContain("[High]")
   })
 })
 

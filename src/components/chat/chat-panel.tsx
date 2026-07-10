@@ -4,16 +4,14 @@ import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message"
 import { ChatInput } from "./chat-input"
 import { ChatReferencePanel } from "./chat-reference-panel"
-import { useChatStore, chatMessagesToLLM } from "@/stores/chat-store"
+import { useChatStore, chatMessagesToLLM, type ChatStoreHook } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { executeIngestWrites } from "@/lib/ingest"
 import { listDirectory, readFile, deleteFile } from "@/commands/fs"
 import { searchWiki } from "@/lib/search"
-import { getGraphContext } from "@/lib/graph-qna"
+import { getGraphContext, formatGraphContextBlocks } from "@/lib/graph-qna"
 import { normalizePath, getRelativePath } from "@/lib/path-utils"
-import { loadPageGraphIndex, lookupPageGraphs } from "@/lib/page-graph-index"
-import { getGraphBackend } from "@/lib/graph-backend"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
 import { computeContextBudget } from "@/lib/context-budget"
@@ -32,13 +30,13 @@ function formatDate(timestamp: number): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" })
 }
 
-function ConversationSidebar() {
-  const conversations = useChatStore((s) => s.conversations)
-  const activeConversationId = useChatStore((s) => s.activeConversationId)
-  const messages = useChatStore((s) => s.messages)
-  const createConversation = useChatStore((s) => s.createConversation)
-  const deleteConversation = useChatStore((s) => s.deleteConversation)
-  const setActiveConversation = useChatStore((s) => s.setActiveConversation)
+function ConversationSidebar({ useStore }: { useStore: ChatStoreHook }) {
+  const conversations = useStore((s) => s.conversations)
+  const activeConversationId = useStore((s) => s.activeConversationId)
+  const messages = useStore((s) => s.messages)
+  const createConversation = useStore((s) => s.createConversation)
+  const deleteConversation = useStore((s) => s.deleteConversation)
+  const setActiveConversation = useStore((s) => s.setActiveConversation)
 
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
@@ -122,23 +120,35 @@ function ConversationSidebar() {
   )
 }
 
-export function ChatPanel() {
+export function ChatPanel({
+  useStore = useChatStore,
+  graphPrefixFilter,
+}: {
+  /** Store hook backing this panel's conversations. Defaults to the shared
+   * main-Chat store; pass a separate instance (createChatStore()) for a
+   * tab-scoped query widget so its conversations don't interleave with the
+   * main Chat tab's. */
+  useStore?: ChatStoreHook
+  /** Restricts graph selection to graphs whose name starts with this
+   * prefix (e.g. "casemap_"). Omit for the main Chat tab (all graphs). */
+  graphPrefixFilter?: string
+} = {}) {
   useSourceFiles() // Keep source file cache warm
   const chatReferencePreview = useWikiStore((s) => s.chatReferencePreview)
-  const activeConversationId = useChatStore((s) => s.activeConversationId)
-  const isStreaming = useChatStore((s) => s.isStreaming)
-  const streamingContent = useChatStore((s) => s.streamingContent)
-  const mode = useChatStore((s) => s.mode)
-  const addMessage = useChatStore((s) => s.addMessage)
-  const setStreaming = useChatStore((s) => s.setStreaming)
-  const appendStreamToken = useChatStore((s) => s.appendStreamToken)
-  const finalizeStream = useChatStore((s) => s.finalizeStream)
-  const createConversation = useChatStore((s) => s.createConversation)
-  const removeLastAssistantMessage = useChatStore((s) => s.removeLastAssistantMessage)
-  const maxHistoryMessages = useChatStore((s) => s.maxHistoryMessages)
+  const activeConversationId = useStore((s) => s.activeConversationId)
+  const isStreaming = useStore((s) => s.isStreaming)
+  const streamingContent = useStore((s) => s.streamingContent)
+  const mode = useStore((s) => s.mode)
+  const addMessage = useStore((s) => s.addMessage)
+  const setStreaming = useStore((s) => s.setStreaming)
+  const appendStreamToken = useStore((s) => s.appendStreamToken)
+  const finalizeStream = useStore((s) => s.finalizeStream)
+  const createConversation = useStore((s) => s.createConversation)
+  const removeLastAssistantMessage = useStore((s) => s.removeLastAssistantMessage)
+  const maxHistoryMessages = useStore((s) => s.maxHistoryMessages)
 
   // Derive active messages via selector to re-render on message changes
-  const allMessages = useChatStore((s) => s.messages)
+  const allMessages = useStore((s) => s.messages)
   const activeMessages = activeConversationId
     ? allMessages.filter((m) => m.conversationId === activeConversationId)
     : []
@@ -162,7 +172,7 @@ export function ChatPanel() {
   const handleSend = useCallback(
     async (text: string, questionTypeId?: string, useEmbedding?: boolean) => {
       // Auto-create a conversation if none is active
-      let convId = useChatStore.getState().activeConversationId
+      let convId = useStore.getState().activeConversationId
       if (!convId) {
         convId = createConversation()
       }
@@ -224,8 +234,6 @@ export function ChatPanel() {
             _wikiStore.getState().setEmbeddingConfig(embeddingRestoreValue)
           }
         }
-        const topSearchResults = searchResults.slice(0, 10)
-        const keptPathSet = new Set(topSearchResults.map((r) => r.path))
 
         // ── Trim index by relevance if over budget ─────────────
         let index = rawIndex
@@ -254,51 +262,10 @@ export function ChatPanel() {
           }
         }
 
-        // ── Phase 2: Graph 3-hop expansion via the graph backend ────────
-        const pageGraphIndex = await loadPageGraphIndex(pp)
-        const searchHitPaths = new Set(topSearchResults.map((r) => r.path))
-        const graphExpansions: { title: string; path: string; relevance: number }[] = []
-        const expandedPaths = new Set<string>()
-        const graphBackend = await getGraphBackend(pp)
-
-        for (const result of topSearchResults) {
-          const relPath = getRelativePath(result.path, pp)
-          const graphs = lookupPageGraphs(pageGraphIndex, relPath)
-          for (const graphName of graphs) {
-            let snapshot
-            try {
-              snapshot = await graphBackend.queryGraph(project.name, graphName, {
-                type: "neighbors",
-                pagePath: relPath,
-                depth: 2,
-              })
-            } catch {
-              continue
-            }
-            for (const node of snapshot.nodes) {
-              const nbPath = node.pagePath
-              if (typeof nbPath !== "string" || !nbPath || nbPath === relPath) continue
-              const absPath = nbPath.startsWith("/") || nbPath.match(/^[A-Za-z]:/) ? nbPath : `${pp}/${nbPath}`
-              const normalizedAbs = normalizePath(absPath)
-              if (searchHitPaths.has(normalizedAbs)) continue
-              if (expandedPaths.has(nbPath)) continue
-              if (!keptPathSet.has(normalizedAbs) && !keptPathSet.has(nbPath)) continue
-              expandedPaths.add(nbPath)
-              graphExpansions.push({ title: nbPath, path: normalizedAbs, relevance: 1.0 })
-            }
-          }
-        }
-
-        // ── Phase 2.5: Cypher Knowledge Retrieval ─────────────
-        const cypherResults = await getGraphContext(text, pp, project.name, llmConfig)
-        const cypherContext = cypherResults.length > 0
-          ? [
-              "## Knowledge Graph Context",
-              ...cypherResults.map((r) => 
-                `### Graph: ${r.graphName}\nReasoning: ${r.reasoning}\nQuery: ${r.query}\nResult: ${JSON.stringify(r.result, null, 2)}`
-              )
-            ].join("\n\n")
-          : ""
+        // ── Step 3: Graph Q&A (relation / entity / path queries) ─────
+        const graphBlocks = await getGraphContext(text, pp, project.name, llmConfig, graphPrefixFilter)
+        const noGraphContext = graphBlocks.length === 0
+        const cypherContext = formatGraphContextBlocks(graphBlocks)
 
         // ── Phase 3 & 4: Page budget control ───────────────────
         let usedChars = 0
@@ -321,21 +288,19 @@ export function ChatPanel() {
         }
 
         // P0: Title matches
-        for (const r of topSearchResults.filter((r) => r.titleMatch)) {
+        for (const r of searchResults.filter((r) => r.titleMatch)) {
           await tryAddPage(r.title, r.path, 0)
         }
         // P1: Content matches
-        for (const r of topSearchResults.filter((r) => !r.titleMatch)) {
+        for (const r of searchResults.filter((r) => !r.titleMatch)) {
           await tryAddPage(r.title, r.path, 1)
         }
-        // P2: Graph expansions
-        for (const exp of graphExpansions) {
-          await tryAddPage(exp.title, exp.path, 2)
-        }
-        // P3: Overview fallback
-        if (relevantPages.length === 0) {
-          await tryAddPage("Overview", `${pp}/db/overview.md`, 3)
-        }
+        // No relevant document → no fallback page. searchWiki's threshold
+        // (Phase B) already means "empty" is a considered answer, not just
+        // "nothing happened to match" — showing Overview here would violate
+        // "관련 없으면 아무것도 반환하지 않는다" by handing the LLM an
+        // unrelated page to answer from.
+        const noRelevantDocs = relevantPages.length === 0
 
         const pagesContext = relevantPages.length > 0
           ? relevantPages.map((p, i) =>
@@ -357,6 +322,13 @@ export function ChatPanel() {
               "## Rules",
               "- Answer based ONLY on the numbered wiki pages provided below.",
               "- If the provided pages don't contain enough information, say so honestly.",
+              noRelevantDocs
+                ? "- No wiki page relevant to this question was found. State honestly that you could not find a relevant document in the wiki — do NOT invent an answer or use unrelated background knowledge."
+                : "",
+              noGraphContext
+                ? "- No relevant knowledge graph relations, entities, or connecting path were found for this question. If the question asks how two things relate and the graph has no data on it, say honestly that you could not find a direct connection — do NOT invent a relationship."
+                : "",
+              "- If the user's message contains multiple distinct questions, answer each one separately and clearly (e.g. numbered or with a short heading per question) rather than blending them into a single combined answer.",
               "- Use [[wikilink]] syntax to reference wiki pages.",
               "- When citing information, use the page number in brackets, e.g. [1], [2].",
               "- At the END of your response, add a `## Sources` section listing every page you cited as a wikilink, one per line, in the order you cited them.",
@@ -419,7 +391,7 @@ export function ChatPanel() {
 
       // ── Conversation history with count limit ────────────────
       // Only include messages from the active conversation, last N messages
-      const activeConvMessages = useChatStore
+      const activeConvMessages = useStore
         .getState()
         .getActiveMessages()
         .filter((m) => m.role === "user" || m.role === "assistant")
@@ -472,7 +444,7 @@ export function ChatPanel() {
         controller.signal,
       )
     },
-    [llmConfig, addMessage, setStreaming, appendStreamToken, finalizeStream, createConversation, maxHistoryMessages],
+    [llmConfig, addMessage, setStreaming, appendStreamToken, finalizeStream, createConversation, maxHistoryMessages, useStore, graphPrefixFilter],
   )
 
   const handleStop = useCallback(() => {
@@ -483,7 +455,7 @@ export function ChatPanel() {
   const handleRegenerate = useCallback(async () => {
     if (isStreaming) return
     // Find the last user message in active conversation
-    const active = useChatStore.getState().getActiveMessages()
+    const active = useStore.getState().getActiveMessages()
     const lastUserMsg = [...active].reverse().find((m) => m.role === "user")
     if (!lastUserMsg) return
     // Remove the last assistant reply, then re-send
@@ -494,16 +466,16 @@ export function ChatPanel() {
     // so also remove the original to avoid duplication)
     // Actually: just call handleSend — but it adds a user message. To avoid dupe,
     // we remove the last user message too and let handleSend re-add it.
-    const store = useChatStore.getState()
+    const store = useStore.getState()
     const updatedActive = store.getActiveMessages()
     const lastUser = [...updatedActive].reverse().find((m) => m.role === "user")
     if (lastUser) {
-      useChatStore.setState((s) => ({
+      useStore.setState((s) => ({
         messages: s.messages.filter((m) => m.id !== lastUser.id),
       }))
     }
     handleSend(lastUserMsg.content)
-  }, [isStreaming, removeLastAssistantMessage, handleSend])
+  }, [isStreaming, removeLastAssistantMessage, handleSend, useStore])
 
   const handleWriteToWiki = useCallback(async () => {
     if (!project) return
@@ -526,7 +498,7 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-row overflow-hidden">
-      <ConversationSidebar />
+      <ConversationSidebar useStore={useStore} />
 
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         {!activeConversationId ? (

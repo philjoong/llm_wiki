@@ -15,8 +15,9 @@ export interface IngestTask {
   projectId: string
   sourcePath: string  // relative to project: "raw/sources/folder/file.pdf"
   folderContext: string  // e.g. "AI-Research > papers" or ""
-  /** Optional data type id — when set, Stage 1 is replaced by a structured
-   *  extraction pass that fills each field defined in the data type YAML. */
+  /** Optional data type id — when set, decomposition is replaced by a
+   *  structured extraction pass that fills each field defined in the data
+   *  type YAML. */
   dataTypeId?: string
   status: "pending" | "processing" | "done" | "failed"
   addedAt: number

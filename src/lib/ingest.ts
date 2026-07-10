@@ -276,19 +276,19 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
   return { blocks, warnings }
 }
 
-// Stage 1 SECTION markers. Mirror the FILE-block markers above:
+// Decomposition SECTION markers. Mirror the FILE-block markers above:
 // line-anchored, case-insensitive, tolerant of interior whitespace. The
 // `source_range` rides on the opener line (it's a single-line locator —
 // heading path / sheet+range / timestamp); the body between the markers
-// is VERBATIM source text. Verbatim text is exactly why Stage 1 left JSON
-// behind (Fix 25): markdown escapes like `\[`, `\]`, `\(`, `\)` are invalid
-// JSON escape sequences and made JSON.parse throw, silently dropping the
-// whole chunk. A delimiter format carries any bytes without escaping.
+// is VERBATIM source text. Verbatim text is exactly why decomposition left
+// JSON behind (Fix 25): markdown escapes like `\[`, `\]`, `\(`, `\)` are
+// invalid JSON escape sequences and made JSON.parse throw, silently dropping
+// the whole chunk. A delimiter format carries any bytes without escaping.
 const SECTION_OPENER_LINE = /^---\s*SECTION:\s*(.*?)\s*---\s*$/i
 const SECTION_CLOSER_LINE = /^---\s*END\s+SECTION\s*---\s*$/i
 
 /**
- * Parse a Stage 1 decomposition response into sections.
+ * Parse a decomposition response into sections.
  *
  * Deliberately NOT code-fence-aware (unlike parseFileBlocks): the body is
  * arbitrary verbatim source markdown that may contain unbalanced ``` fences,
@@ -303,10 +303,10 @@ const SECTION_CLOSER_LINE = /^---\s*END\s+SECTION\s*---\s*$/i
  *
  * Exported for tests.
  */
-export function parseStage1Sections(text: string): Stage1Section[] {
+export function parseDecomposedSections(text: string): DecomposedSection[] {
   const normalized = text.replace(/\r\n/g, "\n")
   const lines = normalized.split("\n")
-  const sections: Stage1Section[] = []
+  const sections: DecomposedSection[] = []
 
   let i = 0
   while (i < lines.length) {
@@ -507,11 +507,11 @@ async function callModel(
   signal: AbortSignal | undefined,
   projectPath: string,
   maxTokens?: number,
-  // Stage 1 emits a delimiter-based SECTION format (not JSON) so verbatim
-  // source_text never has to round-trip through a JSON string. When false,
-  // we must NOT force `response_format: json_object` on HTTP providers — that
-  // would make the model wrap the SECTION blocks in JSON. CLI providers
-  // ignore response_format either way.
+  // Decomposition emits a delimiter-based SECTION format (not JSON) so
+  // verbatim source_text never has to round-trip through a JSON string.
+  // When false, we must NOT force `response_format: json_object` on HTTP
+  // providers — that would make the model wrap the SECTION blocks in JSON.
+  // CLI providers ignore response_format either way.
   jsonMode: boolean = true,
 ): Promise<string> {
   if (isCliProvider(llmConfig.provider)) {
@@ -571,7 +571,7 @@ async function callModel(
 const JSON_ONLY_INSTRUCTION =
   "Output ONLY a JSON object — no prose, no code fences. First character must be `{`."
 
-/** Stage 1 counterpart to JSON_ONLY_INSTRUCTION. Stage 1 emits a
+/** Decomposition counterpart to JSON_ONLY_INSTRUCTION. Decomposition emits a
  * delimiter-based SECTION format instead of JSON so verbatim source_text
  * (which routinely contains JSON-hostile markdown escapes like `\[` and
  * `\(`) never has to be escaped or round-tripped through a JSON string. */
@@ -619,11 +619,11 @@ export async function autoIngestImpl(
   // pages already live there.
   const dbIndex = await buildDbIndex(pp)
 
-  // Stage 5 — load prior dismissals (counterexamples + rejection log) so
-  // the analysis prompt can re-apply the user's earlier decisions instead
-  // of re-proposing the same modification card every time the source is
-  // re-ingested. `pending/` is intentionally not loaded — those entries
-  // are awaiting human triage and shouldn't bias the model.
+  // Dismissal context — load prior dismissals (counterexamples + rejection
+  // log) so the analysis prompt can re-apply the user's earlier decisions
+  // instead of re-proposing the same modification card every time the
+  // source is re-ingested. `pending/` is intentionally not loaded — those
+  // entries are awaiting human triage and shouldn't bias the model.
   const [counterexamples, rejectionLog] = await Promise.all([
     loadCounterexamples(pp),
     loadRejectionLog(pp),
@@ -643,9 +643,9 @@ export async function autoIngestImpl(
   const allWarnings: string[] = []
   const allProposals: ModificationProposal[] = []
   const allReviewItems: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = []
-  // Chunk-level failures are isolated: a chunk that fails Stage 1/2 is
-  // recorded here and skipped so the remaining chunks still ingest. The
-  // whole document no longer aborts on the first bad chunk.
+  // Chunk-level failures are isolated: a chunk that fails decomposition or
+  // graph assignment is recorded here and skipped so the remaining chunks
+  // still ingest. The whole document no longer aborts on the first bad chunk.
   const failedChunks: Array<{ chunk: number; stage: string; error: string }> = []
   // Chunks where the data-type extraction legitimately found nothing (all
   // fields empty/placeholder). Tracked separately from failedChunks — this
@@ -653,11 +653,11 @@ export async function autoIngestImpl(
   const emptyDataTypeChunks: number[] = []
   // dbIndex is refreshed between chunks so later chunks see what earlier
   // chunks wrote — this lets the LLM align paths with what already exists
-  // and routes real overwrite conflicts through Stage 4's proposal flow
-  // instead of clobbering pages chunk-1 just generated.
+  // and routes real overwrite conflicts through the modification-proposal
+  // flow instead of clobbering pages chunk-1 just generated.
   let currentDbIndex = dbIndex
 
-  // graphPolicy is mutable — Stage 2 may register new graphs into it.
+  // graphPolicy is mutable — graph assignment may register new graphs into it.
   let graphPolicy = await loadGraphPolicy(pp)
 
   for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
@@ -665,16 +665,16 @@ export async function autoIngestImpl(
     const chunkLabel = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length} · ` : ""
     const writtenBeforeChunk = allWrittenPaths.length
 
-    // ── Stage 1: Decomposition — extract concepts + relations ────────
-    // When a data type is selected, Stage 1 is replaced by a structured
-    // extraction pass: the LLM fills each field defined in the data type
-    // YAML and produces a single md file. The result is fed to Stage 2
-    // as a single section, identical to the standard path.
+    // ── Decomposition — extract concepts + relations ────────
+    // When a data type is selected, decomposition is replaced by a
+    // structured extraction pass: the LLM fills each field defined in the
+    // data type YAML and produces a single md file. The result is fed to
+    // graph assignment as a single section, identical to the standard path.
     activity.updateItem(activityId, { detail: `${chunkLabel}${dataTypeId ? "Extracting structured fields..." : "Decomposing document..."}` })
 
-    let stage1Raw = ""
+    let decompositionRaw = ""
     if (dataTypeId) {
-      // ── Stage 1 replacement: structured extraction via data type ────
+      // ── Decomposition replacement: structured extraction via data type ────
       let dataType: import("@/lib/data-types").DataType | undefined
       try {
         const allDataTypes = await loadDataTypes(pp)
@@ -691,7 +691,7 @@ export async function autoIngestImpl(
           .join("\n")
         const systemPrompt = `You are extracting structured information from a document according to a predefined schema.\n\nExtract the following fields from the document. If a field cannot be found, write "정보 없음" (or "N/A" if the document language is English).\n\nSchema: **${dataType.name}**\n${dataType.description ? `Description: ${dataType.description}\n` : ""}Fields to extract:\n${fieldsBlock}\n\nOutput a single markdown document with each field as a ## heading followed by the extracted content. Do NOT wrap your response in a code fence.`
         try {
-          stage1Raw = await callModel(
+          decompositionRaw = await callModel(
             llmConfig,
             systemPrompt,
             `Extract structured fields from this document.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n---\n\n${chunk}`,
@@ -702,253 +702,118 @@ export async function autoIngestImpl(
           )
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
-          activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 (data type extraction) failed: ${msg} — skipping chunk` })
-          failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (data type extraction)", error: msg })
+          activity.updateItem(activityId, { detail: `${chunkLabel}Decomposition (data type extraction) failed: ${msg} — skipping chunk` })
+          failedChunks.push({ chunk: chunkIdx + 1, stage: "decomposition (data type extraction)", error: msg })
           continue
         }
 
-        if (isEmptyDataTypeExtraction(stage1Raw)) {
+        if (isEmptyDataTypeExtraction(decompositionRaw)) {
           activity.updateItem(activityId, { detail: `${chunkLabel}No "${dataType.name}" data found — skipping chunk` })
           emptyDataTypeChunks.push(chunkIdx + 1)
           continue
         }
 
         // Wrap the extracted md as a single SECTION with a page_path fixed
-        // to this data type + source file. Without a page_path the section
-        // would fall into the legacy Stage-2-decides-page_path route, where
-        // the LLM is free to split one extraction into several triples on
-        // several pages — i.e. several documents from one data type. Giving
-        // it a page_path up front routes it through Stage 3 directly, so
-        // exactly one document is produced per (data type, source file).
+        // to this data type + source file. Without a page_path, decomposition
+        // would fail this chunk instead of writing a file — this branch fixes
+        // the path up front so exactly one document is produced per
+        // (data type, source file), instead of relying on the LLM to assign one.
         const dataTypePagePath = `db/${dataTypeId}/${slugifyForPagePath(fileName)}.md`
-        stage1Raw = `---SECTION: ${fileName} | ${dataTypePagePath}---\n${stage1Raw}\n---END SECTION---`
+        decompositionRaw = `---SECTION: ${fileName} | ${dataTypePagePath}---\n${decompositionRaw}\n---END SECTION---`
       } else {
-        const msg = `Data type "${dataTypeId}" not found. Ingest stopped instead of falling back to standard Stage 1.`
+        const msg = `Data type "${dataTypeId}" not found. Ingest stopped instead of falling back to standard decomposition.`
         console.warn(`[ingest] ${msg}`)
         activity.updateItem(activityId, { status: "error", detail: msg })
         throw new Error(msg)
       }
     }
 
-    if (!stage1Raw) {
+    if (!decompositionRaw) {
       try {
-        stage1Raw = await callModel(
+        decompositionRaw = await callModel(
           llmConfig,
           buildDecompositionPrompt(currentDbIndex, chunk, dismissalContext),
           `Decompose this source document into SECTION blocks with their verbatim text.\n\n**File:** ${fileName}${folderContext ? `\n**Folder context:** ${folderContext}` : ""}${chunks.length > 1 ? `\n**Section:** ${chunkIdx + 1} of ${chunks.length}` : ""}\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${chunk}`,
           signal,
           pp,
           16000,
-          false, // Stage 1 uses the SECTION delimiter format, not JSON.
+          false, // Decomposition uses the SECTION delimiter format, not JSON.
         )
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 failed: ${msg} — skipping chunk` })
-        failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (model call)", error: msg })
+        activity.updateItem(activityId, { detail: `${chunkLabel}Decomposition failed: ${msg} — skipping chunk` })
+        failedChunks.push({ chunk: chunkIdx + 1, stage: "decomposition (model call)", error: msg })
         continue
       }
     }
 
-    invoke("app_debug", { message: `[ingest:stage1] ${chunkLabel}file=${fileName} chars=${stage1Raw.length}` }).catch(() => {})
+    invoke("app_debug", { message: `[ingest:decomposition] ${chunkLabel}file=${fileName} chars=${decompositionRaw.length}` }).catch(() => {})
 
-    const stage1Sections = parseStage1Sections(stage1Raw)
+    const decomposedSections = parseDecomposedSections(decompositionRaw)
 
-    if (stage1Sections.length === 0) {
-      const errMsg = `Stage 1 produced no sections. LLM raw output (${stage1Raw.length} chars): ${stage1Raw.slice(0, 2000)}`
-      invoke("app_debug", { message: `[ingest:stage1:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
-      activity.updateItem(activityId, { detail: `${chunkLabel}Stage 1 failed: no sections produced — skipping chunk` })
-      failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 1 (no sections)", error: `no parseable sections from ${stage1Raw.length} chars of output` })
+    if (decomposedSections.length === 0) {
+      const errMsg = `Decomposition produced no sections. LLM raw output (${decompositionRaw.length} chars): ${decompositionRaw.slice(0, 2000)}`
+      invoke("app_debug", { message: `[ingest:decomposition:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
+      activity.updateItem(activityId, { detail: `${chunkLabel}Decomposition failed: no sections produced — skipping chunk` })
+      failedChunks.push({ chunk: chunkIdx + 1, stage: "decomposition (no sections)", error: `no parseable sections from ${decompositionRaw.length} chars of output` })
       continue
     }
 
-    // ── Stage 3 (new pipeline): sections with page_path → write first ──
-    // Stage 1 now decides page_path. Sections that include a page_path go
-    // through Stage 3 (file write) before Stage 2 (graph assignment) so
-    // graph sync only happens after the user has confirmed the document.
-    const sectionsWithPath = stage1Sections.filter((s) => s.page_path && isSafeIngestPath(s.page_path))
-    const sectionsWithoutPath = stage1Sections.filter((s) => !s.page_path || !isSafeIngestPath(s.page_path))
-
-    if (sectionsWithPath.length > 0) {
-      activity.updateItem(activityId, { detail: `${chunkLabel}Writing db/ pages...` })
-      const generation3 = buildFileBlocksFromSections(sectionsWithPath, fileName)
-      invoke("app_debug", { message: `[ingest:stage3-new] ${chunkLabel}file=${fileName} sections=${sectionsWithPath.length} chars=${generation3.length}` }).catch(() => {})
-
-      const { writtenPaths: wp3, warnings: ww3, hardFailures: hf3, proposals: pr3 } = await writeFileBlocks(pp, generation3, fileName)
-      const writeDebug3 = `[ingest:write3] ${chunkLabel}file=${fileName} written=${wp3.length} hardFailures=${hf3.length}`
-      console.log(writeDebug3)
-      invoke("app_debug", { message: writeDebug3 }).catch(() => {})
-
-      allWrittenPaths.push(...wp3)
-      allHardFailures.push(...hf3)
-      allWarnings.push(...ww3)
-
-      // Sections that wrote successfully → run Stage 2 immediately.
-      const writtenPagePaths = new Set(wp3.filter((p) => !p.startsWith("pending/")))
-      const confirmedSections = sectionsWithPath.filter((s) => s.page_path && writtenPagePaths.has(s.page_path))
-
-      if (confirmedSections.length > 0) {
-        const projectName = useWikiStore.getState().project?.name || "default"
-        activity.updateItem(activityId, { detail: `${chunkLabel}Assigning to graphs (confirmed docs)...` })
-        try {
-          const stage2Result = await runStage2Core(llmConfig, confirmedSections, graphPolicy, signal, pp, chunkLabel, fileName)
-          graphPolicy = stage2Result.policy
-          if (stage2Result.reviewItem) allReviewItems.push(stage2Result.reviewItem)
-          if (stage2Result.assignments.length > 0) {
-            const { clean, conflicts } = await checkEntityConflicts(stage2Result.assignments, pp)
-            allReviewItems.push(...conflicts)
-            if (clean.length > 0) {
-              const graphSummary = await syncGraphToBackend(pp, projectName, clean, (msg) => {
-                activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
-              })
-              invoke("app_debug", { message: `[ingest:graph3] ${chunkLabel}${graphSummary}` }).catch(() => {})
-            }
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          console.warn(`[ingest] Stage 2 (confirmed docs) failed: ${msg}`)
-        }
-      }
-
-      // Sections with conflicts (parked as proposals) → attach pendingSections
-      // so Stage 2 can run after Approve.
-      for (const proposal of pr3) {
-        const targetSections = sectionsWithPath.filter((s) => s.page_path === proposal.targetPath)
-        allProposals.push({ ...proposal, pendingSections: targetSections.length > 0 ? targetSections : undefined })
-      }
+    // Decomposition must assign a page_path to every section — graph
+    // assignment (and the file write it depends on) has no other way to
+    // know where a section belongs. A section missing a safe page_path
+    // means the model didn't follow the SECTION format; fail this chunk
+    // instead of guessing a path for it.
+    const sectionsMissingPath = decomposedSections.filter((s) => !s.page_path || !isSafeIngestPath(s.page_path))
+    if (sectionsMissingPath.length > 0) {
+      const errMsg = `Decomposition produced ${sectionsMissingPath.length}/${decomposedSections.length} section(s) without a valid page_path.`
+      invoke("app_debug", { message: `[ingest:decomposition:ERROR] ${chunkLabel}${errMsg}` }).catch(() => {})
+      activity.updateItem(activityId, { detail: `${chunkLabel}Decomposition failed: missing page_path — skipping chunk` })
+      failedChunks.push({ chunk: chunkIdx + 1, stage: "decomposition (missing page_path)", error: errMsg })
+      continue
     }
 
-    // ── Stage 2 (legacy path): sections without page_path ────────────
-    // Sections where Stage 1 didn't provide a page_path fall back to the
-    // original Stage 2 → Stage 3 → sync order.
-    if (sectionsWithoutPath.length > 0) {
-      activity.updateItem(activityId, { detail: `${chunkLabel}Assigning to graphs...` })
+    activity.updateItem(activityId, { detail: `${chunkLabel}Writing db/ pages...` })
+    const fileBlocks = buildFileBlocksFromSections(decomposedSections, fileName)
+    invoke("app_debug", { message: `[ingest:filewrite] ${chunkLabel}file=${fileName} sections=${decomposedSections.length} chars=${fileBlocks.length}` }).catch(() => {})
 
-      let stage2Raw = ""
+    const { writtenPaths: writtenThisChunk, warnings: writeWarnings, hardFailures: writeHardFailures, proposals: writeProposals } = await writeFileBlocks(pp, fileBlocks, fileName)
+    const writeDebug = `[ingest:write] ${chunkLabel}file=${fileName} written=${writtenThisChunk.length} hardFailures=${writeHardFailures.length}`
+    console.log(writeDebug)
+    invoke("app_debug", { message: writeDebug }).catch(() => {})
+
+    allWrittenPaths.push(...writtenThisChunk)
+    allHardFailures.push(...writeHardFailures)
+    allWarnings.push(...writeWarnings)
+
+    // Sections that wrote successfully → run graph assignment immediately.
+    const writtenPagePaths = new Set(writtenThisChunk.filter((p) => !p.startsWith("pending/")))
+    const confirmedSections = decomposedSections.filter((s) => s.page_path && writtenPagePaths.has(s.page_path))
+
+    if (confirmedSections.length > 0) {
+      const projectName = useWikiStore.getState().project?.name || "default"
+      activity.updateItem(activityId, { detail: `${chunkLabel}Assigning to graphs (confirmed docs)...` })
       try {
-        const entityHints = buildEntityHintsForPrompt(await loadEntityDict(pp))
-        stage2Raw = await callModel(
-          llmConfig,
-          buildGraphAssignmentPrompt(buildGraphPolicyPrompt(graphPolicy), entityHints),
-          `Read the sections, then fill in the empty fields of each seed triple below. Do not add or rename any keys inside triple objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into triples. You may add additional triple objects using the same schema when one source_text contains multiple facts.\n\n${JSON_ONLY_INSTRUCTION}\n\n${buildStage2Scaffold(sectionsWithoutPath)}`,
-          signal,
-          pp,
-        )
+        const graphAssignmentResult = await runGraphAssignment(llmConfig, confirmedSections, graphPolicy, signal, pp, chunkLabel, fileName)
+        graphPolicy = graphAssignmentResult.policy
+        if (graphAssignmentResult.reviewItem) allReviewItems.push(graphAssignmentResult.reviewItem)
+        if (graphAssignmentResult.assignments.length > 0) {
+          const { clean, conflicts } = await checkEntityConflicts(graphAssignmentResult.assignments, pp)
+          allReviewItems.push(...conflicts)
+          if (clean.length > 0) {
+            const graphSummary = await syncGraphToBackend(pp, projectName, clean, (msg) => {
+              activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
+            })
+            invoke("app_debug", { message: `[ingest:graph] ${chunkLabel}${graphSummary}` }).catch(() => {})
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        activity.updateItem(activityId, { detail: `${chunkLabel}Stage 2 failed: ${msg} — skipping fallback sections` })
-        failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 2 (model call, no-path sections)", error: msg })
-        // Don't `continue` here — sectionsWithPath may have already written files above.
-      }
-
-      if (stage2Raw) {
-        let parsed: Stage2Triple[] = []
-        try {
-          const cleaned = stage2Raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
-          const obj = JSON.parse(cleaned)
-          parsed = hydrateStage2Assignments(
-            Array.isArray(obj) ? obj : (obj.triples ?? []),
-            sectionsWithoutPath,
-          )
-        } catch {
-          // parse failure — treat as empty
-        }
-
-        if (parsed.length === 0) {
-          invoke("app_debug", { message: `[ingest:stage2:EMPTY] ${chunkLabel}no-path sections produced no triples` }).catch(() => {})
-          failedChunks.push({ chunk: chunkIdx + 1, stage: "Stage 2 (no assignments)", error: `no assignments from ${sectionsWithoutPath.length} section(s)` })
-        } else {
-          const policyUpdate = applyStage2GraphPolicyUpdates(parsed, graphPolicy)
-          graphPolicy = policyUpdate.policy
-          if (policyUpdate.changed) {
-            try { await saveGraphPolicy(pp, graphPolicy) } catch { /* non-fatal */ }
-          }
-
-          const failures = validateStage2(parsed, graphPolicy)
-          const failedIndexes = new Set(failures.map((f) => f.assignmentIndex))
-          const assignments: Stage2Triple[] = parsed.filter((_, index) => !failedIndexes.has(index))
-
-          if (failures.length > 0) {
-            const failureDetail = failures.map((f) => `${f.page_path || f.concept} [${f.graph || "no graph"}]: ${f.reason}`).join("; ")
-            invoke("app_debug", { message: `[ingest:stage2:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length} failures=[${failureDetail}]` }).catch(() => {})
-
-            const overflowMap = new Map<string, { newTypes: Set<string>; paths: string[] }>()
-            for (const f of failures) {
-              if (!f.graph || !f.overflowTypes?.length) continue
-              const entry = overflowMap.get(f.graph) ?? { newTypes: new Set(), paths: [] }
-              for (const t of f.overflowTypes) entry.newTypes.add(t)
-              if (f.page_path) entry.paths.push(f.page_path)
-              overflowMap.set(f.graph, entry)
-            }
-
-            const overflowEntries: OverflowEntry[] = Array.from(overflowMap.entries()).map(([graph, { newTypes, paths }]) => ({
-              graph,
-              newTypes: Array.from(newTypes),
-              existingTypes: graphPolicy.graphRelationTypes[graph] ?? [],
-              suggestedGraph: `${graph}_ext`,
-              affectedPaths: paths,
-            }))
-            const hasOverflow = overflowEntries.length > 0
-            const chunkSuffix = chunks.length > 1 ? ` (chunk ${chunkIdx + 1}/${chunks.length})` : ""
-            allReviewItems.push({
-              type: "suggestion",
-              stage: "primary",
-              title: `${summarizeStage2FailureTitle(failures, fileName)}${chunkSuffix}`,
-              description: failures.map(formatStage2FailureLine).join("\n"),
-              sourcePath: sp,
-              affectedPages: [...new Set(failures.map((f) => f.page_path).filter((p): p is string => Boolean(p)))],
-              overflowEntries: hasOverflow ? overflowEntries : undefined,
-              options: hasOverflow
-                ? [
-                    ...overflowEntries.map((e) => ({
-                      label: `Create "${e.suggestedGraph}"`,
-                      action: `overflow:create:${e.graph}:${e.suggestedGraph}:${e.newTypes.join(",")}`,
-                    })),
-                    { label: "Dismiss", action: "Dismiss" },
-                  ]
-                : [{ label: "Dismiss", action: "Dismiss" }],
-            })
-          }
-
-          invoke("app_debug", { message: `[ingest:stage2] ${chunkLabel}file=${fileName} triples=${assignments.length} skipped=${failures.length}` }).catch(() => {})
-
-          activity.updateItem(activityId, { detail: `${chunkLabel}Writing db/ pages...` })
-          const generation = buildFileBlocksFromAssignments(assignments, fileName)
-          const { writtenPaths, warnings: writeWarnings, hardFailures, proposals } = await writeFileBlocks(pp, generation, fileName)
-
-          const writeDebug = `[ingest:write] ${chunkLabel}file=${fileName} written=${writtenPaths.length} hardFailures=${hardFailures.length}`
-          console.log(writeDebug)
-          invoke("app_debug", { message: writeDebug }).catch(() => {})
-
-          allWrittenPaths.push(...writtenPaths)
-          allHardFailures.push(...hardFailures)
-          allWarnings.push(...writeWarnings)
-          allProposals.push(...proposals)
-
-          if (writtenPaths.length > 0) {
-            const projectName = useWikiStore.getState().project?.name || "default"
-            activity.updateItem(activityId, { detail: `${chunkLabel}Syncing knowledge graph...` })
-            try {
-              const { clean, conflicts } = await checkEntityConflicts(assignments, pp)
-              allReviewItems.push(...conflicts)
-              if (clean.length > 0) {
-                const graphSummary = await syncGraphToBackend(pp, projectName, clean, (msg) => {
-                  activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
-                })
-                const graphDebug = `[ingest:graph] ${chunkLabel}${graphSummary}`
-                console.log(graphDebug)
-                invoke("app_debug", { message: graphDebug }).catch(() => {})
-              }
-            } catch (err) {
-              const graphErrMsg = `Knowledge graph sync failed: ${err instanceof Error ? err.message : String(err)}`
-              console.warn(`[ingest] ${graphErrMsg}`)
-              invoke("app_debug", { message: `[ingest:graph:ERROR] ${chunkLabel}${graphErrMsg}` }).catch(() => {})
-              activity.updateItem(activityId, { detail: `${chunkLabel}${graphErrMsg}`, status: "error" })
-              return allWrittenPaths
-            }
-          }
-        }
+        console.warn(`[ingest] Graph assignment (confirmed docs) failed: ${msg}`)
       }
     }
+
+    allProposals.push(...writeProposals)
 
     // Refresh dbIndex for the next chunk so it sees what this chunk
     // just wrote. Skip on the final chunk — no consumer.
@@ -1014,10 +879,10 @@ export async function autoIngestImpl(
   }
 
   // ── Step 4: Append modification cards ────────────────────────
-  // Stage 4 — append a modification card for every proposal the writer
-  // parked. These items always run in their own card (the store skips
-  // dedupe for `modification`) so two parallel conflicts can't collapse
-  // into one and lose a parked draft.
+  // Modification proposal — append a modification card for every proposal
+  // the writer parked. These items always run in their own card (the store
+  // skips dedupe for `modification`) so two parallel conflicts can't
+  // collapse into one and lose a parked draft.
   for (const proposal of allProposals) {
     allReviewItems.push({
       type: "modification",
@@ -1205,8 +1070,8 @@ function stripFrontmatter(content: string): string {
  * "Materially different" check between an incoming generated page and
  * what's already on disk. Compares post-frontmatter body trimmed of
  * trailing whitespace. Equal bodies are treated as a benign re-ingest
- * (sources will be merged), differing bodies trigger Stage 4's
- * modification flow.
+ * (sources will be merged), differing bodies trigger the modification
+ * proposal flow.
  */
 function bodiesMatch(a: string, b: string): boolean {
   return stripFrontmatter(a).trim() === stripFrontmatter(b).trim()
@@ -1235,10 +1100,10 @@ async function writeFileBlocks(
   // instead of replaying the partial result forever.
   const hardFailures: string[] = []
 
-  // Stage 4 — modification proposals: db/ pages whose target already
-  // exists with materially different content are parked under
-  // `pending/_proposals/...` instead of overwriting. The caller turns
-  // each proposal into a `modification` review card.
+  // Modification proposal — db/ pages whose target already exists with
+  // materially different content are parked under `pending/_proposals/...`
+  // instead of overwriting. The caller turns each proposal into a
+  // `modification` review card.
   const proposals: ModificationProposal[] = []
   const runStamp = Date.now()
   let proposalIdx = 0
@@ -1297,7 +1162,7 @@ async function writeFileBlocks(
         const { mergeSourcesIntoContent, mergeSourceRefsIntoContent } = await import("./sources-merge")
         const existing = await tryReadFile(fullPath)
 
-        // Stage 4 — conflict detection (db/ pages only).
+        // Modification proposal — conflict detection (db/ pages only).
         // If the target already exists with materially different body
         // content, refuse to overwrite. Park the incoming draft under
         // `pending/_proposals/<run>-<idx>-<slug>.md` and record a
@@ -1348,15 +1213,15 @@ async function writeFileBlocks(
   return { writtenPaths, warnings, hardFailures, proposals }
 }
 
-/** Stage 1 output: a single meaningful section from the source document. */
-export interface Stage1Section {
+/** Decomposition output: a single meaningful section from the source document. */
+export interface DecomposedSection {
   source_range: string
   source_text: string
   page_path?: string
 }
 
-/** Stage 2 output: one node/edge/node triple assigned to a graph. */
-export interface Stage2Triple {
+/** Graph assignment output: one node/edge/node triple assigned to a graph. */
+export interface GraphAssignmentTriple {
   source_id?: string
   subject: string
   predicate: string
@@ -1369,8 +1234,8 @@ export interface Stage2Triple {
   source_text?: string
 }
 
-/** Stage 2 validation failure with reason string. */
-export interface Stage2Failure {
+/** Graph assignment validation failure with reason string. */
+export interface GraphAssignmentFailure {
   assignmentIndex: number
   concept: string
   page_path?: string
@@ -1421,13 +1286,25 @@ export function mergeRelationTypes(existing: string[], used: string[]): {
   return { merged, added, overflow }
 }
 
-function relationTypesUsedBy(item: Stage2Triple): string[] {
+function relationTypesUsedBy(item: GraphAssignmentTriple): string[] {
   const predicateType = typeof item.predicate === "string" && item.predicate.trim() ? [item.predicate.trim()] : []
   const proposedTypes = Array.isArray(item.graph_relation_types) ? item.graph_relation_types : []
   return [...proposedTypes, ...predicateType]
 }
 
-function failureFor(item: Stage2Triple, assignmentIndex: number, reason: string, overflowTypes?: string[]): Stage2Failure {
+/**
+ * A bare scalar value ("30초", "50%", "3.5") with no other content, deliberately
+ * conservative so proper nouns containing numbers ("레벨 10 던전") pass through.
+ * Units cover the common time/percentage cases seen in practice; expand if new
+ * false negatives show up.
+ */
+const SCALAR_VALUE_PATTERN = /^\d+(\.\d+)?\s*(초|분|시간|일|%|퍼센트|개|레벨|s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours)?$/i
+
+function isBareScalarValue(value: string): boolean {
+  return SCALAR_VALUE_PATTERN.test(value.trim())
+}
+
+function failureFor(item: GraphAssignmentTriple, assignmentIndex: number, reason: string, overflowTypes?: string[]): GraphAssignmentFailure {
   return {
     assignmentIndex,
     concept: item.subject || "(unknown)",
@@ -1443,10 +1320,10 @@ function failureFor(item: Stage2Triple, assignmentIndex: number, reason: string,
 }
 
 /**
- * One review-card line for a Stage 2 failure: the original triple (with
- * `(?)` marking the missing fields), its graph/page, and the reason.
+ * One review-card line for a graph assignment failure: the original triple
+ * (with `(?)` marking the missing fields), its graph/page, and the reason.
  */
-function formatStage2FailureLine(f: Stage2Failure): string {
+function formatGraphAssignmentFailureLine(f: GraphAssignmentFailure): string {
   const part = (v?: string) => (v && v.trim() ? v : "(?)")
   const triple = `${part(f.subject)} --${part(f.predicate)}--> ${part(f.object)}`
   const context = [
@@ -1456,7 +1333,7 @@ function formatStage2FailureLine(f: Stage2Failure): string {
   return `- **${triple}**${context ? ` (${context})` : ""}: ${f.reason}`
 }
 
-/** User-facing category for a Stage2Failure reason string. */
+/** User-facing category for a GraphAssignmentFailure reason string. */
 function categorizeFailureReason(reason: string): string {
   if (reason.startsWith("Missing required field")) return "missing required fields"
   if (reason.includes("exceeds 4 relation types")) return "too many relation types for a new graph"
@@ -1467,9 +1344,9 @@ function categorizeFailureReason(reason: string): string {
 
 /**
  * Build a review title that leads with the most common failure reason
- * instead of an internal pipeline phase name (e.g. "Stage 2").
+ * instead of an internal pipeline phase name (e.g. "graph assignment").
  */
-function summarizeStage2FailureTitle(failures: Stage2Failure[], label: string): string {
+function summarizeGraphAssignmentFailureTitle(failures: GraphAssignmentFailure[], label: string): string {
   const counts = new Map<string, number>()
   for (const f of failures) {
     const category = categorizeFailureReason(f.reason)
@@ -1482,7 +1359,7 @@ function summarizeStage2FailureTitle(failures: Stage2Failure[], label: string): 
 }
 
 /** LLM output is untyped JSON — coerce fields that must be strings before they reach validation or the Tauri IPC boundary. */
-function normalizeStage2StringFields(triple: Stage2Triple): Stage2Triple {
+function normalizeGraphAssignmentStringFields(triple: GraphAssignmentTriple): GraphAssignmentTriple {
   const toStringOrUndefined = (v: unknown): string | undefined =>
     v === undefined || v === null ? undefined : String(v)
 
@@ -1499,12 +1376,12 @@ function normalizeStage2StringFields(triple: Stage2Triple): Stage2Triple {
   }
 }
 
-export function hydrateStage2Assignments(
-  triples: Stage2Triple[],
-  sections: Stage1Section[],
-): Stage2Triple[] {
-  const byId = new Map<string, Stage1Section>()
-  const byRange = new Map<string, Stage1Section>()
+export function hydrateGraphAssignments(
+  triples: GraphAssignmentTriple[],
+  sections: DecomposedSection[],
+): GraphAssignmentTriple[] {
+  const byId = new Map<string, DecomposedSection>()
+  const byRange = new Map<string, DecomposedSection>()
 
   sections.forEach((section, index) => {
     byId.set(`s${index + 1}`, section)
@@ -1512,7 +1389,7 @@ export function hydrateStage2Assignments(
   })
 
   return triples.map((raw) => {
-    const triple = normalizeStage2StringFields(raw)
+    const triple = normalizeGraphAssignmentStringFields(raw)
     const source =
       (triple.source_id ? byId.get(triple.source_id) : undefined) ??
       (triple.source_range ? byRange.get(triple.source_range) : undefined)
@@ -1527,8 +1404,8 @@ export function hydrateStage2Assignments(
   })
 }
 
-export function applyStage2GraphPolicyUpdates(
-  triples: Stage2Triple[],
+export function applyGraphPolicyUpdates(
+  triples: GraphAssignmentTriple[],
   policy: GraphPolicy,
 ): { policy: GraphPolicy; changed: boolean } {
   let nextPolicy = policy
@@ -1569,15 +1446,20 @@ export function applyStage2GraphPolicyUpdates(
 }
 
 /**
- * Validate Stage 2 triples against the current graph policy.
+ * Validate graph assignment triples against the current graph policy.
  * Returns an array of failures (empty = all good).
  */
-export function validateStage2(triples: Stage2Triple[], policy: GraphPolicy): Stage2Failure[] {
-  const failures: Stage2Failure[] = []
+export function validateGraphAssignments(triples: GraphAssignmentTriple[], policy: GraphPolicy): GraphAssignmentFailure[] {
+  const failures: GraphAssignmentFailure[] = []
 
   for (const [assignmentIndex, item] of triples.entries()) {
     if (!item.subject || !item.predicate || !item.object || !item.graph || !item.page_path) {
       failures.push(failureFor(item, assignmentIndex, "Missing required field: subject, predicate, object, graph, or page_path"))
+      continue
+    }
+
+    if (isBareScalarValue(item.subject) || isBareScalarValue(item.object)) {
+      failures.push(failureFor(item, assignmentIndex, "subject/object is a bare scalar value (number+unit) — scalar values must not become graph nodes; encode the fact via predicate + attribute-concept object instead"))
       continue
     }
 
@@ -1610,9 +1492,9 @@ export function validateStage2(triples: Stage2Triple[], policy: GraphPolicy): St
 }
 
 /**
- * Stage 1 prompt — document decomposition.
- * Extracts concepts and their raw relations without graph assignment.
- * Output is JSON: Stage1Concept[].
+ * Decomposition prompt — document decomposition.
+ * Extracts concepts and assigns each a page_path, without graph assignment.
+ * Output is the SECTION delimiter format (see SECTION_ONLY_INSTRUCTION), not JSON.
  */
 export function buildDecompositionPrompt(
   dbIndex: string,
@@ -1622,7 +1504,7 @@ export function buildDecompositionPrompt(
   return [
     "You are a document decomposer. Read the source document and split it into",
     "meaningful sections — one entry per distinct concept or topic.",
-    "Do NOT extract relations, assign graphs, or decide relation types — that is Stage 2's job.",
+    "Do NOT extract relations, assign graphs, or decide relation types — that is graph assignment's job.",
     "",
     languageRule(sourceContent),
     "",
@@ -1649,14 +1531,14 @@ export function buildDecompositionPrompt(
 }
 
 /**
- * Stage 2 prompt — graph assignment.
+ * Graph assignment prompt.
  * Each section is decomposed into node/edge/node triples; each triple is
  * independently assigned to the best-fit graph.
- * Output: JSON { triples: Stage2Triple[] }.
+ * Output: JSON { triples: GraphAssignmentTriple[] }.
  */
 export function buildGraphAssignmentPrompt(graphPolicyPrompt: string, entityHints?: string): string {
   return [
-    "You are a graph assignment engine. You receive a list of source sections (Stage 1 output)",
+    "You are a graph assignment engine. You receive a list of source sections (decomposition output)",
     "and must decompose each section into one or more node/edge/node triples, then assign",
     "each triple independently to the best-fit graph.",
     "",
@@ -1677,7 +1559,13 @@ export function buildGraphAssignmentPrompt(graphPolicyPrompt: string, entityHint
     "6. If the best-fit graph already has 4 relation types and the predicate is new → create a new graph",
     "   with `new_graph: true` and up to 4 `graph_relation_types`.",
     "7. If no existing graph domain fits → create a new graph with `new_graph: true`.",
-    "8. Each `page_path` represents one source section container. Triples from the same source section",
+    "8. `subject` and `object` must be nouns naming an entity or concept — never a bare scalar value",
+    "   (a number+unit, a percentage, a duration). Attribute-type facts should carry their meaning in the",
+    "   `predicate`, with the `object` naming the attribute concept: `스킬A --HAS_COOLDOWN--> 쿨타임` (yes),",
+    "   `스킬A --HAS_COOLDOWN--> 30초` (no). The concrete value is not lost — the source section's verbatim",
+    "   text is stored separately.",
+    "9. `predicate` must be an uppercase snake_case ASCII string (e.g. `HAS_COOLDOWN`).",
+    "10. Each `page_path` represents one source section container. Triples from the same source section",
     "   (`source_id`) may share a `page_path` — they will be merged into one file. Triples from",
     "   different source sections should use different `page_path` values. There is no constraint that",
     "   triples sharing a `page_path` must have the same subject — a single source section can produce",
@@ -1737,7 +1625,7 @@ export function buildGraphAssignmentPrompt(graphPolicyPrompt: string, entityHint
 }
 
 /**
- * @deprecated Use buildDecompositionPrompt + buildGraphAssignmentPrompt (Stage 1 + Stage 2).
+ * @deprecated Use buildDecompositionPrompt + buildGraphAssignmentPrompt (decomposition + graph assignment).
  * Kept for backward compatibility with existing tests.
  */
 export function buildAnalysisPrompt(
@@ -1755,12 +1643,12 @@ export function buildAnalysisPrompt(
 
 
 /**
- * Build a scaffold JSON for Stage 2: one seed triple per Stage 1 section,
- * with source_text in the sections array and all output fields empty.
+ * Build a scaffold JSON for graph assignment: one seed triple per decomposed
+ * section, with source_text in the sections array and all output fields empty.
  * LLM fills in subject/predicate/object/graph/page_path/new_graph per triple.
  * LLM may add more triples with the same source_id when a section has multiple facts.
  */
-export function buildStage2Scaffold(sections: Stage1Section[]): string {
+export function buildGraphAssignmentScaffold(sections: DecomposedSection[]): string {
   const scaffold = {
     sections: sections.map((s, index) => ({
       source_id: `s${index + 1}`,
@@ -1782,79 +1670,18 @@ export function buildStage2Scaffold(sections: Stage1Section[]): string {
 }
 
 /**
- * Stage 3 (code): build FILE block text from Stage 2 triples without an LLM call.
- *
- * Triples are grouped by page_path. All triples sharing the same page_path
- * are merged into one FILE block. The title is the source_range (section heading),
- * and the body is the verbatim source_text. No wikilinks or graph frontmatter.
- *
- * A triple with no subject/predicate/object or an unsafe page_path is skipped.
- */
-export function buildFileBlocksFromAssignments(
-  triples: Stage2Triple[],
-  fileName: string,
-): string {
-  // Group triples by page_path only, preserving first-seen order.
-  // page_path is a container for one source section; multiple triples from
-  // the same section share the same page_path and are merged into one file.
-  const groups = new Map<string, Stage2Triple[]>()
-  for (const item of triples) {
-    if (!item.page_path || !isSafeIngestPath(item.page_path)) continue
-    if (!item.subject || !item.predicate || !item.object) continue
-    const existing = groups.get(item.page_path)
-    if (existing) {
-      existing.push(item)
-    } else {
-      groups.set(item.page_path, [item])
-    }
-  }
-
-  const blocks: string[] = []
-
-  for (const [, group] of groups) {
-    const first = group[0]
-    const sourceRange = first.source_range ?? ""
-
-    const sourcesYaml = [
-      `sources:`,
-      `  - file: ${fileName}`,
-      sourceRange ? `    range: "${sourceRange.replace(/"/g, '\\"')}"` : null,
-    ].filter(Boolean).join("\n")
-
-    const frontmatter = [
-      "---",
-      `title: ${sourceRange || first.subject}`,
-      `status: draft`,
-      sourcesYaml,
-      "---",
-    ].join("\n")
-
-    // Use source_text from the first triple that carries it.
-    const section = group.find((t) => t.source_text)?.source_text ?? ""
-
-    const content = section
-      ? [frontmatter, section].join("\n\n")
-      : frontmatter
-
-    blocks.push(`---FILE: ${first.page_path}---\n${content}\n---END FILE---`)
-  }
-
-  return blocks.join("\n\n")
-}
-
-/**
- * Check Stage 2 triples against the entity dictionary for fuzzy name
+ * Check graph assignment triples against the entity dictionary for fuzzy name
  * conflicts (e.g. "고블린전사" vs the registered "고블린 전사"). Exact
  * matches and brand-new names pass through as `clean` — only fuzzy matches
  * (ambiguous enough to need a human call) are pulled into `conflicts`.
  */
 async function checkEntityConflicts(
-  triples: Stage2Triple[],
+  triples: GraphAssignmentTriple[],
   projectPath: string,
-): Promise<{ clean: Stage2Triple[]; conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] }> {
+): Promise<{ clean: GraphAssignmentTriple[]; conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] }> {
   const dict = await loadEntityDict(projectPath)
-  const conflictGroups = new Map<string, { candidates: EntityCandidate[]; triples: Stage2Triple[] }>()
-  const conflictedTripleSet = new Set<Stage2Triple>()
+  const conflictGroups = new Map<string, { candidates: EntityCandidate[]; triples: GraphAssignmentTriple[] }>()
+  const conflictedTripleSet = new Set<GraphAssignmentTriple>()
 
   for (const triple of triples) {
     for (const name of [triple.subject, triple.object]) {
@@ -1893,29 +1720,29 @@ async function checkEntityConflicts(
   return { clean, conflicts }
 }
 
-interface Stage2CoreResult {
-  assignments: Stage2Triple[]
+interface GraphAssignmentResult {
+  assignments: GraphAssignmentTriple[]
   policy: GraphPolicy
   reviewItem?: Omit<ReviewItem, "id" | "resolved" | "createdAt">
 }
 
 /**
- * Run Stage 2 (graph assignment) for a given set of confirmed sections.
- * Used both in the inline pipeline (confirmed docs) and from the Approve
- * handler (after user resolves a modification proposal).
+ * Run graph assignment for a given set of confirmed sections. Used both in
+ * the inline pipeline (confirmed docs) and from the Approve handler (after
+ * user resolves a modification proposal).
  * Returns valid assignments, the (possibly updated) policy, and an optional
- * suggestion review item for Stage 2 failures.
+ * suggestion review item for graph assignment failures.
  */
-async function runStage2Core(
+async function runGraphAssignment(
   llmConfig: LlmConfig,
-  sections: Stage1Section[],
+  sections: DecomposedSection[],
   policy: GraphPolicy,
   signal: AbortSignal | undefined,
   projectPath: string,
   chunkLabel: string,
   fileName: string,
-): Promise<Stage2CoreResult> {
-  const scaffold = buildStage2Scaffold(sections)
+): Promise<GraphAssignmentResult> {
+  const scaffold = buildGraphAssignmentScaffold(sections)
   const entityHints = buildEntityHintsForPrompt(await loadEntityDict(projectPath))
   const raw = await callModel(
     llmConfig,
@@ -1925,11 +1752,11 @@ async function runStage2Core(
     projectPath,
   )
 
-  let parsed: Stage2Triple[] = []
+  let parsed: GraphAssignmentTriple[] = []
   try {
     const cleaned = raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
     const obj = JSON.parse(cleaned)
-    parsed = hydrateStage2Assignments(
+    parsed = hydrateGraphAssignments(
       Array.isArray(obj) ? obj : (obj.triples ?? []),
       sections,
     )
@@ -1938,7 +1765,7 @@ async function runStage2Core(
   }
 
   if (parsed.length === 0) {
-    invoke("app_debug", { message: `[ingest:stage2:EMPTY] ${chunkLabel}runStage2Core produced no triples` }).catch(() => {})
+    invoke("app_debug", { message: `[ingest:graph:EMPTY] ${chunkLabel}runGraphAssignment produced no triples` }).catch(() => {})
     return {
       assignments: [],
       policy,
@@ -1946,7 +1773,7 @@ async function runStage2Core(
         type: "suggestion",
         stage: "primary",
         title: `no graph assignments produced — skipped: ${fileName}`,
-        description: `Stage 2 produced no triples from ${sections.length} section(s). The document was decomposed but nothing could be assigned to a graph — no relations were extracted or saved.`,
+        description: `Graph assignment produced no triples from ${sections.length} section(s). The document was decomposed but nothing could be assigned to a graph — no relations were extracted or saved.`,
         sourcePath: fileName,
         affectedPages: [],
         options: [{ label: "Dismiss", action: "Dismiss" }],
@@ -1954,19 +1781,19 @@ async function runStage2Core(
     }
   }
 
-  const policyUpdate = applyStage2GraphPolicyUpdates(parsed, policy)
+  const policyUpdate = applyGraphPolicyUpdates(parsed, policy)
   let nextPolicy = policyUpdate.policy
   if (policyUpdate.changed) {
     try { await saveGraphPolicy(projectPath, nextPolicy) } catch { /* non-fatal */ }
   }
 
-  const failures = validateStage2(parsed, nextPolicy)
+  const failures = validateGraphAssignments(parsed, nextPolicy)
   const failedIndexes = new Set(failures.map((f) => f.assignmentIndex))
   const assignments = parsed.filter((_, i) => !failedIndexes.has(i))
 
   let reviewItem: Omit<ReviewItem, "id" | "resolved" | "createdAt"> | undefined
   if (failures.length > 0) {
-    invoke("app_debug", { message: `[ingest:stage2:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length}` }).catch(() => {})
+    invoke("app_debug", { message: `[ingest:graph:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length}` }).catch(() => {})
     const overflowMap = new Map<string, { newTypes: Set<string>; paths: string[] }>()
     for (const f of failures) {
       if (!f.graph || !f.overflowTypes?.length) continue
@@ -1986,8 +1813,8 @@ async function runStage2Core(
     reviewItem = {
       type: "suggestion",
       stage: "primary",
-      title: summarizeStage2FailureTitle(failures, fileName),
-      description: failures.map(formatStage2FailureLine).join("\n"),
+      title: summarizeGraphAssignmentFailureTitle(failures, fileName),
+      description: failures.map(formatGraphAssignmentFailureLine).join("\n"),
       sourcePath: fileName,
       affectedPages: [...new Set(failures.map((f) => f.page_path).filter((p): p is string => Boolean(p)))],
       overflowEntries: hasOverflow ? overflowEntries : undefined,
@@ -2007,45 +1834,16 @@ async function runStage2Core(
 }
 
 /**
- * Run Stage 2 + graph sync for a modification proposal that was Approved.
- * Called from the ReviewView approve handler so graph sync only happens
- * after the user has confirmed the document content.
- */
-export async function runStage2ForApprovedDoc(
-  projectPath: string,
-  projectName: string,
-  sections: Stage1Section[],
-  policy: GraphPolicy,
-  llmConfig: LlmConfig,
-): Promise<void> {
-  const pp = normalizePath(projectPath)
-  try {
-    const result = await runStage2Core(llmConfig, sections, policy, undefined, pp, "", projectPath)
-    if (result.assignments.length > 0) {
-      const { clean, conflicts } = await checkEntityConflicts(result.assignments, pp)
-      if (clean.length > 0) {
-        await syncGraphToBackend(pp, projectName, clean)
-      }
-      if (conflicts.length > 0) {
-        useReviewStore.getState().addItems(conflicts)
-      }
-    }
-    // Surface any Stage 2 failures from the approve path.
-    if (result.reviewItem) {
-      useReviewStore.getState().addItems([result.reviewItem])
-    }
-  } catch (err) {
-    console.warn(`[ingest] runStage2ForApprovedDoc failed: ${err instanceof Error ? err.message : String(err)}`)
-  }
-}
-
-/**
  * Re-process a saved document:
  *   1. Delete all existing triples for this page_path from the graph backend.
  *   2. Remove the page from page-graph-index.
- *   3. Run Stage 1 on the full document content (page_path already known, so
- *      force it onto every section — skip LLM page_path assignment).
- *   4. Run Stage 2 (graph assignment + triple extraction).
+ *   3. Run decomposition on the full document content (page_path already
+ *      known, so force it onto every section — skip LLM page_path
+ *      assignment). If the caller already has the document's field values
+ *      in hand (e.g. a structured wizard export), pass dataTypeId +
+ *      prefilledFields to skip the decomposition model call entirely — the
+ *      fields are assembled directly into a single section instead.
+ *   4. Run graph assignment (triple extraction).
  *   5. Sync to graph backend + update page-graph-index.
  */
 export async function reIngestDocument(
@@ -2054,6 +1852,8 @@ export async function reIngestDocument(
   pagePath: string,
   content: string,
   llmConfig: LlmConfig,
+  dataTypeId?: string,
+  prefilledFields?: Record<string, string>,
 ): Promise<void> {
   const pp = normalizePath(projectPath)
   try {
@@ -2064,34 +1864,46 @@ export async function reIngestDocument(
     // 2. Remove from page-graph-index
     await removePageFromIndex(pp, pagePath)
 
-    // 3. Stage 1: decompose document, force page_path on all sections
-    const dbIndex = await buildDbIndex(pp)
+    // 3. Decomposition: decompose document, force page_path on all sections
     const policy = await loadGraphPolicy(pp)
-    let stage1Raw: string
-    try {
-      stage1Raw = await callModel(
-        llmConfig,
-        buildDecompositionPrompt(dbIndex, content),
-        `Decompose this document into SECTION blocks.\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${content}`,
-        undefined,
-        pp,
-        16000,
-        false,
-      )
-    } catch (err) {
-      console.warn(`[ingest] reIngestDocument Stage 1 failed for ${pagePath}: ${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
+    let sections: DecomposedSection[]
 
-    const sections: Stage1Section[] = parseStage1Sections(stage1Raw).map((s) => ({
-      ...s,
-      page_path: pagePath,
-    }))
+    if (dataTypeId && prefilledFields) {
+      // Fields are already known — skip the decomposition model call and
+      // build the section directly, matching the `## field\ncontent` shape
+      // a data-type extraction model call would have produced.
+      const fieldsBlock = Object.entries(prefilledFields)
+        .map(([field, value]) => `## ${field}\n\n${value}`)
+        .join("\n\n")
+      sections = [{ source_range: pagePath, source_text: fieldsBlock, page_path: pagePath }]
+    } else {
+      const dbIndex = await buildDbIndex(pp)
+      let decompositionRaw: string
+      try {
+        decompositionRaw = await callModel(
+          llmConfig,
+          buildDecompositionPrompt(dbIndex, content),
+          `Decompose this document into SECTION blocks.\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${content}`,
+          undefined,
+          pp,
+          16000,
+          false,
+        )
+      } catch (err) {
+        console.warn(`[ingest] reIngestDocument decomposition failed for ${pagePath}: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+
+      sections = parseDecomposedSections(decompositionRaw).map((s) => ({
+        ...s,
+        page_path: pagePath,
+      }))
+    }
 
     if (sections.length === 0) return
 
-    // 4. Stage 2: graph assignment + triple extraction
-    const result = await runStage2Core(llmConfig, sections, policy, undefined, pp, "", pagePath)
+    // 4. Graph assignment: triple extraction
+    const result = await runGraphAssignment(llmConfig, sections, policy, undefined, pp, "", pagePath)
 
     // 5. Sync
     if (result.assignments.length > 0) {
@@ -2112,19 +1924,18 @@ export async function reIngestDocument(
 }
 
 /**
- * Stage 3 (code): build FILE block text from Stage 1 sections.
- * Used in the new pipeline order (Stage 1 → Stage 3 → Stage 2) where
- * page_path is decided by Stage 1, not Stage 2.
+ * Build FILE block text from decomposed sections, without an LLM call.
+ * page_path is decided by decomposition, before graph assignment runs.
  *
  * Sections without a page_path are skipped. Sections sharing the same
  * page_path are merged into one FILE block (first section wins for
  * frontmatter; subsequent source_text is appended).
  */
 export function buildFileBlocksFromSections(
-  sections: Stage1Section[],
+  sections: DecomposedSection[],
   fileName: string,
 ): string {
-  const groups = new Map<string, Stage1Section[]>()
+  const groups = new Map<string, DecomposedSection[]>()
   for (const section of sections) {
     const pp = section.page_path
     if (!pp || !isSafeIngestPath(pp)) continue

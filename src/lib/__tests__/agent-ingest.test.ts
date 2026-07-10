@@ -1,15 +1,17 @@
 /**
- * agent-ingest regression tests — Stage 1/2 pipeline via CLI transport.
+ * agent-ingest regression tests — decomposition + graph assignment pipeline
+ * via CLI transport.
  *
- * The CLI path runs the same Stage 1 → Stage 2 → buildFileBlocksFromAssignments
- * pipeline as autoIngestImpl, but calls the CLI subprocess instead of the HTTP API.
- * response_format is not available on CLI, so JSON is enforced via prompt only.
+ * The CLI path runs the same decomposition → file write → graph assignment
+ * pipeline as autoIngestImpl, but calls the CLI subprocess instead of the
+ * HTTP API. response_format is not available on CLI, so JSON is enforced
+ * via prompt only.
  *
  * Test cases:
- *  1. Clean Stage 1 + Stage 2 response → writes FILE blocks with source_range title (no graph, no wikilinks)
- *  2. Stage 2 returns no assignments → chunk skipped, review item created (no throw)
- *  3. Stage 2 assignments with invalid relation types → skipped, review item created, valid ones written
- *  4. CLI transport error on Stage 1 → chunk skipped (no throw)
+ *  1. Clean decomposition + graph assignment response → writes FILE blocks with source_range title (no graph, no wikilinks)
+ *  2. Graph assignment returns no assignments → chunk skipped, review item created (no throw)
+ *  3. Graph assignment with invalid relation types → skipped, review item created, valid ones written
+ *  4. CLI transport error on decomposition → chunk skipped (no throw)
  */
 import { describe, it, expect, beforeEach, vi } from "vitest"
 
@@ -63,7 +65,7 @@ vi.mock("@/stores/review-store", () => ({
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { streamClaudeCodeCli } from "../claude-cli-transport"
 import { autoIngestImpl } from "../ingest"
-import { buildStage2Scaffold } from "../ingest"
+import { buildGraphAssignmentScaffold } from "../ingest"
 import { loadGraphPolicy, saveGraphPolicy } from "../graph-policy"
 import { useActivityStore } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -102,15 +104,17 @@ const cliConfig: LlmConfig = {
   maxContextSize: 200000,
 }
 
-// Stage 1 now emits the delimiter-based SECTION format (not JSON), so
+// Decomposition emits the delimiter-based SECTION format (not JSON), so
 // verbatim source_text never round-trips through a JSON string. See Fix 25.
-const STAGE1_RESPONSE = [
-  "---SECTION: ## 고블린 전사---",
+// Every opener carries a page_path (`source_range | db/...`) — decomposition
+// must assign one to every section, or the chunk is skipped as a failure.
+const DECOMPOSITION_RESPONSE = [
+  "---SECTION: ## 고블린 전사 | db/enemies/goblin-warrior.md---",
   "고블린 전사는 불에 약하고 독침을 사용한다.",
   "---END SECTION---",
 ].join("\n")
 
-const STAGE2_RESPONSE = JSON.stringify({
+const GRAPH_ASSIGNMENT_RESPONSE = JSON.stringify({
   triples: [
     {
       source_id: "s1",
@@ -160,9 +164,9 @@ beforeEach(() => {
   mockListDirectory.mockImplementation(async (_p: string) => [] as FileNode[])
 })
 
-describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
-  it("Stage 2 scaffold는 source_text를 sections에만 싣고 triple은 source_id로 참조함", () => {
-    const scaffold = JSON.parse(buildStage2Scaffold([
+describe("autoIngest (unified, CLI provider) — decomposition + graph assignment pipeline", () => {
+  it("graph assignment scaffold는 source_text를 sections에만 싣고 triple은 source_id로 참조함", () => {
+    const scaffold = JSON.parse(buildGraphAssignmentScaffold([
       {
         source_range: "## 고블린 전사",
         source_text: "고블린 전사는 불에 약하고 독침을 사용한다.",
@@ -181,8 +185,8 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     expect(scaffold.triples[0]).not.toHaveProperty("source_range")
   })
 
-  it("Stage 1+2 성공 시 source_range를 title로 쓰고 graph/wikilink 없는 파일을 씀", async () => {
-    mockSequentialResponses(STAGE1_RESPONSE, STAGE2_RESPONSE)
+  it("decomposition+graph assignment 성공 시 source_range를 title로 쓰고 graph/wikilink 없는 파일을 씀", async () => {
+    mockSequentialResponses(DECOMPOSITION_RESPONSE, GRAPH_ASSIGNMENT_RESPONSE)
 
     const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
@@ -199,13 +203,13 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
   })
 
   it("Fix 25: source_text에 마크다운 이스케이프(\\[ \\( 등)가 있어도 섹션이 유실되지 않음", async () => {
-    // 회귀: 이전 JSON Stage 1에서는 verbatim source_text 안의 `\[8\]`,
+    // 회귀: 이전 JSON 기반 decomposition에서는 verbatim source_text 안의 `\[8\]`,
     // `리니지\(게임\)` 같은 마크다운 백슬래시 이스케이프가 invalid JSON
     // escape라서 JSON.parse가 throw → 청크 전체가 "no sections"로 스킵됐다.
     // SECTION 구분자 포맷에서는 그대로 통과해야 한다.
     const hostileText = "리니지\\(게임\\)는 흥행했다.[\\[8\\]](#fn-8) 인용."
     mockSequentialResponses(
-      ["---SECTION: ## 리니지---", hostileText, "---END SECTION---"].join("\n"),
+      ["---SECTION: ## 리니지 | db/games/lineage.md---", hostileText, "---END SECTION---"].join("\n"),
       JSON.stringify({
         triples: [
           {
@@ -229,12 +233,11 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     expect(content).toContain(hostileText)
   })
 
-  it("Stage 2가 assignments를 하나도 반환하지 않으면 해당 청크를 건너뜀 (단일 청크면 파일 없음 + error)", async () => {
+  it("decomposition이 page_path 없는 섹션을 만들면 해당 청크를 건너뜀 (단일 청크면 파일 없음 + error)", async () => {
     const addItemsMock = vi.fn()
     vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
     mockSequentialResponses(
-      STAGE1_RESPONSE,
-      JSON.stringify({ triples: [] }),
+      ["---SECTION: ## 고블린 전사---", "고블린 전사는 불에 약하다.", "---END SECTION---"].join("\n"),
     )
 
     const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
@@ -249,6 +252,27 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     expect(last.status).toBe("error")
   })
 
+  it("graph assignment가 assignments를 하나도 반환하지 않으면 review item만 생성하고 파일은 이미 씀", async () => {
+    const addItemsMock = vi.fn()
+    vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
+    mockSequentialResponses(
+      DECOMPOSITION_RESPONSE,
+      JSON.stringify({ triples: [] }),
+    )
+
+    const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
+    // 파일 쓰기는 decomposition의 page_path만으로 이미 완료됨 — graph
+    // assignment는 그 이후 단계라 실패해도 문서는 남는다.
+    expect(written).toContain("db/enemies/goblin-warrior.md")
+    expect(addItemsMock).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ title: expect.stringContaining("no graph assignments produced") }),
+      ]),
+    )
+    const last = useActivityStore.getState().items[0]
+    expect(last.status).toBe("done")
+  })
+
   it("기존 graph가 relation type 4개로 꽉 찬 상태에서 새 type을 쓰면 해당 assignment를 건너뛰고 review item을 생성함", async () => {
     const addItemsMock = vi.fn()
     vi.mocked(useReviewStore.getState).mockReturnValue(mockReviewState(addItemsMock) as unknown as ReturnType<typeof useReviewStore.getState>)
@@ -258,7 +282,7 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     })
 
     mockSequentialResponses(
-      STAGE1_RESPONSE,
+      DECOMPOSITION_RESPONSE,
       JSON.stringify({
         triples: [
           {
@@ -276,8 +300,9 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
 
     const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
-    // 실패한 concept은 파일 쓰기 없음
-    expect(written).toHaveLength(0)
+    // decomposition이 이미 문서를 썼으므로 파일은 존재함 — 실패한 것은
+    // graph assignment 뿐이다.
+    expect(written).toContain("db/enemies/goblin-warrior.md")
     // review item이 생성됨
     expect(addItemsMock).toHaveBeenCalledWith(
       expect.arrayContaining([
@@ -296,7 +321,7 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     })
 
     mockSequentialResponses(
-      STAGE1_RESPONSE,
+      DECOMPOSITION_RESPONSE,
       JSON.stringify({
         triples: [
           {
@@ -348,7 +373,11 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
     })
 
     mockSequentialResponses(
-      STAGE1_RESPONSE,
+      [
+        "---SECTION: ## 고블린 전사 | db/enemies/goblin-warrior-weakness.md---",
+        "고블린 전사는 불에 약하고 기습을 사용한다.",
+        "---END SECTION---",
+      ].join("\n"),
       JSON.stringify({
         triples: [
           {
@@ -375,19 +404,14 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
 
     const written = await autoIngestImpl(PROJECT, SOURCE, cliConfig)
 
+    // decomposition이 goblin-warrior-weakness.md 하나만 page_path로 지정했으므로
+    // 파일 쓰기는 그 경로 하나뿐이다. goblin-warrior-tactic.md로 향한 두 번째
+    // triple은 graph assignment 단계에서만 등장하고 별도 문서를 만들지 않는다.
     expect(written).toEqual(["db/enemies/goblin-warrior-weakness.md"])
     expect(mockWriteFile).toHaveBeenCalledTimes(1)
-    expect(addItemsMock).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "suggestion",
-          description: expect.stringContaining("goblin-warrior-tactic.md"),
-        }),
-      ]),
-    )
   })
 
-  it("CLI transport가 Stage 1에서 에러를 던지면 해당 청크를 건너뜀 (단일 청크면 파일 없음 + error)", async () => {
+  it("CLI transport가 decomposition에서 에러를 던지면 해당 청크를 건너뜀 (단일 청크면 파일 없음 + error)", async () => {
     mockStream.mockImplementation(async (_cfg, _msgs, callbacks) => {
       callbacks.onError(new Error("claude CLI exited with code 1"))
     })
@@ -401,11 +425,11 @@ describe("autoIngest (unified, CLI provider) — Stage 1/2 pipeline", () => {
   it("같은 graph에 여러 assignment를 추가해도 duplicate 실패로 처리하지 않음", async () => {
     mockSequentialResponses(
       [
-        "---SECTION: ## 고블린 전사---",
+        "---SECTION: ## 고블린 전사 | db/enemies/goblin-warrior.md---",
         "고블린 전사는 불에 약하다.",
         "---END SECTION---",
         "",
-        "---SECTION: ## 오크 전사---",
+        "---SECTION: ## 오크 전사 | db/enemies/orc-warrior.md---",
         "오크 전사는 불에 약하다.",
         "---END SECTION---",
       ].join("\n"),

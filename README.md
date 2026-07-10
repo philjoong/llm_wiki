@@ -377,7 +377,7 @@ prompt_template: |
   Respond with each field listed above clearly labeled.
 ```
 
-프로젝트의 해당 폴더에 파일을 추가하면 즉시 사용할 수 있습니다. 개인 전용 override는 `.llm-wiki/question-types/`, `.llm-wiki/data-types/`에 둘 수 있습니다.
+프로젝트의 해당 폴더에 파일을 추가하면 즉시 사용할 수 있습니다.
 
 ---
 

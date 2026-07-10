@@ -22,7 +22,6 @@ type AnyScenario = {
   pageToEnrich?: string
   source?: { path: string; content: string }
   analysisResponse?: string
-  generationResponse?: string
   query?: string
 }
 
@@ -71,18 +70,11 @@ export async function materializeScenario(
     )
   }
 
-  // Ingest scenarios emit TWO LLM responses (stage 1 analysis + stage 2 generation).
+  // Ingest scenarios emit one LLM response (decomposition analysis).
   if (scenario.analysisResponse !== undefined) {
     await fs.writeFile(
       path.join(scenarioPath, "llm-analysis.txt"),
       scenario.analysisResponse,
-      "utf-8",
-    )
-  }
-  if (scenario.generationResponse !== undefined) {
-    await fs.writeFile(
-      path.join(scenarioPath, "llm-generation.txt"),
-      scenario.generationResponse,
       "utf-8",
     )
   }

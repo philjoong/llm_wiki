@@ -3,9 +3,9 @@
  * just emitted, so re-ingesting a page that already has a history from
  * another source doesn't silently clobber that history.
  *
- * Why this exists: the stage-2 prompt instructs the LLM to emit
+ * Why this exists: the generation prompt instructs the LLM to emit
  * `sources: ["${sourceFileName}"]` — with JUST the current source — on
- * every FILE block. The stage-2 prompt also doesn't feed existing page
+ * every FILE block. The generation prompt also doesn't feed existing page
  * bodies into the context, so the LLM can't see the old sources. If
  * the ingest write were naive, each re-ingest would overwrite the
  * sources array with a single-element list, and the downstream
@@ -15,13 +15,13 @@
  * The fix: before writing, read the existing file (if any), parse its
  * sources, union with the freshly emitted sources, rewrite the frontmatter.
  *
- * Stage 3 introduced `SourceRef`-aware variants (`parseSourceRefs`,
- * `writeSourceRefs`, `mergeSourceRefsLists`, `mergeSourceRefsIntoContent`)
- * that preserve the `range` field. The legacy string-only API is kept
- * unchanged for callers that only care about file identity (e.g. the
- * source-delete flow): when reading a page whose frontmatter uses the
- * new object form, those legacy functions transparently project each
- * entry down to its `file`.
+ * `SourceRef`-aware variants (`parseSourceRefs`, `writeSourceRefs`,
+ * `mergeSourceRefsLists`, `mergeSourceRefsIntoContent`) preserve the
+ * `range` field. The legacy string-only API is kept unchanged for
+ * callers that only care about file identity (e.g. the source-delete
+ * flow): when reading a page whose frontmatter uses the new object
+ * form, those legacy functions transparently project each entry down
+ * to its `file`.
  */
 import { parseSourceRef, sourceRefKey, type SourceRef } from "./source-ref"
 
@@ -139,9 +139,9 @@ export function mergeSourcesIntoContent(
   return writeSources(newContent, merged)
 }
 
-// ── Stage 3: SourceRef-aware variants ──────────────────────────────────
+// ── SourceRef-aware variants ──────────────────────────────────
 //
-// The Stage 3 ingest prompt instructs the LLM to emit frontmatter with
+// The ingest generation prompt instructs the LLM to emit frontmatter with
 // objects, not bare strings:
 //
 //   sources:
@@ -162,8 +162,9 @@ export function mergeSourcesIntoContent(
  *   2. Multi-line string list  — `sources:\n  - a.md\n  - b.md`
  *   3. Multi-line object list  — `sources:\n  - file: a.md\n    range: ...`
  *
- * Form 3 is what Stage 3 ingest emits. Forms 1 and 2 are legacy / pre-
- * Stage-3 pages — those parse with no `range` field (just `{file}`).
+ * Form 3 is what ingest emits today. Forms 1 and 2 are legacy pages from
+ * before this object form existed — those parse with no `range` field
+ * (just `{file}`).
  */
 export function parseSourceRefs(content: string): SourceRef[] {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
@@ -380,8 +381,8 @@ function quoteForYaml(s: string): string {
  * not already present are appended in the order they appear.
  *
  * Note: two refs with the same file but different ranges are KEPT as
- * separate entries — that's exactly the case Stage 3 cares about
- * (multiple sections of the same raw doc landed on the same page).
+ * separate entries — that's exactly the case ingest's file-write step
+ * cares about (multiple sections of the same raw doc landed on the same page).
  * If two entries share both fields, the existing-side casing wins to
  * keep on-disk filenames stable.
  */
@@ -402,8 +403,8 @@ export function mergeSourceRefsLists(
 
 /**
  * SourceRef-aware merge: same contract as `mergeSourcesIntoContent` but
- * preserves `range` fields. Used by Stage 3 ingest when writing pages
- * under db/ that may already exist from an earlier raw file.
+ * preserves `range` fields. Used by ingest's file-write step when writing
+ * pages under db/ that may already exist from an earlier raw file.
  */
 export function mergeSourceRefsIntoContent(
   newContent: string,

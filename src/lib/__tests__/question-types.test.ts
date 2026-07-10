@@ -21,11 +21,8 @@ function makeFile(name: string): FileNode {
   return { name, path: `/proj/question_types/${name}`, is_dir: false }
 }
 
-// Helper: mock listDirectory to return empty for both paths, then override project path
-function mockBothDirs(projectFiles: FileNode[], userFiles: FileNode[] = []) {
-  mockListDirectory
-    .mockResolvedValueOnce(projectFiles)  // project-specific path
-    .mockResolvedValueOnce(userFiles)     // user override path
+function mockProjectDir(projectFiles: FileNode[]) {
+  mockListDirectory.mockResolvedValueOnce(projectFiles)
 }
 
 describe("loadQuestionTypes", () => {
@@ -36,7 +33,7 @@ describe("loadQuestionTypes", () => {
   })
 
   it("parses the IDEA §2.4 example file end-to-end", async () => {
-    mockBothDirs([makeFile("policy_violation.md")])
+    mockProjectDir([makeFile("policy_violation.md")])
     mockReadFile.mockResolvedValueOnce(
       [
         "---",
@@ -54,11 +51,10 @@ describe("loadQuestionTypes", () => {
     expect(qt.name).toBe("정책 위반 탐지")
     expect(qt.description).toBe("사용자/운영 정책에 위반되는 동작을 식별한다.")
     expect(qt.zeroResidueMeaning).toBe("잔존 0 = 위반 없음 (긍정적 신호).")
-    expect(qt._source).toBe("project")
   })
 
   it("falls back to first H1 then to filename stem when no frontmatter title", async () => {
-    mockBothDirs([makeFile("h1_only.md"), makeFile("bare.md")])
+    mockProjectDir([makeFile("h1_only.md"), makeFile("bare.md")])
     mockReadFile.mockResolvedValueOnce("# 회귀 테스트\n\n변경 후에도 기존 동작이 유지되어야 함.")
     mockReadFile.mockResolvedValueOnce("그냥 본문만 있는 파일.")
     const out = await loadQuestionTypes("/proj")
@@ -67,7 +63,7 @@ describe("loadQuestionTypes", () => {
   })
 
   it("captures Input / Output / Zero residue section bodies", async () => {
-    mockBothDirs([makeFile("condition.md")])
+    mockProjectDir([makeFile("condition.md")])
     mockReadFile.mockResolvedValueOnce(
       [
         "---",
@@ -98,7 +94,7 @@ describe("loadQuestionTypes", () => {
 
   it("skips dotfiles, non-markdown, and directories; logs and skips read failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    mockBothDirs([
+    mockProjectDir([
       { name: ".gitkeep", path: "/proj/question_types/.gitkeep", is_dir: false },
       { name: "_drafts", path: "/proj/question_types/_drafts", is_dir: true },
       { name: "notes.txt", path: "/proj/question_types/notes.txt", is_dir: false },
@@ -119,7 +115,7 @@ describe("loadQuestionTypes", () => {
   })
 
   it("returns multiple types in the order listDirectory yields them", async () => {
-    mockBothDirs([makeFile("a.md"), makeFile("b.md"), makeFile("c.md")])
+    mockProjectDir([makeFile("a.md"), makeFile("b.md"), makeFile("c.md")])
     mockReadFile
       .mockResolvedValueOnce("# A\n\n본문A.")
       .mockResolvedValueOnce("# B\n\n본문B.")
@@ -134,37 +130,13 @@ describe("loadQuestionTypes", () => {
   })
 
   it("handles a body whose first paragraph follows blank lines and headings", async () => {
-    mockBothDirs([makeFile("policy.md")])
+    mockProjectDir([makeFile("policy.md")])
     mockReadFile.mockResolvedValueOnce(
       "\n\n## Description\n\n실제 설명 문단입니다.\n\n## Other\n다른 영역.",
     )
     const qt = (await loadQuestionTypes("/proj")).find((q) => q.id === "policy")!
     expect(qt).toBeDefined()
     expect(qt.description).toBe("실제 설명 문단입니다.")
-  })
-
-  it("user override tombstone hides an app default type", async () => {
-    mockBothDirs(
-      [],
-      [{ name: "balance_simulation.yaml", path: "/proj/.llm-wiki/question-types/balance_simulation.yaml", is_dir: false }],
-    )
-    mockReadFile.mockResolvedValueOnce("_deleted: true\n")
-    const out = await loadQuestionTypes("/proj")
-    expect(out.find((q) => q.id === "balance_simulation")).toBeUndefined()
-  })
-
-  it("user override replaces project-specific type with same id", async () => {
-    mockBothDirs(
-      [makeFile("custom.md")],
-      [{ name: "custom.yaml", path: "/proj/.llm-wiki/question-types/custom.yaml", is_dir: false }],
-    )
-    mockReadFile.mockResolvedValueOnce("# Project Custom\n\n프로젝트 버전.")
-    mockReadFile.mockResolvedValueOnce("name: User Custom\ndescription: 유저 버전\n")
-    const out = await loadQuestionTypes("/proj")
-    const qt = out.find((q) => q.id === "custom")!
-    expect(qt).toBeDefined()
-    expect(qt.name).toBe("User Custom")
-    expect(qt._source).toBe("user")
   })
 })
 

@@ -1,4 +1,4 @@
-import type { Stage2Triple } from "@/lib/ingest"
+import type { GraphAssignmentTriple } from "@/lib/ingest"
 
 export interface GraphNodeRecord {
   id: string
@@ -26,6 +26,7 @@ export type GraphQuery =
   | { type: "neighbors"; pagePath: string; depth: 1 | 2 }
   | { type: "relation"; relationType: string }
   | { type: "node"; nodeName: string }
+  | { type: "path"; fromNode: string; toNode: string; maxDepth: number }
 
 export interface GraphBackend {
   kind: "sqlite"
@@ -35,7 +36,7 @@ export interface GraphBackend {
   createGraph(projectName: string, graphName: string): Promise<void>
   deleteGraph(projectName: string, graphName: string): Promise<void>
 
-  upsertTriples(projectName: string, triples: Stage2Triple[]): Promise<number>
+  upsertTriples(projectName: string, triples: GraphAssignmentTriple[]): Promise<number>
   queryGraph(projectName: string, graphName: string, query: GraphQuery): Promise<GraphSnapshot>
 
   exportGraph(projectName: string, graphName: string): Promise<GraphSnapshot>

@@ -66,7 +66,14 @@ function generateConversationId(): string {
   return `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+/**
+ * Store factory so tab-scoped query widgets (Casemap/Persona) can each get
+ * their own conversation list/active id instead of sharing the single
+ * global chat's — mounting a second ChatPanel against the default
+ * useChatStore would interleave its messages with the main Chat tab.
+ */
+export function createChatStore() {
+  return create<ChatState>((set, get) => ({
   conversations: [],
   activeConversationId: null,
   messages: [],
@@ -225,7 +232,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!activeConversationId) return []
     return messages.filter((m) => m.conversationId === activeConversationId)
   },
-}))
+  }))
+}
+
+export type ChatStoreHook = ReturnType<typeof createChatStore>
+
+/** Default instance backing the main Chat tab. */
+export const useChatStore = createChatStore()
 
 export function chatMessagesToLLM(messages: DisplayMessage[]): ChatMessage[] {
   return messages.map((m) => ({

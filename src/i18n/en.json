@@ -81,6 +81,10 @@
     "noProject": "No project open.",
     "loading": "Loading...",
     "title": "Case Mapping — Test Plans",
+    "tab": {
+      "ask": "Ask",
+      "list": "Plan List"
+    },
     "planNamePlaceholder": "New plan name (e.g. Fireball skill)",
     "newPlan": "New Plan",
     "noPlans": "No test plans yet. Enter a name above to create one.",
@@ -155,7 +159,8 @@
     "title": "Persona Play Scenarios",
     "tab": {
       "manage": "Personas",
-      "scenarios": "Scenarios"
+      "scenarios": "Scenarios",
+      "ask": "Ask"
     },
     "searchPlaceholder": "Search personas",
     "addPersona": "New persona",

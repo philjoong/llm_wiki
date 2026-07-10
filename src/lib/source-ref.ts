@@ -1,6 +1,6 @@
 /**
  * SourceRef — the "where in the raw file did this come from" handle that
- * Stage 3 ingest writes into every generated page's frontmatter.
+ * ingest's file-write step writes into every generated page's frontmatter.
  *
  * Shape:
  *   - `file`  — the original raw filename (e.g. "instance_server_design.md")
@@ -10,9 +10,10 @@
  *               anchor, etc. The format is up to the source-document type;
  *               the ingest pipeline does not interpret it.
  *
- * Backward compat: pre-Stage-3 pages stored sources as a flat string
- * array (`sources: ["foo.md"]`). `parseSourceRef` accepts both that
- * legacy form (string → `{file}` with no range) and the new object form.
+ * Backward compat: pages written before this SourceRef object form existed
+ * stored sources as a flat string array (`sources: ["foo.md"]`).
+ * `parseSourceRef` accepts both that legacy form (string → `{file}` with
+ * no range) and the new object form.
  */
 export interface SourceRef {
   file: string

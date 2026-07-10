@@ -1,12 +1,11 @@
 /**
  * Question type loader.
  *
- * Two-tier hierarchy (higher tier wins):
- *   1. {projectPath}/question_types/      — project-shared, committed to git
- *   2. {projectPath}/.llm-wiki/question-types/ — user-private overrides
+ * Loads from {projectPath}/question_types/ — project-shared, committed to git.
  *
- * On project creation, schema/question_types/*.yaml is seeded into tier 1
- * via the seed_question_types Tauri command. There are no hardcoded defaults.
+ * On project creation, schema/question_types/*.yaml is seeded into this
+ * directory via the seed_question_types Tauri command. There are no
+ * hardcoded defaults.
  */
 import yaml from "js-yaml"
 import { listDirectory, readFile } from "@/commands/fs"
@@ -29,8 +28,6 @@ export interface QuestionType {
   outputShape?: string
   /** Body of `Zero residue` section — surfaced to the user when residue == 0 (§2.10). */
   zeroResidueMeaning?: string
-  /** Internal: source path category. Not displayed in UI. */
-  _source: "project" | "user"
   /** Internal: absolute file path. */
   _filePath: string
 }
@@ -39,27 +36,14 @@ export async function loadQuestionTypes(
   projectPath: string,
 ): Promise<QuestionType[]> {
   const projectPath_ = `${projectPath}/question_types`
-  const userOverridePath = `${projectPath}/.llm-wiki/question-types`
 
   const projectNodes = await tryListDirectory(projectPath_)
-  const userNodes = await tryListDirectory(userOverridePath)
 
   const outMap = new Map<string, QuestionType>()
 
   for (const node of projectNodes) {
-    const qt = await loadNode(projectPath_, node, "project")
+    const qt = await loadNode(projectPath_, node)
     if (qt) outMap.set(qt.id, qt)
-  }
-
-  // User overrides: tombstone (_deleted: true) removes the entry
-  for (const node of userNodes) {
-    const result = await loadNodeOrTombstone(userOverridePath, node)
-    if (result === null) {
-      const id = node.name.replace(/\.(yaml|yml|md)$/, "")
-      outMap.delete(id)
-    } else if (result) {
-      outMap.set(result.id, result)
-    }
   }
 
   return Array.from(outMap.values())
@@ -76,7 +60,6 @@ async function tryListDirectory(path: string): Promise<FileNode[]> {
 async function loadNode(
   dir: string,
   node: FileNode,
-  source: "project" | "user",
 ): Promise<QuestionType | null> {
   if (node.is_dir) return null
   if (node.name.startsWith(".")) return null
@@ -90,45 +73,14 @@ async function loadNode(
   try {
     const content = await readFile(filePath)
     const qt = isYaml ? parseYamlQuestionType(id, content) : parseMdQuestionType(id, content)
-    return { ...qt, _source: source, _filePath: filePath }
+    return { ...qt, _filePath: filePath }
   } catch (err) {
     console.warn(`[question-types] failed to load ${node.name}:`, err)
     return null
   }
 }
 
-// Returns null for tombstone, QuestionType for valid entry, undefined on error/skip
-async function loadNodeOrTombstone(
-  dir: string,
-  node: FileNode,
-): Promise<QuestionType | null | undefined> {
-  if (node.is_dir) return undefined
-  if (node.name.startsWith(".")) return undefined
-
-  const isYaml = node.name.endsWith(".yaml") || node.name.endsWith(".yml")
-  const isMd = node.name.endsWith(".md")
-  if (!isYaml && !isMd) return undefined
-
-  const id = node.name.replace(/\.(yaml|yml|md)$/, "")
-  const filePath = `${dir}/${node.name}`
-  try {
-    const content = await readFile(filePath)
-    if (isYaml) {
-      const raw = yaml.load(content) as any
-      if (raw && raw._deleted === true) return null // tombstone
-      const qt = parseYamlQuestionType(id, content)
-      return { ...qt, _source: "user", _filePath: filePath }
-    } else {
-      const qt = parseMdQuestionType(id, content)
-      return { ...qt, _source: "user", _filePath: filePath }
-    }
-  } catch (err) {
-    console.warn(`[question-types] failed to load ${node.name}:`, err)
-    return undefined
-  }
-}
-
-function parseYamlQuestionType(id: string, content: string): Omit<QuestionType, "_source" | "_filePath"> {
+function parseYamlQuestionType(id: string, content: string): Omit<QuestionType, "_filePath"> {
   const raw = yaml.load(content) as any
   return {
     id,
@@ -140,7 +92,7 @@ function parseYamlQuestionType(id: string, content: string): Omit<QuestionType, 
   }
 }
 
-function parseMdQuestionType(id: string, content: string): Omit<QuestionType, "_source" | "_filePath"> {
+function parseMdQuestionType(id: string, content: string): Omit<QuestionType, "_filePath"> {
   const { fm, body } = parseFrontmatter(content)
   let name = ""
   if (typeof fm.title === "string" && fm.title.trim()) {

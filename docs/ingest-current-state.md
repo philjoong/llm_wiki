@@ -41,8 +41,6 @@ raw source file
 동작:
 - LLM에게 source 문서를 읽고 개념/토픽 단위의 SECTION 블록을 emit하도록 요청한다.
 - 각 섹션에 대해 `db/` 아래 저장할 `page_path`도 함께 결정한다 (기존 db/ 인덱스 참고).
-- 관계 추출, graph 배정, relation type 결정은 하지 않는다.
-- 출력은 JSON이 아니라 delimiter 기반 SECTION 형식이다.
 
 ```text
 ---SECTION: ## 고블린 전사 | db/enemies/goblin-warrior.md---
@@ -217,8 +215,6 @@ Merge를 거쳐 draft를 수동으로 고친 뒤 Approve해도, graph assignment
 |------|------|
 | 경로·엔티티 매칭 없음 | `page_path`가 다르면 같은 주제여도 별도 파일 생성 |
 | graph 연동 | 충돌 없는 경우 graph assignment → sync 즉시. 충돌 있을 때 Approve 시 `reIngestDocument()`로 graph assignment 실행, Reject 시 실행 안 함 |
-| 섹션별 개별 Approve/Reject UI 없음 | 페이지에 충돌 섹션이 여러 개면 proposal 카드가 섹션별로 여러 개 생기지만, 카드 자체는 섹션 단위 승인/거부만 지원 — 한 카드에서 여러 섹션을 동시에 다루는 UI는 없음 |
-| heading 텍스트 변경 시 매칭 실패 | 섹션 매칭은 `## heading` 문자열의 정확한 일치로 판단한다. incoming이 heading 텍스트 자체를 바꾸면(예: `## 보상` → `## 획득 보상`) 기존 매칭이 끊겨 신규 섹션으로 취급된다 |
 
 ---
 
@@ -231,10 +227,6 @@ chunk마다 파일 write 직후 `syncGraphToBackend()` 호출 (`src/lib/graph-sy
 - markdown 파일을 다시 읽지 않는다.
 - **graph assignment validation 통과 triple**이 유일한 입력이다.
 - 충돌 없는 경우: file write 직후 즉시 실행. 충돌 있는 경우: 사용자 Approve 후 실행 (Reject 시 실행 안 함).
-
-### Backend 선택
-
-`getGraphBackend(projectPath)`는 항상 embedded SQLite backend(`.llm-wiki/graph.sqlite`)를 반환한다. FalkorDB backend는 제거되었다 — `syncGraphToBackend()`라는 이름 자체가 이 정리를 반영한 것이다 (과거 `syncGraphToFalkorDb()`에서 리네이밍됨).
 
 ### Upsert 동작 (SQLite 기준)
 

@@ -12,7 +12,7 @@
  * TS source here is the only thing tracked.
  */
 
-export type ReviewType = "suggestion" | "entity_confirmation"
+export type ReviewType = "suggestion"
 
 export interface ReviewFixture {
   id: string
@@ -92,7 +92,7 @@ export interface IngestScenario {
      * review has the same type and a title containing titleContains.
      */
     reviewsCreated?: Array<{
-      type: "suggestion" | "entity_confirmation"
+      type: "suggestion"
       titleContains: string
     }>
   }

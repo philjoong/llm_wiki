@@ -8,7 +8,6 @@ import {
   X,
   Check,
   Trash2,
-  Users,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
@@ -21,16 +20,12 @@ import {
   pendingModification,
   counterexampleModification,
 } from "@/lib/modification-resolve"
-import { loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
 import { reIngestDocument } from "@/lib/ingest"
-import { syncGraphToBackend } from "@/lib/graph-sync"
-import { loadEntityDict, saveEntityDict, addAlias, upsertEntity } from "@/lib/entity-dict"
 import { PendingView } from "@/components/review/pending-view"
 
 const typeConfig: Record<ReviewItem["type"], { icon: typeof Lightbulb; label: string; color: string }> = {
   suggestion: { icon: Lightbulb, label: "Suggestion", color: "text-emerald-500" },
   modification: { icon: GitMerge, label: "Modification", color: "text-orange-500" },
-  entity_confirmation: { icon: Users, label: "Entity Confirmation", color: "text-teal-500" },
 }
 
 export function ReviewView() {
@@ -114,75 +109,6 @@ export function ReviewView() {
       } catch (err) {
         console.error("[review] modification action failed:", err)
         resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      return
-    }
-
-    // Entity confirmation — resolve a fuzzy name conflict, then sync the
-    // held-back triples to the graph backend.
-    if (item?.type === "entity_confirmation" && project) {
-      const payload = item.entityConfirmation
-      if (!payload) {
-        resolveItem(id, action)
-        return
-      }
-      try {
-        let dict = await loadEntityDict(pp)
-        let triplesToSync = payload.triples
-
-        if (action.startsWith("entity:same:")) {
-          const targetId = action.slice("entity:same:".length)
-          dict = addAlias(targetId, payload.incomingName, dict)
-          const target = dict[targetId]
-          if (target) {
-            triplesToSync = payload.triples.map((t) => ({
-              ...t,
-              subject: t.subject === payload.incomingName ? target.canonicalName : t.subject,
-              object: t.object === payload.incomingName ? target.canonicalName : t.object,
-            }))
-          }
-        } else if (action === "entity:new") {
-          dict = upsertEntity({ canonicalName: payload.incomingName }, dict)
-        }
-        // "entity:ignore" — sync as-is; graph-sync.ts will auto-register incomingName.
-
-        await saveEntityDict(pp, dict)
-        await syncGraphToBackend(pp, projectName, triplesToSync)
-        resolveItem(id, action)
-      } catch (err) {
-        console.error("[review] entity_confirmation action failed:", err)
-        resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
-      return
-    }
-
-    // overflow:create:{sourceGraph}:{newGraph}:{type1,type2,...}
-    if (action.startsWith("overflow:create:") && project) {
-      const parts = action.slice("overflow:create:".length).split(":")
-      // parts = [sourceGraph, newGraph, "type1,type2,..."]
-      if (parts.length >= 3) {
-        const [, newGraph, typesStr] = parts
-        const newTypes = typesStr.split(",").map((t) => t.trim()).filter(Boolean)
-        try {
-          const policy = await loadGraphPolicy(pp)
-          if (!policy.managedGraphs.includes(newGraph)) {
-            const updatedPolicy = {
-              ...policy,
-              managedGraphs: [...policy.managedGraphs, newGraph],
-              graphRelationTypes: {
-                ...policy.graphRelationTypes,
-                [newGraph]: newTypes.slice(0, 4),
-              },
-            }
-            await saveGraphPolicy(pp, updatedPolicy)
-          }
-          resolveItem(id, `Created graph "${newGraph}"`)
-        } catch (err) {
-          console.error("[review] overflow:create failed:", err)
-          resolveItem(id, `Failed: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      } else {
-        resolveItem(id, action)
       }
       return
     }
@@ -461,36 +387,6 @@ function ReviewCard({
         <ModificationDiff proposal={item.proposal} />
       )}
 
-      {item.type === "entity_confirmation" && item.entityConfirmation && (
-        <EntityConfirmationView payload={item.entityConfirmation} />
-      )}
-
-      {item.overflowEntries && item.overflowEntries.length > 0 && (
-        <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-2">
-          {item.overflowEntries.map((e) => (
-            <div key={e.graph} className="space-y-0.5">
-              <div>
-                <span className="font-mono font-semibold">{e.graph}</span>
-                <span className="text-muted-foreground"> is full — new types: </span>
-                <span className="font-mono">{e.newTypes.join(", ")}</span>
-                <span className="text-muted-foreground"> → suggest graph: </span>
-                <span className="font-mono font-medium">{e.suggestedGraph}</span>
-              </div>
-              {e.existingTypes.length > 0 && (
-                <div className="text-muted-foreground">
-                  Existing types on <span className="font-mono">{e.graph}</span>: <span className="font-mono">{e.existingTypes.join(", ")}</span>
-                </div>
-              )}
-              {e.affectedPaths.length > 0 && (
-                <div className="text-muted-foreground">
-                  Affected pages: {e.affectedPaths.join(", ")}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
       {!item.resolved ? (
         <div className="flex flex-wrap gap-1.5">
           {item.type === "modification" ? (
@@ -544,14 +440,10 @@ function ModificationDiff({
 
   return (
     <div className="mb-3 grid grid-cols-2 gap-2 text-[11px]">
-      {proposal.sectionHeading !== undefined && (
-        <div className="col-span-2 flex items-center gap-2 rounded border bg-muted/20 px-2 py-1 text-[10px]">
-          <span className="text-muted-foreground">변경 섹션:</span>
-          <code className="rounded bg-muted px-1">
-            {proposal.sectionHeading === null ? "(문서 도입부)" : `## ${proposal.sectionHeading}`}
-          </code>
-        </div>
-      )}
+      <div className="col-span-2 flex items-center gap-2 rounded border bg-muted/20 px-2 py-1 text-[10px]">
+        <span className="text-muted-foreground">변경 섹션:</span>
+        <code className="rounded bg-muted px-1">{proposal.sectionId}</code>
+      </div>
       {(existingGraph || incomingGraph) && (
         <div className="col-span-2 flex items-center gap-2 rounded border bg-muted/20 px-2 py-1 text-[10px]">
           <span className="text-muted-foreground">Target graph:</span>
@@ -583,60 +475,6 @@ function ModificationDiff({
       <div className="col-span-2 text-[10px] text-muted-foreground">
         Draft: <code>{proposal.incomingDraftPath}</code>
       </div>
-    </div>
-  )
-}
-
-/**
- * Evidence block for an entity_confirmation card: which existing entities
- * matched the incoming name (and via which alias), each candidate's linked
- * documents and graph nodes, plus a few of the held-back triples so the
- * user can judge whether the names refer to the same entity.
- */
-function EntityConfirmationView({
-  payload,
-}: {
-  payload: NonNullable<ReviewItem["entityConfirmation"]>
-}) {
-  const tripleExamples = payload.triples.slice(0, 3)
-  return (
-    <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs space-y-2">
-      {payload.candidates.map((c) => (
-        <div key={c.entry.id} className="space-y-0.5">
-          <div>
-            <span className="font-mono font-semibold">{c.entry.canonicalName}</span>
-            <span className="text-muted-foreground">
-              {" — "}
-              {c.match === "exact" ? "정확히 일치" : "이름 유사"}
-              {c.matchedName && c.matchedName !== c.entry.canonicalName
-                ? ` (alias "${c.matchedName}" 기준)`
-                : ""}
-            </span>
-          </div>
-          {c.entry.aliases.length > 0 && (
-            <div className="text-muted-foreground">
-              Aliases: <span className="font-mono">{c.entry.aliases.join(", ")}</span>
-            </div>
-          )}
-          <div className="text-muted-foreground">
-            연결 문서 {c.entry.pagePaths.length}개
-            {c.entry.pagePaths.length > 0 && `: ${c.entry.pagePaths.join(", ")}`} · 그래프 노드 {c.entry.graphNodes.length}개
-          </div>
-        </div>
-      ))}
-      {tripleExamples.length > 0 && (
-        <div className="space-y-0.5 border-t pt-1.5">
-          <div className="text-muted-foreground">
-            보류된 triple{payload.triples.length > tripleExamples.length ? ` (${payload.triples.length}개 중 ${tripleExamples.length}개)` : ""}:
-          </div>
-          {tripleExamples.map((t, i) => (
-            <div key={i} className="font-mono">
-              {t.subject} --{t.predicate}--&gt; {t.object}
-              <span className="text-muted-foreground"> ({t.graph})</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

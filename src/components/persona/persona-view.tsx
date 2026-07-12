@@ -24,7 +24,6 @@ const inputCls =
 export function PersonaView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
-  const llmConfig = useWikiStore((s) => s.llmConfig)
   const projectPath = project ? normalizePath(project.path) : ""
 
   const [tab, setTab] = useState<"manage" | "scenarios" | "ask">("manage")
@@ -293,7 +292,7 @@ function ScenariosTab({ personas, scenarios, projectPath, onChange }: {
 
   async function handleExport(s: PlayScenario) {
     try {
-      const rel = await exportScenario(projectPath, project?.name || "default", s, personaById.get(s.personaId), llmConfig)
+      const rel = await exportScenario(projectPath, projectName, s, personaById.get(s.personaId), llmConfig)
       window.alert(t("persona.exportDone", { path: rel }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

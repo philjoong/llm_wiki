@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Read as IoRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use calamine::{Reader, open_workbook_auto, Data};
 
@@ -1349,16 +1349,35 @@ fn zip_add_dir_recursive(
     Ok(())
 }
 
-/// Pack a project folder into a zip archive.
-/// Includes: db/, question_types/, data_types/, .llm-wiki/, graphs.json (if present).
-/// The frontend writes graphs.json before calling this, then deletes it after.
+/// Pack the portable v2 project state into a zip archive. Runtime journals,
+/// caches, chats and UI state are intentionally not part of this contract.
 #[tauri::command]
 pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(), String> {
     use std::io::Write;
 
     let root = Path::new(&project_path);
+    let knowledge_db = root.join(".llm-wiki/knowledge.sqlite");
+    if !knowledge_db.is_file() {
+        return Err("Cannot export a project without .llm-wiki/knowledge.sqlite".into());
+    }
+    if !root.join(".llm-wiki/tag-schema.yaml").is_file() {
+        return Err("Cannot export a project without .llm-wiki/tag-schema.yaml".into());
+    }
+    let journal_dir = root.join(".llm-wiki/transactions");
+    if journal_dir.is_dir() && fs::read_dir(&journal_dir).map_err(|e| e.to_string())?.next().is_some() {
+        return Err("Cannot export while recovery operations are pending".into());
+    }
+    let connection = crate::knowledge::db::open_project(&project_path, false)
+        .map_err(|e| format!("Knowledge DB validation failed: {e}"))?;
+    connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(|e| format!("Knowledge DB checkpoint failed: {e}"))?;
+    let issues = crate::knowledge::integrity::run(&connection)
+        .map_err(|e| format!("Knowledge integrity check failed: {e}"))?;
+    if !issues.is_empty() {
+        return Err(format!("Cannot export project with {} integrity issue(s)", issues.len()));
+    }
+
     let include_dirs = ["db", "question_types", "data_types", ".llm-wiki"];
-    let extra_files = ["graphs.json"];
 
     let zip_file = fs::File::create(&dest_zip_path)
         .map_err(|e| format!("Cannot create zip at '{}': {}", dest_zip_path, e))?;
@@ -1366,7 +1385,7 @@ pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(),
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    for dir_name in &include_dirs {
+    for dir_name in &include_dirs[..3] {
         let dir_path = root.join(dir_name);
         if !dir_path.exists() {
             continue;
@@ -1377,7 +1396,8 @@ pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(),
         zip_add_dir_recursive(&mut zip, options, root, &dir_path)?;
     }
 
-    for file_name in &extra_files {
+    // These are the only .llm-wiki files that cross a project boundary.
+    for file_name in [".llm-wiki/knowledge.sqlite", ".llm-wiki/tag-schema.yaml", ".llm-wiki/project.json"] {
         let file_path = root.join(file_name);
         if file_path.exists() {
             zip.start_file(file_name, options)
@@ -1394,47 +1414,47 @@ pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(),
     Ok(())
 }
 
-/// Extract a project zip archive into dest_folder.
-/// dest_folder will be created if it does not exist.
+/// Extract only the portable v2 project layout.  A failed extraction removes
+/// the newly-created destination so callers never open a half-imported tree.
 #[tauri::command]
 pub fn project_import(zip_path: String, dest_folder: String) -> Result<(), String> {
-    use std::io::Read as _;
-
     let dest = Path::new(&dest_folder);
+    if dest.exists() {
+        return Err(format!("Import destination already exists: '{}'", dest.display()));
+    }
     fs::create_dir_all(dest)
         .map_err(|e| format!("Cannot create destination '{}': {}", dest_folder, e))?;
-
-    let zip_file = fs::File::open(&zip_path)
-        .map_err(|e| format!("Cannot open zip '{}': {}", zip_path, e))?;
-    let mut archive = zip::ZipArchive::new(zip_file)
-        .map_err(|e| format!("Failed to read zip '{}': {}", zip_path, e))?;
-
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| format!("Failed to read zip entry {}: {}", i, e))?;
-        let out_path = dest.join(entry.name());
-
-        if entry.name().ends_with('/') {
-            fs::create_dir_all(&out_path)
-                .map_err(|e| format!("Failed to create dir '{}': {}", out_path.display(), e))?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create dir '{}': {}", parent.display(), e))?;
+    let result = (|| -> Result<(), String> {
+        let zip_file = fs::File::open(&zip_path)
+            .map_err(|e| format!("Cannot open zip '{}': {}", zip_path, e))?;
+        let mut archive = zip::ZipArchive::new(zip_file)
+            .map_err(|e| format!("Failed to read zip '{}': {}", zip_path, e))?;
+        let mut has_knowledge_db = false;
+        let mut has_tag_schema = false;
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
+            let name = entry.name();
+            let allowed = name == ".llm-wiki/" || name == ".llm-wiki/knowledge.sqlite" || name == ".llm-wiki/tag-schema.yaml" || name == ".llm-wiki/project.json" || name.starts_with("db/") || name.starts_with("question_types/") || name.starts_with("data_types/");
+            if !allowed { return Err(format!("Unsupported archive entry: '{name}'")); }
+            let relative: PathBuf = entry.enclosed_name().ok_or_else(|| format!("Unsafe archive entry: '{name}'"))?.to_owned();
+            let out_path = dest.join(relative);
+            if entry.is_dir() {
+                fs::create_dir_all(&out_path).map_err(|e| format!("Failed to create dir '{}': {e}", out_path.display()))?;
+                continue;
             }
-            let mut outfile = fs::File::create(&out_path)
-                .map_err(|e| format!("Failed to create '{}': {}", out_path.display(), e))?;
-            let mut buf = Vec::new();
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("Failed to read entry '{}': {}", entry.name(), e))?;
-            std::io::Write::write_all(&mut outfile, &buf)
-                .map_err(|e| format!("Failed to write '{}': {}", out_path.display(), e))?;
+            if name == ".llm-wiki/knowledge.sqlite" { has_knowledge_db = true; }
+            if name == ".llm-wiki/tag-schema.yaml" { has_tag_schema = true; }
+            if let Some(parent) = out_path.parent() { fs::create_dir_all(parent).map_err(|e| format!("Failed to create '{}': {e}", parent.display()))?; }
+            let mut outfile = fs::File::create(&out_path).map_err(|e| format!("Failed to create '{}': {e}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut outfile).map_err(|e| format!("Failed to write '{}': {e}", out_path.display()))?;
         }
-    }
-
-    Ok(())
+        if !has_knowledge_db { return Err("Import archive is missing .llm-wiki/knowledge.sqlite".into()); }
+        if !has_tag_schema { return Err("Import archive is missing .llm-wiki/tag-schema.yaml".into()); }
+        crate::knowledge::db::open_project(&dest_folder, false).map_err(|e| format!("Imported knowledge DB is invalid: {e}"))?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_dir_all(dest); }
+    result
 }
 
 #[cfg(test)]

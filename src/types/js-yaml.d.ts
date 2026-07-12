@@ -1,5 +1,5 @@
 declare module "js-yaml" {
-  export function load(content: string): unknown
+  export function load(content: string, options?: Record<string, unknown>): unknown
   export function dump(value: unknown): string
 
   const yaml: {

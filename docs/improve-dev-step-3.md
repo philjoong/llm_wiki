@@ -17,7 +17,7 @@ src/lib/markdown-v2/
   anchors.ts
 ```
 
-기존 `src/lib/ingest.ts`의 `splitIntoSections()`와 `reconcileSections()`에서 로직을 복사해 수정하지 말고 독립 모듈을 만든 뒤 호출부를 교체한다.
+기존 `src/lib/ingest.ts`의 `splitIntoSections()`와 `reconcileSections()`에서 로직을 복사해 수정하지 말고 독립 모듈을 만든 뒤 호출부를 교체한다. 교체가 끝나면 기존 parser/reconcile 구현, 이들을 위한 adapter·fallback·feature flag, v1 동작을 보장하던 전용 fixture/test와 import를 삭제한다. v1/v2를 병행해서 읽거나 쓰지 않는다.
 
 ## parser 계약
 
@@ -74,6 +74,13 @@ offset은 citation anchor와 preview가 같은 parser 결과를 재사용할 수
 
 본문 비교 전 line ending과 trailing whitespace만 정규화하고 의미 변환은 하지 않는다.
 
+## 레거시 제거 규칙
+
+- 기존 Markdown v1 문서는 자동 보정하거나 fallback parser로 처리하지 않는다. v2 validator가 `VALIDATION_FAILED` 오류로 명확히 거부한다.
+- heading, page path, ordinal을 section identity 또는 approve splice 기준으로 쓰던 코드를 제거한다. `section_id`만 section identity, conflict map key, modification proposal, approve splice의 기준이다.
+- 기존 ingest section fixture/test는 v2 parser 계약으로 대체한다. v1 결과를 보장하거나 제목 기반 merge를 검증하는 테스트는 삭제한다.
+- graph 저장 레거시(`graph_sqlite`, `graph-policy`, `page-graph-index`, `graphs.json`)는 이 parser 단계에서 adapter를 추가해 연명하지 않는다. 전체 전환 단계에서 새 knowledge DB 사용처로 바꾼 뒤 기존 read/write command, type, serializer, fixture/test를 함께 제거한다.
+
 ## 생성·수정 흐름 반영
 
 - `buildFileBlocksFromSections()` 출력 계약에 page/section metadata를 포함한다.
@@ -104,10 +111,10 @@ offset은 citation anchor와 preview가 같은 parser 결과를 재사용할 수
 - section 충돌 판정에서 heading text 비교가 사라진다.
 - parser/serializer round trip 후 안정 ID와 본문이 유지된다.
 - modification proposal이 page/section ID를 가진다.
+- v1 parser/reconcile과 제목·경로 기반 section identity의 실행 경로, adapter, fallback, 전용 테스트가 남아 있지 않다.
 
 ## 다음 단계로 넘어가기 전 체크
 
 - serializer가 사용자의 Markdown 포맷을 과도하게 재작성하지 않는가?
 - 기존 문서는 지원하지 않고 명확히 validation error를 내는가?
 - 프로젝트 전역 section ID 중복 검사가 DB transaction 안에도 있는가?
-

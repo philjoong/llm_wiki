@@ -59,14 +59,6 @@ describe("review-store addItems dedupe", () => {
     expect(items[0].affectedPages).toEqual(expect.arrayContaining(["x.md", "y.md"]))
   })
 
-  it("does NOT merge across different types", () => {
-    useReviewStore.getState().addItems([
-      makeInput({ type: "suggestion", title: "Attention" }),
-      makeInput({ type: "entity_confirmation", title: "Attention" }),
-    ])
-    expect(useReviewStore.getState().items).toHaveLength(2)
-  })
-
   it("does NOT merge into a resolved item (creates a new one)", () => {
     const store = useReviewStore.getState()
     store.addItems([makeInput({ title: "Attention" })])

@@ -45,6 +45,30 @@ pub fn open_project(path: String) -> Result<WikiProject, String> {
             ));
         }
 
+        // A v2 project is never silently upgraded from the previous graph
+        // database.  Creating an empty knowledge.sqlite here would make the
+        // old assertions disappear from the user's view, so fail before any
+        // caller can open or mutate the project.
+        let knowledge_db = root.join(".llm-wiki").join("knowledge.sqlite");
+        if !knowledge_db.is_file() {
+            let legacy_graph = root.join(".llm-wiki").join("graph.sqlite");
+            let detail = if legacy_graph.is_file() {
+                "legacy graph.sqlite was found"
+            } else {
+                "knowledge.sqlite is missing"
+            };
+            return Err(format!(
+                "Unsupported legacy project ({detail}). Create a new v2 project and restore a v2 export instead: '{}'",
+                path
+            ));
+        }
+        if !root.join(".llm-wiki").join("tag-schema.yaml").is_file() {
+            return Err(format!(
+                "Invalid v2 project (missing .llm-wiki/tag-schema.yaml): '{}'",
+                path
+            ));
+        }
+
         // Derive project name from the directory name
         let name = root
             .file_name()

@@ -997,6 +997,7 @@ mod tests {
         }
         let dir = make_tmpdir("idem");
         let p = dir.to_string_lossy().to_string();
+        fs::create_dir_all(dir.join("db")).unwrap();
         fs::write(dir.join("db/.gitkeep"), "# bootstrap").unwrap();
 
         git_init(p.clone()).await.expect("first init");

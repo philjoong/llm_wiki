@@ -1,6 +1,14 @@
 # 문서·엔티티·그래프 연결 개선 설계
 
-상태: 제안
+상태: 구현 완료 (2026-07-12)
+
+구현 검증:
+
+- `knowledge.sqlite`가 page/section/entity/graph/assertion/evidence의 authoritative 저장소다.
+- Markdown v2와 stable ID 기반 ingest/review/citation 경로를 사용한다.
+- production의 legacy graph backend, graph policy, page graph index, entity JSON dictionary 및 `graph_sqlite` command를 제거했다.
+- `npm run typecheck`, `npm run test:mocks`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm run build`가 통과한다.
+- real LLM 품질·성능 측정은 API 환경에서 수행하는 별도 운영 검증으로 남긴다.
 
 이 문서는 현재 데이터 형식과의 호환성을 전제로 하지 않는 차세대 설계안이다. 목표는 다음과 같다.
 

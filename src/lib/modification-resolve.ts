@@ -26,8 +26,7 @@
 
 import { readFile, writeFile, deleteFile, fileExists } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
-import { mergeSourceRefsIntoContent } from "@/lib/sources-merge"
-import { replaceSection } from "@/lib/ingest"
+import { parseMarkdownV2, serializeMarkdownV2, spliceSectionById } from "@/lib/markdown-v2"
 import type { ModificationProposal } from "@/stores/review-store"
 import type { SourceRef } from "@/lib/source-ref"
 
@@ -68,14 +67,13 @@ export async function approveModification(
   const incoming = await readFile(draftAbs)
   const existing = (await fileExists(targetAbs)) ? await readFile(targetAbs) : null
 
-  // Section-scoped proposal: the draft holds only the conflicting
-  // section's body (see writeFileBlocks' reconcileSections path), and
-  // the rest of the target page was already written immediately when
-  // the proposal was created. Splice just that section back in instead
-  // of overwriting the whole page with the section-only draft.
-  const merged = proposal.sectionHeading !== undefined && existing !== null
-    ? replaceSection(existing, proposal.sectionHeading, incoming)
-    : mergeSourceRefsIntoContent(incoming, existing)
+  if (!proposal.pageId || !proposal.sectionId) throw new Error("VALIDATION_FAILED: modification proposal has no v2 pageId/sectionId")
+  if (existing === null) throw new Error(`Cannot approve section '${proposal.sectionId}': target page is missing`)
+  const page = parseMarkdownV2(existing)
+  if (page.page.page_id !== proposal.pageId) throw new Error(`Cannot approve section '${proposal.sectionId}': page identity changed`)
+  const current = page.sections.find((section) => section.sectionId === proposal.sectionId)
+  if (!current) throw new Error(`Cannot approve section '${proposal.sectionId}': section no longer exists`)
+  const merged = serializeMarkdownV2(spliceSectionById(page, proposal.sectionId, { ...current, body: incoming }))
 
   await writeFile(targetAbs, merged)
   await deleteFile(draftAbs)

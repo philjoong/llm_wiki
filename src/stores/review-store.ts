@@ -1,8 +1,6 @@
 import { create } from "zustand"
 import { normalizeReviewTitle } from "@/lib/review-utils"
 import type { SourceRef } from "@/lib/source-ref"
-import type { GraphAssignmentTriple } from "@/lib/ingest"
-import type { EntityCandidate } from "@/lib/entity-dict"
 
 export interface ReviewOption {
   label: string
@@ -16,14 +14,12 @@ export interface ReviewOption {
  *
  * - `targetPath` — the db/ page the user has to decide about
  * - `existingExcerpt` / `incomingExcerpt` — the conflicting content only.
- *   When the conflict is section-scoped (see `sectionHeading`), these hold
- *   just that `## heading` block's body, not the whole page — the parts of
+ *   These excerpts hold just the stable-ID section body, not the whole page.
+ *   The parts of
  *   the incoming page that didn't conflict are written immediately instead
  *   of waiting on this proposal. Stored eagerly so the card can render
  *   without extra disk reads.
- * - `sectionHeading` — the `## heading` text of the conflicting section, or
- *   `null` when the conflict is the page's leading (pre-first-heading)
- *   content, or undefined for a legacy whole-page conflict.
+ * - `pageId` / `sectionId` — stable identity used for conflict resolution.
  * - `incomingDraftPath` — relative path of the parked proposal file
  *   under `pending/_proposals/...`. Approve / Pending / Counterexample
  *   all start by reading or moving this file.
@@ -32,11 +28,12 @@ export interface ReviewOption {
  */
 export interface ModificationProposal {
   targetPath: string
+  pageId?: string
+  sectionId?: string
   existingExcerpt: string
   incomingExcerpt: string
   incomingDraftPath: string
   sourceRefs: SourceRef[]
-  sectionHeading?: string | null
 }
 
 /**
@@ -44,38 +41,11 @@ export interface ModificationProposal {
  * Carries enough info so the review card can offer "create new graph" as an
  * actionable resolution instead of just Dismiss.
  */
-export interface OverflowEntry {
-  /** The graph that was full. */
-  graph: string
-  /** The relation types that couldn't be added. */
-  newTypes: string[]
-  /** The graph's current relation types (the ones it's full of). */
-  existingTypes: string[]
-  /** Suggested new graph name (e.g. "ui_nav_graph_2"). */
-  suggestedGraph: string
-  /** Pages that were skipped due to this overflow. */
-  affectedPaths: string[]
-}
-
-/**
- * One entry per entity-name conflict from checkEntityConflicts(). Groups all
- * triples that used `incomingName` for the same underlying concept so a
- * single card can resolve them together.
- */
-export interface EntityConfirmationItem {
-  incomingName: string
-  /** Matched dictionary entries, each with the match kind and the name that matched. */
-  candidates: EntityCandidate[]
-  triples: GraphAssignmentTriple[]
-  pagePaths: string[]
-}
-
 export interface ReviewItem {
   id: string
   type:
     | "suggestion"
     | "modification"
-    | "entity_confirmation"
   /**
    * Modification-proposal two-step decision tree. Only meaningful for
    * `type: "modification"`. `"primary"` shows [Approve | Merge | Reject];
@@ -86,11 +56,6 @@ export interface ReviewItem {
   stage?: "primary" | "rejection-handling"
   /** Modification-only payload — the diff data and the parked draft. */
   proposal?: ModificationProposal
-  /** Overflow-only payload — one entry per overflowed graph. Only present on
-   *  suggestion items that come from graph assignment relation-type overflow. */
-  overflowEntries?: OverflowEntry[]
-  /** entity_confirmation-only payload — the fuzzy-matched name and the triples that used it. */
-  entityConfirmation?: EntityConfirmationItem
   title: string
   description: string
   sourcePath?: string
@@ -152,14 +117,14 @@ export const useReviewStore = create<ReviewState>((set) => ({
       // Non-modification types: dedupe against pending only.
       const pendingIndex = new Map<string, number>()
       result.forEach((it, idx) => {
-        if (it.type === "modification" || it.type === "entity_confirmation") return
+        if (it.type === "modification") return
         if (!it.resolved) {
           pendingIndex.set(keyFor(it.type, it.title), idx)
         }
       })
 
       for (const incoming of items) {
-        if (incoming.type === "modification" || incoming.type === "entity_confirmation") {
+        if (incoming.type === "modification") {
           // Always append — never merge.
           result.push({
             ...incoming,

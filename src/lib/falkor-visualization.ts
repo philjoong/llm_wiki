@@ -1,5 +1,5 @@
 export interface CanvasNode {
-  id: number
+  id: string
   labels: string[]
   color?: string
   visible: boolean
@@ -9,12 +9,12 @@ export interface CanvasNode {
 }
 
 export interface CanvasEdge {
-  id: number
+  id: string
   relationship: string
   color?: string
   visible: boolean
-  source: number
-  target: number
+  source: string
+  target: string
   data: Record<string, any>
   highlighted?: boolean
 }

@@ -8,17 +8,15 @@ import { useChatStore, chatMessagesToLLM, type ChatStoreHook } from "@/stores/ch
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { executeIngestWrites } from "@/lib/ingest"
-import { listDirectory, readFile, deleteFile } from "@/commands/fs"
-import { searchWiki } from "@/lib/search"
-import { getGraphContext, formatGraphContextBlocks } from "@/lib/graph-qna"
-import { normalizePath, getRelativePath } from "@/lib/path-utils"
+import { listDirectory, deleteFile } from "@/commands/fs"
+import { getGraphContext } from "@/lib/graph-qna"
+import { normalizePath } from "@/lib/path-utils"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
-import { computeContextBudget } from "@/lib/context-budget"
 import { loadQuestionTypes } from "@/lib/question-types"
+import { citationPrompt, finalizeCitations, issueCitationMap } from "@/lib/chat-citations"
+import { searchSectionCandidates, type SectionCandidate } from "@/lib/knowledge"
 
-// Store the page mapping from the last query so SourceFilesBar can show which pages were cited
-export let lastQueryPages: { title: string; path: string }[] = []
 
 function formatDate(timestamp: number): string {
   const d = new Date(timestamp)
@@ -171,6 +169,10 @@ export function ChatPanel({
 
   const handleSend = useCallback(
     async (text: string, questionTypeId?: string, useEmbedding?: boolean) => {
+      // The v2 section provider currently has deterministic lexical retrieval;
+      // retain this argument for the ChatInput contract until its embedding
+      // provider is added without resurrecting file-search fallback.
+      void useEmbedding
       // Auto-create a conversation if none is active
       let convId = useStore.getState().activeConversationId
       if (!convId) {
@@ -182,7 +184,7 @@ export function ChatPanel({
 
       // Build system prompt with wiki context using graph-enhanced retrieval
       const systemMessages: LLMMessage[] = []
-      let queryRefs: { title: string; path: string }[] = []
+      let citationEntries: ReturnType<typeof issueCitationMap> = []
       let langReminder: string | undefined
       // Pure greetings ("hi", "你好", "嗨") don't warrant running the whole
       // retrieval pipeline — it's slow, costs context, and drags in random
@@ -205,112 +207,16 @@ export function ChatPanel({
       } else if (project) {
         const pp = normalizePath(project.path)
 
-        // ── Budget allocation (see context-budget.ts) ─────────
-        // Page budget scales with the LLM's context window; we now
-        // also reserve ~15% as headroom for the response so the
-        // model isn't truncated mid-sentence on a packed prompt.
-        const {
-          indexBudget: INDEX_BUDGET,
-          pageBudget: PAGE_BUDGET,
-          maxPageSize: MAX_PAGE_SIZE,
-        } = computeContextBudget(llmConfig.maxContextSize)
+        // Section retrieval is the sole document input for Chat. `useEmbedding`
+        // is deliberately not used to re-enable the retired file-search path.
+        const sectionCandidates = await searchSectionCandidates(pp, text, graphPrefixFilter)
 
-        const rawIndex = await readFile(`${pp}/db/index.md`).catch(() => "")
-
-        // ── Phase 1: Search retrieval ──────────────────────────
-        // useEmbedding=false: temporarily override embeddingConfig so
-        // fuseTokenAndVector skips vector search for this query only.
-        const { useWikiStore: _wikiStore } = await import("@/stores/wiki-store")
-        let embeddingRestoreValue: ReturnType<typeof _wikiStore.getState>["embeddingConfig"] | null = null
-        if (useEmbedding === false) {
-          embeddingRestoreValue = _wikiStore.getState().embeddingConfig
-          _wikiStore.getState().setEmbeddingConfig({ ...embeddingRestoreValue, enabled: false })
-        }
-        let searchResults
-        try {
-          searchResults = await searchWiki(pp, text)
-        } finally {
-          if (embeddingRestoreValue !== null) {
-            _wikiStore.getState().setEmbeddingConfig(embeddingRestoreValue)
-          }
-        }
-
-        // ── Trim index by relevance if over budget ─────────────
-        let index = rawIndex
-        if (rawIndex.length > INDEX_BUDGET) {
-          const { tokenizeQuery } = await import("@/lib/search")
-          const tokens = tokenizeQuery(text)
-          const lines = rawIndex.split("\n")
-          const keptLines: string[] = []
-          let keptSize = 0
-
-          for (const line of lines) {
-            const isHeader = line.startsWith("##")
-            const lower = line.toLowerCase()
-            const isRelevant = tokens.some((t) => lower.includes(t))
-
-            if (isHeader || isRelevant) {
-              if (keptSize + line.length + 1 <= INDEX_BUDGET) {
-                keptLines.push(line)
-                keptSize += line.length + 1
-              }
-            }
-          }
-          index = keptLines.join("\n")
-          if (index.length < rawIndex.length) {
-            index += "\n\n[...index trimmed to relevant entries...]"
-          }
-        }
-
-        // ── Step 3: Graph Q&A (relation / entity / path queries) ─────
+        // Preserve graph empty-state behavior, but do not inject graph output
+        // as a second, uncitable document source.
         const graphBlocks = await getGraphContext(text, pp, project.name, llmConfig, graphPrefixFilter)
         const noGraphContext = graphBlocks.length === 0
-        const cypherContext = formatGraphContextBlocks(graphBlocks)
-
-        // ── Phase 3 & 4: Page budget control ───────────────────
-        let usedChars = 0
-        type PageEntry = { title: string; path: string; content: string; priority: number }
-        const relevantPages: PageEntry[] = []
-
-        const tryAddPage = async (title: string, filePath: string, priority: number): Promise<boolean> => {
-          if (usedChars >= PAGE_BUDGET) return false
-          try {
-            const raw = await readFile(filePath)
-            const relativePath = getRelativePath(filePath, pp)
-            const truncated = raw.length > MAX_PAGE_SIZE
-              ? raw.slice(0, MAX_PAGE_SIZE) + "\n\n[...truncated...]"
-              : raw
-            if (usedChars + truncated.length > PAGE_BUDGET) return false
-            usedChars += truncated.length
-            relevantPages.push({ title, path: relativePath, content: truncated, priority })
-            return true
-          } catch { return false }
-        }
-
-        // P0: Title matches
-        for (const r of searchResults.filter((r) => r.titleMatch)) {
-          await tryAddPage(r.title, r.path, 0)
-        }
-        // P1: Content matches
-        for (const r of searchResults.filter((r) => !r.titleMatch)) {
-          await tryAddPage(r.title, r.path, 1)
-        }
-        // No relevant document → no fallback page. searchWiki's threshold
-        // (Phase B) already means "empty" is a considered answer, not just
-        // "nothing happened to match" — showing Overview here would violate
-        // "관련 없으면 아무것도 반환하지 않는다" by handing the LLM an
-        // unrelated page to answer from.
-        const noRelevantDocs = relevantPages.length === 0
-
-        const pagesContext = relevantPages.length > 0
-          ? relevantPages.map((p, i) =>
-              `### [${i + 1}] ${p.title}\nPath: ${p.path}\n\n${p.content}`
-            ).join("\n\n---\n\n")
-          : "(No db pages found)"
-
-        const pageList = relevantPages.map((p, i) =>
-          `[${i + 1}] ${p.title} (${p.path})`
-        ).join("\n")
+        citationEntries = issueCitationMap(sectionCandidates as SectionCandidate[])
+        const noRelevantDocs = citationEntries.length === 0
 
         const outLang = getOutputLanguage(text)
 
@@ -320,7 +226,7 @@ export function ChatPanel({
               "You are a knowledgeable wiki assistant. Answer questions based on the wiki content provided below.",
               "",
               "## Rules",
-              "- Answer based ONLY on the numbered wiki pages provided below.",
+              "- Answer based ONLY on the issued citation sections provided below.",
               "- If the provided pages don't contain enough information, say so honestly.",
               noRelevantDocs
                 ? "- No wiki page relevant to this question was found. State honestly that you could not find a relevant document in the wiki — do NOT invent an answer or use unrelated background knowledge."
@@ -329,23 +235,11 @@ export function ChatPanel({
                 ? "- No relevant knowledge graph relations, entities, or connecting path were found for this question. If the question asks how two things relate and the graph has no data on it, say honestly that you could not find a direct connection — do NOT invent a relationship."
                 : "",
               "- If the user's message contains multiple distinct questions, answer each one separately and clearly (e.g. numbered or with a short heading per question) rather than blending them into a single combined answer.",
-              "- Use [[wikilink]] syntax to reference wiki pages.",
-              "- When citing information, use the page number in brackets, e.g. [1], [2].",
-              "- At the END of your response, add a `## Sources` section listing every page you cited as a wikilink, one per line, in the order you cited them.",
-              "  Example:",
-              "  ## Sources",
-              "  - [[entities/foo]]",
-              "  - [[concepts/bar]]",
-              "- After the `## Sources` section, add a hidden comment listing which page numbers you used:",
-              "  <!-- cited: 1, 3, 5 -->",
+              "- Cite only with the exact marker syntax [[CIT:key]] for an issued key. Never invent a key, page ID, path, or quote.",
               "",
               "Use markdown formatting for clarity.",
               "",
-              cypherContext,
-              "",
-              index ? `## Wiki Index\n${index}` : "",
-              relevantPages.length > 0 ? `## Page List\n${pageList}` : "",
-              `## Wiki Pages\n\n${pagesContext}`,
+              `## Citation Sections\n\n${citationPrompt(citationEntries)}`,
               "",
               "---",
               "",
@@ -384,9 +278,6 @@ export function ChatPanel({
             }
           }
         }
-
-        lastQueryPages = relevantPages.map((p) => ({ title: p.title, path: p.path }))
-        queryRefs = [...lastQueryPages]
       }
 
       // ── Conversation history with count limit ────────────────
@@ -432,7 +323,7 @@ export function ChatPanel({
             appendStreamToken(token)
           },
           onDone: () => {
-            finalizeStream(accumulated, queryRefs)
+            finalizeStream(accumulated, finalizeCitations(accumulated, citationEntries))
             abortRef.current = null
             // save-worthy detection removed — user has direct "Save to Wiki" button on each message
           },
@@ -567,4 +458,3 @@ export function ChatPanel({
     </div>
   )
 }
-

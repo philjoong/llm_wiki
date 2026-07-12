@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { X, ExternalLink } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile } from "@/commands/fs"
+import { getKnowledgePage } from "@/commands/knowledge"
+import { parseMarkdownV2 } from "@/lib/markdown-v2"
+import { locateCitation } from "@/lib/chat-citations"
 import { normalizePath, getFileName } from "@/lib/path-utils"
 
 export function ChatReferencePanel() {
@@ -11,159 +14,50 @@ export function ChatReferencePanel() {
   const setChatReferencePreview = useWikiStore((s) => s.setChatReferencePreview)
   const setPendingOpenFile = useWikiStore((s) => s.setPendingOpenFile)
   const setActiveView = useWikiStore((s) => s.setActiveView)
-
-  const [content, setContent] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const highlightRef = useRef<HTMLDivElement>(null)
+  const project = useWikiStore((s) => s.project)
+  const [state, setState] = useState<{ path: string; heading: string; text: string; range: { startOffset: number; endOffset: number } | null } | null>(null)
 
   useEffect(() => {
-    if (!preview) {
-      setContent(null)
-      return
-    }
-    setLoading(true)
-    setContent(null)
-    readFile(preview.path)
-      .then((c) => setContent(c))
-      .catch(() => setContent("(파일을 읽을 수 없습니다)"))
-      .finally(() => setLoading(false))
-  }, [preview?.path])
-
-  // Scroll highlighted section into view after render
-  useEffect(() => {
-    if (!preview?.highlightSection || !highlightRef.current) return
-    const el = highlightRef.current.querySelector("[data-highlighted]")
-    el?.scrollIntoView({ behavior: "smooth", block: "center" })
-  }, [content, preview?.highlightSection])
+    if (!preview || !project) { setState(null); return }
+    let cancelled = false
+    const pp = normalizePath(project.path)
+    Promise.all([getKnowledgePage(pp, preview.pageId), Promise.resolve(preview)])
+      .then(async ([page, citation]) => {
+        if (!page) throw new Error("page missing")
+        const path = `${pp}/${page.pagePath}`
+        const parsed = parseMarkdownV2(await readFile(path))
+        if (parsed.page.page_id !== citation.pageId) throw new Error("page identity changed")
+        const section = parsed.sections.find((item) => item.sectionId === citation.sectionId)
+        if (!section) throw new Error("section missing")
+        if (!cancelled) setState({ path, heading: section.headingText, text: section.body, range: locateCitation(section.body, citation) })
+      })
+      .catch(() => { if (!cancelled) setState(null) })
+    return () => { cancelled = true }
+  }, [preview, project])
 
   if (!preview) return null
-
-  const fileName = getFileName(normalizePath(preview.path))
-
-  return (
-    <div className="flex h-full w-[380px] flex-shrink-0 flex-col border-l bg-background">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="flex-1 truncate text-sm font-medium text-foreground" title={fileName}>
-          {fileName.replace(/\.md$/, "")}
-        </span>
-        <button
-          type="button"
-          title="그래프에서 열기"
-          onClick={() => {
-            setPendingOpenFile(preview.path)
-            setActiveView("graph")
-          }}
-          className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          title="닫기"
-          onClick={() => setChatReferencePreview(null)}
-          className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      {/* Body */}
-      <div ref={highlightRef} className="flex-1 overflow-y-auto px-4 py-3 text-sm">
-        {loading && (
-          <p className="text-muted-foreground text-xs">불러오는 중...</p>
-        )}
-        {!loading && content !== null && (
-          <HighlightedMarkdown
-            content={content}
-            highlightSection={preview.highlightSection}
-          />
-        )}
-      </div>
+  const fileName = state ? getFileName(state.path) : "Reference"
+  return <div className="flex h-full w-[380px] flex-shrink-0 flex-col border-l bg-background">
+    <div className="flex items-center gap-2 border-b px-3 py-2">
+      <span className="flex-1 truncate text-sm font-medium" title={fileName}>{fileName.replace(/\.md$/, "")}</span>
+      <button type="button" title="그래프에서 열기" disabled={!state} onClick={() => { if (state) { setPendingOpenFile(state.path); setActiveView("graph") } }} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"><ExternalLink className="h-3.5 w-3.5" /></button>
+      <button type="button" title="닫기" onClick={() => setChatReferencePreview(null)} className="rounded p-1 text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
     </div>
-  )
+    <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
+      {!state ? <p className="text-xs text-muted-foreground">근거 구간을 찾을 수 없음</p> : <>
+        <h3 className="mb-2 font-medium">{state.heading}</h3>
+        {!state.range && <p className="mb-2 text-xs text-muted-foreground">근거 구간을 찾을 수 없음</p>}
+        <SectionMarkdown text={state.text} range={state.range} />
+      </>}
+    </div>
+  </div>
 }
 
-// ---------------------------------------------------------------------------
-// Section-level highlight renderer
-// ---------------------------------------------------------------------------
-
-interface HighlightedMarkdownProps {
-  content: string
-  highlightSection?: string
+function SectionMarkdown({ text, range }: { text: string; range: { startOffset: number; endOffset: number } | null }) {
+  if (!range) return <Markdown text={text} />
+  return <div><Markdown text={text.slice(0, range.startOffset)} /><mark className="rounded bg-yellow-200 px-0.5 dark:bg-yellow-900/60">{text.slice(range.startOffset, range.endOffset)}</mark><Markdown text={text.slice(range.endOffset)} /></div>
 }
 
-function HighlightedMarkdown({ content, highlightSection }: HighlightedMarkdownProps) {
-  // Strip YAML frontmatter
-  const body = content.replace(/^---[\s\S]*?---\n?/, "")
-
-  if (!highlightSection) {
-    return <PlainMarkdown content={body} />
-  }
-
-  // Split on ATX headings (# / ## / ### …)
-  // Each section = heading line + following content until next heading
-  const sectionRegex = /^(#{1,6} .+)$/m
-  const parts = body.split(sectionRegex)
-  // parts: [preface?, heading, body, heading, body, ...]
-
-  const sections: Array<{ heading: string | null; body: string }> = []
-  if (parts[0].trim()) {
-    sections.push({ heading: null, body: parts[0] })
-  }
-  for (let i = 1; i < parts.length; i += 2) {
-    sections.push({ heading: parts[i], body: parts[i + 1] ?? "" })
-  }
-
-  // Tokenize snippet into meaningful words (4+ chars, alpha/CJK)
-  const needleTokens = highlightSection
-    .toLowerCase()
-    .split(/[\s,.()\[\]{}<>:;!?'"\/\\|]+/)
-    .filter((t) => t.length >= 4)
-
-  // Find best-matching section by token overlap score
-  let bestIdx = -1
-  let bestScore = 0
-  sections.forEach((sec, idx) => {
-    const sectionText = ((sec.heading ?? "") + " " + sec.body).toLowerCase()
-    const matches = needleTokens.filter((t) => sectionText.includes(t)).length
-    const score = needleTokens.length > 0 ? matches / needleTokens.length : 0
-    if (score > bestScore) {
-      bestScore = score
-      bestIdx = idx
-    }
-  })
-  // Require at least 30% token overlap to highlight
-  const highlightIdx = bestScore >= 0.3 ? bestIdx : -1
-
-  return (
-    <div className="space-y-0">
-      {sections.map((sec, idx) => {
-        const isHighlighted = idx === highlightIdx
-        const md = (sec.heading ? sec.heading + "\n" : "") + sec.body
-
-        return (
-          <div
-            key={idx}
-            data-highlighted={isHighlighted ? "" : undefined}
-            className={
-              isHighlighted
-                ? "rounded-md bg-yellow-100 dark:bg-yellow-900/40 px-2 py-1 -mx-2"
-                : undefined
-            }
-          >
-            <PlainMarkdown content={md} />
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function PlainMarkdown({ content }: { content: string }) {
-  return (
-    <div className="prose prose-sm max-w-none dark:prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-pre:my-2 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-    </div>
-  )
+function Markdown({ text }: { text: string }) {
+  return <div className="prose prose-sm max-w-none dark:prose-invert prose-p:my-1"><ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown></div>
 }

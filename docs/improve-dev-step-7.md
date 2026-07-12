@@ -4,6 +4,18 @@
 
 Chat이 상위 section만 읽고, 모델이 발급된 citation key만 사용하게 한다. 스트리밍 완료 후 key를 안정 ID와 실제 인용 구간으로 변환해 저장하며 문서 이동·heading rename 뒤에도 reference가 열려야 한다.
 
+## Step 6 검색 결과 인계
+
+이 단계는 Step 6의 section candidate를 prompt의 유일한 문서 입력으로 사용한다. 파일 검색 결과나 graph hit만으로 문서 전체를 다시 읽어 citation을 만들지 않는다.
+
+- candidate의 `pageId`, `sectionId`, `ordinal`, `matchedRanges`, `assertionIds`, `evidenceState`, `graphPath`를 요청 단위 citation map에 보관한다.
+- prompt 직전에 `pages`/`sections` 존재를 다시 확인한다. 삭제된 section 또는 오래된 embedding/token cache hit는 제외하며, 그 key를 발급하지 않는다.
+- `pagePath`와 heading은 map에 표시용으로만 넣을 수 있고, 저장 reference의 identity나 preview lookup에는 사용하지 않는다.
+- `graphPrefixFilter`가 있는 Chat은 prefix를 허용 graph ID 목록으로 먼저 해석해 Step 6 `allowedGraphIds`에 전달한다. 모델이 받은 key나 graph path를 이용해 scope 밖 graph를 다시 조회해서는 안 된다.
+- RAG off는 embedding recall만 끄는 정책을 유지한다. entity/traversal/metadata 후보와 그로부터 만든 section citation은 계속 사용할 수 있다.
+
+`graphPath`와 `evidenceState`는 모델의 citation 사실을 결정하지 않는다. 이들은 사용자가 왜 section이 후보가 되었는지 확인하기 위한 provenance이며, citation anchor는 언제나 해당 section 안의 실제 텍스트여야 한다.
+
 ## message reference 계약
 
 `src/stores/chat-store.ts`의 `MessageReference`를 새 shape로 교체한다.
@@ -44,11 +56,11 @@ interface StructuredCitation {
 1. 응답에서 허용 문법의 key를 파싱한다.
 2. 이번 요청의 key map에 없는 값은 무시하고 경고 telemetry를 남긴다.
 3. key가 가리킨 실제 section 안에서 답변 문장과 관련된 인용 구간을 결정한다.
-4. 모델에게 quote를 다시 요청하지 않는다. 최소 첫 버전은 candidate의 `matchedRanges` 또는 제공한 evidence quote를 사용한다.
+4. 모델에게 quote를 다시 요청하지 않는다. 최소 첫 버전은 candidate의 `matchedRanges` 또는 **같은 section을 가리키는** evidence quote를 사용한다. assertion의 evidence가 다른 page/section에 있으면 quote anchor로 재사용하지 않는다.
 5. `quotedText`와 구분에 필요한 prefix/suffix를 함께 저장한다.
 6. 본문에는 citation marker를 렌더용 token으로 유지하고 reference 배열과 연결한다.
 
-모델이 citation key를 냈지만 구간을 좁힐 수 없으면 section 전체를 quote로 저장하지 말고 reference는 만들되 `quotedText`를 빈 값으로 둘지 정책을 정한다. 권장은 section reference는 유지하고 highlight 없음 상태로 표시하는 것이다.
+모델이 citation key를 냈지만 구간을 좁힐 수 없으면 section 전체를 quote로 저장하지 말고 reference는 만들되 `quotedText`를 빈 값으로 둘지 정책을 정한다. 권장은 section reference는 유지하고 highlight 없음 상태로 표시하는 것이다. 이 경우 `matchedRanges`가 없다는 사실을 임의 문장 선택으로 보완하지 않는다.
 
 ## preview와 highlight
 
@@ -82,6 +94,9 @@ interface StructuredCitation {
 - exact quote 다중 등장 시 context disambiguation
 - quote 삭제/수정 시 no-highlight 상태
 - section만 context budget에 포함되는지 확인
+- stale cache hit 또는 DB에서 삭제된 section에는 key가 발급되지 않음
+- RAG off에서도 entity/graph/metadata section citation은 유지되고 embedding recall만 비활성화됨
+- `graphPrefixFilter`가 traversal의 `allowedGraphIds`에 강제되어 scope 밖 section key가 발급되지 않음
 - no relevant section, RAG off, graph context empty, question type, 언어 reminder 회귀
 - streaming 중 marker가 잘려 들어오는 경우 finalize parsing
 
@@ -97,4 +112,3 @@ interface StructuredCitation {
 - citation marker가 일반 Markdown과 충돌하지 않는가?
 - section 원문이 바뀐 경우 잘못된 문장을 highlight하지 않는가?
 - context budget 계산이 파일이 아니라 실제 삽입 section 기준인가?
-

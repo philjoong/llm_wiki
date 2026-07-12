@@ -456,17 +456,6 @@ function App() {
       // ignore, start fresh
       debug("project-open: loadReviewItems failed", err)
     }
-    // Rebuild page↔graph index from SQLite so drift from manual edits self-heals
-    try {
-      debug("project-open: before rebuildPageGraphIndex")
-      const { rebuildPageGraphIndex } = await import("@/lib/page-graph-index")
-      await rebuildPageGraphIndex(proj.name, proj.path)
-      debug("project-open: after rebuildPageGraphIndex")
-    } catch (err) {
-      debug("project-open: rebuildPageGraphIndex failed", err)
-    }
-
-
     // Load persisted chat history
     try {
       debug("project-open: before loadChatHistory")
@@ -504,28 +493,12 @@ function App() {
 
   async function handleSync() {
     if (!project) return
-    const { getGraphBackend } = await import("@/lib/graph-backend")
-    const { writeFile } = await import("@/commands/fs")
     const { gitSyncCommit, gitPullRebase, gitPush, gitRemoteAdd } = await import("@/commands/git")
-    const { vcDbSaveSnapshot } = await import("@/commands/vc-db")
+    // knowledge.sqlite is authoritative and is committed directly; no graph
+    // JSON snapshot or legacy graph backend is involved in sync.
+    await gitSyncCommit(project.path, "sync: update knowledge database")
 
-    // 1. Export graph to JSON
-    const backend = await getGraphBackend(project.path)
-    const graphData = await backend.exportGraph(project.name, "main")
-    const graphJson = JSON.stringify(graphData, null, 2)
-
-    // 2. Write to graph.json
-    await writeFile(`${project.path}/graph.json`, graphJson)
-
-    // 3. Stage all changes (db/, pending/, graph.json, etc.) and commit
-    const commitRes = await gitSyncCommit(project.path, "sync: update graph snapshot")
-
-    // 4. Save to SQLite if committed
-    if (commitRes.committed && commitRes.commitHash) {
-      await vcDbSaveSnapshot(project.path, commitRes.commitHash, graphJson)
-    }
-
-    // 5. Ensure remote origin is registered
+    // Ensure remote origin is registered
     const repoBaseUrl = import.meta.env.VITE_GIT_REPO_URL || ""
     const gitToken = import.meta.env.VITE_GIT_TOKEN
     const remoteUrl = gitToken
@@ -533,7 +506,7 @@ function App() {
       : `https://${repoBaseUrl}`
     await gitRemoteAdd(project.path, "origin", remoteUrl)
 
-    // 6. Pull --rebase so remote changes are integrated before push
+    // Pull --rebase so remote changes are integrated before push
     const branch = useWikiStore.getState().selectedBranch || "main"
     const rebaseResult = await gitPullRebase(project.path, "origin", branch)
     if (!rebaseResult.success) {
@@ -544,7 +517,7 @@ function App() {
       throw err
     }
 
-    // 7. Push — git push -u creates the branch on remote if absent
+    // Push — git push -u creates the branch on remote if absent
     await gitPush(project.path, "origin", branch)
   }
 

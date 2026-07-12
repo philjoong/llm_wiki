@@ -8,9 +8,17 @@ export interface Conversation {
   updatedAt: number
 }
 
-export interface MessageReference {
-  title: string
-  path: string
+/** A durable citation anchor. Names and paths are intentionally not identity. */
+export interface StructuredCitation {
+  citationId: string
+  pageId: string
+  sectionId: string
+  quotedText: string
+  prefix?: string
+  suffix?: string
+  /** UTF-16 offsets relative to the current section body at creation time. */
+  startOffset?: number
+  endOffset?: number
 }
 
 export interface DisplayMessage {
@@ -19,7 +27,7 @@ export interface DisplayMessage {
   content: string
   timestamp: number
   conversationId: string
-  references?: MessageReference[]  // pages cited in this response, saved at creation time
+  references?: StructuredCitation[]
 }
 
 interface ChatState {
@@ -44,7 +52,7 @@ interface ChatState {
   setConversations: (conversations: Conversation[]) => void
   setStreaming: (streaming: boolean) => void
   appendStreamToken: (token: string) => void
-  finalizeStream: (content: string, references?: MessageReference[]) => void
+  finalizeStream: (content: string, references?: StructuredCitation[]) => void
   setMode: (mode: ChatState["mode"]) => void
   setIngestSource: (path: string | null) => void
   clearMessages: () => void

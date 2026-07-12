@@ -28,8 +28,23 @@ export async function loadReviewItems(projectPath: string): Promise<ReviewItem[]
 }
 
 interface PersistedChatData {
+  schemaVersion: 2
   conversations: Conversation[]
   messages: DisplayMessage[]
+}
+interface LoadedChatData { conversations: Conversation[]; messages: DisplayMessage[] }
+
+const CHAT_SCHEMA_VERSION = 2 as const
+
+function sanitizeMessages(messages: DisplayMessage[]): DisplayMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    // Do not adapt legacy path/title references: they are not stable anchors.
+    references: message.references?.filter((reference) =>
+      typeof reference.citationId === "string" && typeof reference.pageId === "string" &&
+      typeof reference.sectionId === "string" && typeof reference.quotedText === "string",
+    ),
+  }))
 }
 
 export async function saveChatHistory(
@@ -43,7 +58,7 @@ export async function saveChatHistory(
   // Save conversation list
   await writeFile(
     `${pp}/.llm-wiki/conversations.json`,
-    JSON.stringify(conversations, null, 2)
+    JSON.stringify({ schemaVersion: CHAT_SCHEMA_VERSION, conversations }, null, 2)
   )
 
   // Save each conversation's messages separately
@@ -59,57 +74,34 @@ export async function saveChatHistory(
     const toSave = msgs.slice(-100)
     await writeFile(
       `${pp}/.llm-wiki/chats/${convId}.json`,
-      JSON.stringify(toSave, null, 2)
+      JSON.stringify({ schemaVersion: CHAT_SCHEMA_VERSION, messages: toSave }, null, 2)
     )
   }
 }
 
-export async function loadChatHistory(projectPath: string): Promise<PersistedChatData> {
+export async function loadChatHistory(projectPath: string): Promise<LoadedChatData> {
   const pp = normalizePath(projectPath)
   try {
     // Try new format: separate files per conversation
     const convContent = await readFile(`${pp}/.llm-wiki/conversations.json`)
-    const conversations = JSON.parse(convContent) as Conversation[]
+    const conversationFile = JSON.parse(convContent) as Partial<PersistedChatData>
+    if (conversationFile.schemaVersion !== CHAT_SCHEMA_VERSION || !Array.isArray(conversationFile.conversations)) {
+      throw new Error("Unsupported chat schema version")
+    }
+    const conversations = conversationFile.conversations
 
     const allMessages: DisplayMessage[] = []
     for (const conv of conversations) {
       try {
         const msgContent = await readFile(`${pp}/.llm-wiki/chats/${conv.id}.json`)
-        const msgs = JSON.parse(msgContent) as DisplayMessage[]
-        allMessages.push(...msgs)
+        const messageFile = JSON.parse(msgContent) as Partial<PersistedChatData>
+        if (messageFile.schemaVersion !== CHAT_SCHEMA_VERSION || !Array.isArray(messageFile.messages)) continue
+        allMessages.push(...messageFile.messages)
       } catch {
         // Conversation file missing, skip
       }
     }
 
-    return { conversations, messages: allMessages }
-  } catch {
-    // Fall back to old format
-    try {
-      const content = await readFile(`${pp}/.llm-wiki/chat-history.json`)
-      const parsed = JSON.parse(content)
-
-      if (Array.isArray(parsed)) {
-        // Very old format: flat array
-        const legacyMessages = parsed as DisplayMessage[]
-        const defaultConv: Conversation = {
-          id: "default",
-          title: "Previous Conversations",
-          createdAt: legacyMessages[0]?.timestamp ?? Date.now(),
-          updatedAt: legacyMessages[legacyMessages.length - 1]?.timestamp ?? Date.now(),
-        }
-        const migratedMessages = legacyMessages.map((m) => ({
-          ...m,
-          conversationId: "default",
-        }))
-        return { conversations: [defaultConv], messages: migratedMessages }
-      }
-
-      // Old combined format
-      const data = parsed as PersistedChatData
-      return data
-    } catch {
-      return { conversations: [], messages: [] }
-    }
-  }
+    return { conversations, messages: sanitizeMessages(allMessages) }
+  } catch { return { conversations: [], messages: [] } }
 }

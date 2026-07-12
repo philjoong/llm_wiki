@@ -15,9 +15,17 @@
 - page path 기반 edge 삭제/neighbor query
 - heading text 기반 reconcile/splice
 - chat legacy citation parsing
+- Chat에서 `searchWiki()` 결과를 다시 파일 전체로 읽어 section 후보를 임시 구성하는 호환 adapter. Step 6의 공용 `SectionCandidate` API만 입력으로 사용한다.
 - `graphs.json` snapshot import/export
 
 `rg`로 symbol과 파일명뿐 아니라 JSON 경로 문자열도 검색한다. 테스트 fixture가 레거시 동작을 계속 요구하지 않도록 함께 정리한다.
+
+## Step 7 citation 마감 조건
+
+- chat persistence/state에 명시적 schema version을 둔다. 새 버전은 `StructuredCitation`만 허용하며 `title/path`, `[N]`, `<!-- cited -->`, wikilink에서 reference를 복원하거나 변환하지 않는다.
+- marker는 스트리밍 중 잘려 보일 수 있어도 finalize에서만 파싱한다. 요청 citation map에 없는 marker는 telemetry만 남기고 저장 reference를 만들지 않는다.
+- preview는 page/section ID로 현재 문서를 열고 offset → exact quote → prefix/suffix 순서만 사용한다. quote가 바뀌면 section은 열되 no-highlight 상태여야 하며 token/similarity highlight를 다시 도입하지 않는다.
+- Step 7의 임시 v2 file-search adapter는 제거한다. Chat의 후보에는 Step 6 API가 제공한 `ordinal`, `matchedRanges`, `assertionIds`, `evidenceState`, `graphPath`를 요청 범위에서 보존하고, `graphPrefixFilter`는 `allowedGraphIds`로 변환해 traversal에 강제한다.
 
 ## 프로젝트 생성과 열기
 
@@ -37,6 +45,8 @@
 5. integrity quick check
 
 현재 `openProject()`의 data type 자동 seed 정책은 import/export 문서의 우려와 함께 정리한다. 권장은 schema bundle은 새 프로젝트 생성 시에만 seed하고, 기존/import 프로젝트 open에서 자동 추가하지 않는 것이다.
+
+레거시 graph backend를 삭제하기 전에는 Graph/Review/Entity 화면과 sync 경로가 knowledge command/repository만 사용하도록 먼저 전환한다. 기존 `graph_sqlite`, graph policy, page-graph-index 호출이 남아 있는 상태에서 파일만 삭제해서는 안 된다.
 
 ## import/export 새 계약
 
@@ -93,6 +103,8 @@ import는 다음을 강제한다.
 8. export → 새 경로 import → 동일 ID/관계/citation 확인
 9. legacy DB/schema open 거부와 이해 가능한 오류
 10. graph scoped Chat이 허용 graph 밖으로 나가지 않음
+11. hallucinated/중복/분할 스트리밍 citation marker가 허용 key 외 reference를 만들지 않음
+12. 구형 chat reference shape와 chat schema version mismatch가 path 기반 fallback 없이 안전하게 거부됨
 
 성능 측정도 포함한다.
 

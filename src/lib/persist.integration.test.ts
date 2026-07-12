@@ -48,7 +48,7 @@ describe("review persistence — round-trip", () => {
   it("save then load returns identical items", async () => {
     const items: ReviewItem[] = [
       makeReview({ id: "r-1", title: "Alpha" }),
-      makeReview({ id: "r-2", title: "Beta", type: "entity_confirmation" }),
+      makeReview({ id: "r-2", title: "Beta", type: "suggestion" }),
     ]
     await saveReviewItems(tmp.path, items)
     const loaded = await loadReviewItems(tmp.path)
@@ -175,11 +175,11 @@ describe("chat persistence — round-trip (new format)", () => {
     // conversations.json references c1 + c2, but chats/c2.json is missing
     await writeFileRaw(
       `${tmp.path}/.llm-wiki/conversations.json`,
-      JSON.stringify([makeConv("c1"), makeConv("c2")]),
+      JSON.stringify({ schemaVersion: 2, conversations: [makeConv("c1"), makeConv("c2")] }),
     )
     await writeFileRaw(
       `${tmp.path}/.llm-wiki/chats/c1.json`,
-      JSON.stringify([makeMsg("m1", "c1", "hi")]),
+      JSON.stringify({ schemaVersion: 2, messages: [makeMsg("m1", "c1", "hi")] }),
     )
     const loaded = await loadChatHistory(tmp.path)
     expect(loaded.conversations).toHaveLength(2)
@@ -199,7 +199,7 @@ describe("chat persistence — round-trip (new format)", () => {
   })
 })
 
-describe("chat persistence — legacy format fallback", () => {
+describe("chat persistence — legacy schema rejection", () => {
   function makeConv(id: string): Conversation {
     return { id, title: "t", createdAt: 0, updatedAt: 1 }
   }
@@ -207,7 +207,7 @@ describe("chat persistence — legacy format fallback", () => {
     return { id, role: "user", content: "c", timestamp: 0, conversationId: convId }
   }
 
-  it("falls back to chat-history.json flat-array format", async () => {
+  it("rejects chat-history.json flat-array format", async () => {
     // Very old format: flat array of messages
     const legacyMessages = [
       { id: "m1", role: "user", content: "old", timestamp: 100, conversationId: "ignored" },
@@ -219,13 +219,10 @@ describe("chat persistence — legacy format fallback", () => {
     )
 
     const loaded = await loadChatHistory(tmp.path)
-    expect(loaded.conversations).toHaveLength(1)
-    expect(loaded.conversations[0].id).toBe("default")
-    expect(loaded.messages).toHaveLength(2)
-    expect(loaded.messages[0].conversationId).toBe("default")
+    expect(loaded).toEqual({ conversations: [], messages: [] })
   })
 
-  it("falls back to chat-history.json combined-object format", async () => {
+  it("rejects chat-history.json combined-object format", async () => {
     const old = {
       conversations: [makeConv("c1")],
       messages: [makeMsg("m1", "c1")],
@@ -236,20 +233,19 @@ describe("chat persistence — legacy format fallback", () => {
     )
 
     const loaded = await loadChatHistory(tmp.path)
-    expect(loaded.conversations).toHaveLength(1)
-    expect(loaded.messages).toHaveLength(1)
+    expect(loaded).toEqual({ conversations: [], messages: [] })
   })
 
-  it("new format wins over legacy when both exist", async () => {
+  it("accepts only explicitly versioned v2 files when legacy files coexist", async () => {
     await writeFileRaw(
       `${tmp.path}/.llm-wiki/chat-history.json`,
       JSON.stringify({ conversations: [makeConv("legacy")], messages: [] }),
     )
     await writeFileRaw(
       `${tmp.path}/.llm-wiki/conversations.json`,
-      JSON.stringify([makeConv("new")]),
+      JSON.stringify({ schemaVersion: 2, conversations: [makeConv("new")] }),
     )
-    await writeFileRaw(`${tmp.path}/.llm-wiki/chats/new.json`, "[]")
+    await writeFileRaw(`${tmp.path}/.llm-wiki/chats/new.json`, JSON.stringify({ schemaVersion: 2, messages: [] }))
 
     const loaded = await loadChatHistory(tmp.path)
     expect(loaded.conversations[0].id).toBe("new")

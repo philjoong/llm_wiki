@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
+import { getKnowledgeDbStatus, recoverIngestTransactions, runKnowledgeIntegrityCheck } from "@/commands/knowledge"
 
 /** Raw shape returned by the Rust commands — id is attached client-side. */
 interface RawProject {
@@ -77,6 +78,12 @@ export async function createProject(
 
 export async function openProject(path: string): Promise<WikiProject> {
   const raw = await invoke<RawProject>("open_project", { path })
+  await recoverIngestTransactions(raw.path)
+  await getKnowledgeDbStatus(raw.path)
+  const integrityIssues = await runKnowledgeIntegrityCheck(raw.path)
+  if (integrityIssues.length > 0) {
+    throw new Error(`Knowledge integrity check failed: ${integrityIssues.map((issue) => issue.category).join(", ")}`)
+  }
   // second-fix-develop.md §2 migration: convert binary originals under
   // raw/sources/ to markdown and drop the legacy processed_1/ tree.
   // Best-effort + idempotent via a stamp in .llm-wiki/project.json.
@@ -84,11 +91,6 @@ export async function openProject(path: string): Promise<WikiProject> {
     await invoke("migrate_raw_sources", { projectPath: raw.path })
   } catch (err) {
     console.warn("[migrate] migrate_raw_sources failed:", err)
-  }
-  try {
-    await seedDataTypes(raw.path)
-  } catch (err) {
-    console.warn("[seed] seed_data_types failed:", err)
   }
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)

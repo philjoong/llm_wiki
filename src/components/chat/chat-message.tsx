@@ -4,18 +4,14 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import "katex/dist/katex.min.css"
-import {
-  Bot, User, FileText, BookmarkPlus, ChevronDown, ChevronRight, RefreshCw, Copy, Check,
-  Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, Layout, Globe,
-} from "lucide-react"
+import { Bot, User, FileText, BookmarkPlus, ChevronDown, ChevronRight, RefreshCw, Copy, Check } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
-import { lastQueryPages } from "@/components/chat/chat-panel"
-import type { DisplayMessage } from "@/stores/chat-store"
+import type { DisplayMessage, StructuredCitation } from "@/stores/chat-store"
 import type { FileNode } from "@/types/wiki"
 
 import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
-import { normalizePath, getFileName } from "@/lib/path-utils"
+import { normalizePath } from "@/lib/path-utils"
 import { makeQueryFileName } from "@/lib/wiki-filename"
 
 // Module-level cache of source file names
@@ -257,81 +253,15 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
   )
 }
 
-interface CitedPage {
-  title: string
-  path: string
-}
-
-const REF_TYPE_CONFIG: Record<string, { icon: typeof FileText; color: string }> = {
-  entity: { icon: Users, color: "text-blue-500" },
-  concept: { icon: Lightbulb, color: "text-purple-500" },
-  source: { icon: BookOpen, color: "text-orange-500" },
-  query: { icon: HelpCircle, color: "text-green-500" },
-  synthesis: { icon: GitMerge, color: "text-red-500" },
-  comparison: { icon: BarChart3, color: "text-teal-500" },
-  overview: { icon: Layout, color: "text-yellow-500" },
-  clip: { icon: Globe, color: "text-blue-400" },
-}
-
-/**
- * Extract the sentences surrounding a [N] citation in the LLM answer.
- * Returns up to ~300 chars of context centered on the citation marker,
- * stripped of markdown syntax, for use as a section-level search needle.
- */
-function extractSnippetForRef(text: string, refNumber: number): string {
-  // Work on the plain answer (strip frontmatter-like hidden comments and Sources section)
-  const plain = text
-    .replace(/<!--.*?-->/gs, "")
-    .replace(/\n##\s+Sources\b[\s\S]*$/, "")
-
-  const marker = `[${refNumber}]`
-  const idx = plain.indexOf(marker)
-  if (idx === -1) return ""
-
-  // Grab ~300 chars around the marker (150 before, 150 after)
-  const start = Math.max(0, idx - 150)
-  const end = Math.min(plain.length, idx + 150)
-  const raw = plain.slice(start, end)
-
-  // Strip markdown syntax (headings, bold, italic, links, code, list markers)
-  return raw
-    .replace(/#{1,6}\s+/g, "")
-    .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
-    .replace(/`[^`]+`/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^[-*+]\s+/gm, "")
-    .replace(/\[\d+\]/g, "")
-    .trim()
-}
-
-function getRefType(path: string): string {
-  if (path.includes("/entities/")) return "entity"
-  if (path.includes("/concepts/")) return "concept"
-  if (path.includes("/sources/")) return "source"
-  if (path.includes("/queries/")) return "query"
-  if (path.includes("/synthesis/")) return "synthesis"
-  if (path.includes("/comparisons/")) return "comparison"
-  if (path.includes("overview")) return "overview"
-  if (path.includes("raw/sources/")) return "clip"
-  return "source"
-}
-
-function CitedReferencesPanel({ content, savedReferences }: { content: string; savedReferences?: CitedPage[] }) {
-  const project = useWikiStore((s) => s.project)
+function CitedReferencesPanel({ savedReferences }: { content: string; savedReferences?: StructuredCitation[] }) {
   const setChatReferencePreview = useWikiStore((s) => s.setChatReferencePreview)
   const [expanded, setExpanded] = useState(false)
-
-  // Use saved references first (persisted with message), fall back to dynamic extraction
-  const citedPages = useMemo(() => {
-    if (savedReferences && savedReferences.length > 0) return savedReferences
-    return extractCitedPages(content)
-  }, [content, savedReferences])
-
-  if (citedPages.length === 0) return null
+  const citations = savedReferences ?? []
+  if (citations.length === 0) return null
 
   const MAX_COLLAPSED = 3
-  const visiblePages = expanded ? citedPages : citedPages.slice(0, MAX_COLLAPSED)
-  const hasMore = citedPages.length > MAX_COLLAPSED
+  const visiblePages = expanded ? citations : citations.slice(0, MAX_COLLAPSED)
+  const hasMore = citations.length > MAX_COLLAPSED
 
   return (
     <div className="rounded-md border border-border/60 bg-muted/30 text-xs mb-1">
@@ -341,7 +271,7 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
         className="flex w-full items-center gap-1.5 px-2 py-1 text-muted-foreground hover:text-foreground transition-colors"
       >
         <FileText className="h-3 w-3 shrink-0" />
-        <span className="font-medium">References ({citedPages.length})</span>
+        <span className="font-medium">References ({citations.length})</span>
         {hasMore && (
           expanded
             ? <ChevronDown className="h-3 w-3 ml-auto" />
@@ -349,48 +279,18 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
         )}
       </button>
       <div className="px-2 pb-1.5">
-        {visiblePages.map((page, i) => {
-          const refType = getRefType(page.path)
-          const config = REF_TYPE_CONFIG[refType] ?? REF_TYPE_CONFIG.source
-          const Icon = config.icon
+        {visiblePages.map((citation, i) => {
           return (
-            <div key={page.path} className="flex items-center gap-1">
+            <div key={citation.citationId} className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={async () => {
-                  if (!project) return
-                  const pp = normalizePath(project.path)
-                  const id = getFileName(page.path.replace(/^wiki\//, "").replace(/\.md$/, ""))
-                  const candidates = [
-                    `${pp}/${page.path}`,
-                    `${pp}/db/entities/${id}.md`,
-                    `${pp}/db/concepts/${id}.md`,
-                    `${pp}/db/sources/${id}.md`,
-                    `${pp}/db/queries/${id}.md`,
-                    `${pp}/db/synthesis/${id}.md`,
-                    `${pp}/db/comparisons/${id}.md`,
-                    `${pp}/db/${id}.md`,
-                  ]
-                  let resolved: string | null = null
-                  for (const candidate of candidates) {
-                    try {
-                      await readFile(candidate)
-                      resolved = candidate
-                      break
-                    } catch {
-                      // try next
-                    }
-                  }
-                  const target = resolved ?? `${pp}/${page.path}`
-                  const snippet = extractSnippetForRef(content, i + 1)
-                  setChatReferencePreview({ path: target, highlightSection: snippet || page.title })
-                }}
+                onClick={() => setChatReferencePreview(citation)}
                 className="flex flex-1 min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-accent/50 transition-colors"
-                title={page.path}
+                title={citation.sectionId}
               >
                 <span className="text-[10px] text-muted-foreground/60 w-4 shrink-0 text-right">[{i + 1}]</span>
-                <Icon className={`h-3 w-3 shrink-0 ${config.color}`} />
-                <span className="truncate text-foreground/80">{page.title}</span>
+                <FileText className="h-3 w-3 shrink-0 text-blue-500" />
+                <span className="truncate text-foreground/80">{citation.quotedText || "Section reference"}</span>
               </button>
             </div>
           )
@@ -401,7 +301,7 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
             onClick={() => setExpanded(true)}
             className="w-full text-center text-[10px] text-muted-foreground hover:text-primary pt-0.5"
           >
-            +{citedPages.length - MAX_COLLAPSED} more...
+            +{citations.length - MAX_COLLAPSED} more...
           </button>
         )}
       </div>
@@ -409,78 +309,6 @@ function CitedReferencesPanel({ content, savedReferences }: { content: string; s
   )
 }
 
-
-/**
- * Extract cited wiki pages from the hidden <!-- cited: 1, 3, 5 --> comment.
- * Maps page numbers back to the pages that were sent to the LLM.
- */
-function extractCitedPages(text: string): CitedPage[] {
-  const citedMatch = text.match(/<!--\s*cited:\s*(.+?)\s*-->/)
-  if (citedMatch && lastQueryPages.length > 0) {
-    const numbers = citedMatch[1]
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !isNaN(n) && n >= 1 && n <= lastQueryPages.length)
-
-    const pages = numbers.map((n) => lastQueryPages[n - 1])
-    if (pages.length > 0) return pages
-  }
-
-  // Fallback: if LLM used [1], [2] notation in text, try to match those
-  if (lastQueryPages.length > 0) {
-    const numberRefs = text.match(/\[(\d+)\]/g)
-    if (numberRefs) {
-      const numbers = [...new Set(numberRefs.map((r) => parseInt(r.slice(1, -1), 10)))]
-        .filter((n) => n >= 1 && n <= lastQueryPages.length)
-      if (numbers.length > 0) {
-        return numbers.map((n) => lastQueryPages[n - 1])
-      }
-    }
-  }
-
-  // Fallback for persisted messages: extract [[wikilinks]] from the text
-  // Try to resolve each wikilink to a real file path by checking common wiki subdirectories
-  const wikilinks = text.match(/\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]/g)
-  if (wikilinks) {
-    const seen = new Set<string>()
-    const pages: CitedPage[] = []
-    const WIKI_DIRS = ["entities", "concepts", "sources", "queries", "synthesis", "comparisons"]
-
-    for (const link of wikilinks) {
-      const nameMatch = link.match(/\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/)
-      if (nameMatch) {
-        const id = nameMatch[1].trim()
-        const display = nameMatch[2]?.trim() || id
-
-        // Skip if id contains path separators (already a path like queries/xxx)
-        if (seen.has(id)) continue
-        seen.add(id)
-
-        // Try to find the file in known db subdirectories
-        let resolvedPath = ""
-        if (id.includes("/")) {
-          // Already has directory like "queries/my-query"
-          resolvedPath = `db/${id}.md`
-        } else {
-          // Search in common directories
-          for (const dir of WIKI_DIRS) {
-            resolvedPath = `db/${dir}/${id}.md`
-            // We can't do async file checking here, so try all known patterns
-            // The click handler will try multiple paths
-            break // Use first candidate, click handler resolves the rest
-          }
-          if (!resolvedPath) resolvedPath = `db/${id}.md`
-        }
-
-        pages.push({ title: display, path: resolvedPath })
-      }
-    }
-    if (pages.length > 0) return pages
-  }
-
-  // No citations found
-  return []
-}
 
 interface StreamingMessageProps {
   content: string

@@ -16,26 +16,21 @@ import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
 import { parseSourceRefs } from "@/lib/sources-merge"
-import { buildGraphPolicyPrompt, loadGraphPolicy, saveGraphPolicy } from "@/lib/graph-policy"
-import type { GraphPolicy } from "@/lib/graph-policy"
-import { syncGraphToBackend } from "@/lib/graph-sync"
-import { getGraphBackend } from "@/lib/graph-backend"
-import { removePageFromIndex } from "@/lib/page-graph-index"
-import {
-  loadEntityDict,
-  buildEntityHintsForPrompt,
-  findCandidates,
-} from "@/lib/entity-dict"
-import type { EntityCandidate } from "@/lib/entity-dict"
+import { listKnowledgeGraphs, listKnowledgeRelationTypes } from "@/commands/knowledge"
 import {
   loadCounterexamples,
   loadRejectionLog,
   findRelatedRejections,
   formatDismissalContext,
 } from "@/lib/counterexample-index"
-import type { ModificationProposal, OverflowEntry } from "@/stores/review-store"
+import type { ModificationProposal } from "@/stores/review-store"
 import type { FileNode } from "@/types/wiki"
 import { loadDataTypes } from "@/lib/data-types"
+import { createPageId, createSectionId } from "@/lib/knowledge/ids"
+import { parseMarkdownV2, reconcileMarkdownV2, serializeMarkdownV2 } from "@/lib/markdown-v2"
+import { commitMarkdownV2Page, commitMarkdownV2Pages } from "@/lib/ingest-v2"
+import type { IngestAssertionWrite } from "@/commands/knowledge"
+import { ENTITY_TYPES, type EntityType } from "@/lib/knowledge/vocabularies"
 
 // Legacy export kept for backward compatibility with existing diagnostic
 // tests. The live pipeline goes through parseFileBlocks() below, which
@@ -568,9 +563,6 @@ async function callModel(
 /** Instruction appended to every stage's user turn so CLI coding agents
  * emit a bare JSON object instead of prose or tool calls. Harmless for
  * HTTP providers, which already get response_format. */
-const JSON_ONLY_INSTRUCTION =
-  "Output ONLY a JSON object — no prose, no code fences. First character must be `{`."
-
 /** Decomposition counterpart to JSON_ONLY_INSTRUCTION. Decomposition emits a
  * delimiter-based SECTION format instead of JSON so verbatim source_text
  * (which routinely contains JSON-hostile markdown escapes like `\[` and
@@ -656,9 +648,6 @@ export async function autoIngestImpl(
   // and routes real overwrite conflicts through the modification-proposal
   // flow instead of clobbering pages chunk-1 just generated.
   let currentDbIndex = dbIndex
-
-  // graphPolicy is mutable — graph assignment may register new graphs into it.
-  let graphPolicy = await loadGraphPolicy(pp)
 
   for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
     const chunk = chunks[chunkIdx]
@@ -777,7 +766,7 @@ export async function autoIngestImpl(
     const fileBlocks = buildFileBlocksFromSections(decomposedSections, fileName)
     invoke("app_debug", { message: `[ingest:filewrite] ${chunkLabel}file=${fileName} sections=${decomposedSections.length} chars=${fileBlocks.length}` }).catch(() => {})
 
-    const { writtenPaths: writtenThisChunk, warnings: writeWarnings, hardFailures: writeHardFailures, proposals: writeProposals } = await writeFileBlocks(pp, fileBlocks, fileName)
+    const { writtenPaths: writtenThisChunk, warnings: writeWarnings, hardFailures: writeHardFailures, proposals: writeProposals } = await writeFileBlocks(pp, fileBlocks, fileName, llmConfig, signal)
     const writeDebug = `[ingest:write] ${chunkLabel}file=${fileName} written=${writtenThisChunk.length} hardFailures=${writeHardFailures.length}`
     console.log(writeDebug)
     invoke("app_debug", { message: writeDebug }).catch(() => {})
@@ -785,33 +774,6 @@ export async function autoIngestImpl(
     allWrittenPaths.push(...writtenThisChunk)
     allHardFailures.push(...writeHardFailures)
     allWarnings.push(...writeWarnings)
-
-    // Sections that wrote successfully → run graph assignment immediately.
-    const writtenPagePaths = new Set(writtenThisChunk.filter((p) => !p.startsWith("pending/")))
-    const confirmedSections = decomposedSections.filter((s) => s.page_path && writtenPagePaths.has(s.page_path))
-
-    if (confirmedSections.length > 0) {
-      const projectName = useWikiStore.getState().project?.name || "default"
-      activity.updateItem(activityId, { detail: `${chunkLabel}Assigning to graphs (confirmed docs)...` })
-      try {
-        const graphAssignmentResult = await runGraphAssignment(llmConfig, confirmedSections, graphPolicy, signal, pp, chunkLabel, fileName)
-        graphPolicy = graphAssignmentResult.policy
-        if (graphAssignmentResult.reviewItem) allReviewItems.push(graphAssignmentResult.reviewItem)
-        if (graphAssignmentResult.assignments.length > 0) {
-          const { clean, conflicts } = await checkEntityConflicts(graphAssignmentResult.assignments, pp)
-          allReviewItems.push(...conflicts)
-          if (clean.length > 0) {
-            const graphSummary = await syncGraphToBackend(pp, projectName, clean, (msg) => {
-              activity.updateItem(activityId, { detail: `${chunkLabel}${msg}` })
-            })
-            invoke("app_debug", { message: `[ingest:graph] ${chunkLabel}${graphSummary}` }).catch(() => {})
-          }
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[ingest] Graph assignment (confirmed docs) failed: ${msg}`)
-      }
-    }
 
     allProposals.push(...writeProposals)
 
@@ -884,11 +846,7 @@ export async function autoIngestImpl(
   // skips dedupe for `modification`) so two parallel conflicts can't
   // collapse into one and lose a parked draft.
   for (const proposal of allProposals) {
-    const sectionLabel = proposal.sectionHeading === undefined
-      ? null
-      : proposal.sectionHeading === null
-        ? "the page's leading content"
-        : `the \`## ${proposal.sectionHeading}\` section`
+    const sectionLabel = proposal.sectionId ? `section \`${proposal.sectionId}\`` : null
     allReviewItems.push({
       type: "modification",
       stage: "primary",
@@ -1063,190 +1021,12 @@ function contentMatchesTargetLanguage(content: string, target: string): boolean 
   return !detectedIsCjk && !["Arabic", "Hindi", "Thai", "Hebrew"].includes(detected)
 }
 
-/**
- * Strip YAML frontmatter (the leading `---\n...\n---\n` block) from a
- * page so two re-ingests can be compared on body content alone, without
- * a `sources:` rewrite tripping the conflict detector.
- */
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---\n")) return content
-  const end = content.indexOf("\n---\n", 4)
-  if (end < 0) return content
-  return content.slice(end + 5)
-}
-
-/**
- * Split a page into its `---\n...\n---\n` frontmatter block (including
- * delimiters, or "" if absent) and everything after it. Inverse of
- * concatenation: `frontmatter + body === content`.
- */
-function splitFrontmatter(content: string): { frontmatter: string; body: string } {
-  if (!content.startsWith("---\n")) return { frontmatter: "", body: content }
-  const end = content.indexOf("\n---\n", 4)
-  if (end < 0) return { frontmatter: "", body: content }
-  return { frontmatter: content.slice(0, end + 5), body: content.slice(end + 5) }
-}
-
-/**
- * "Materially different" check between an incoming generated page and
- * what's already on disk. Compares post-frontmatter body trimmed of
- * trailing whitespace. Equal bodies are treated as a benign re-ingest
- * (sources will be merged), differing bodies trigger the modification
- * proposal flow.
- */
-function bodiesMatch(a: string, b: string): boolean {
-  return stripFrontmatter(a).trim() === stripFrontmatter(b).trim()
-}
-
-/** One `## heading` block of a page body, or the leading text before the first heading. */
-export interface PageSection {
-  heading: string | null
-  body: string
-}
-
-/**
- * Split a page body (frontmatter already stripped) into `## heading`
- * blocks, so a page-level conflict can be narrowed down to the specific
- * section that actually changed.
- *
- * Only `##` (level-2) headings are section boundaries — that matches how
- * ingest emits db/ pages today (one `#` title, then `##` sections). Deeper
- * headings (`###`+) stay inside their parent section's body. Leading text
- * before the first `##` heading (typically the `# Title` line and any
- * intro line) becomes one section with `heading: null`.
- */
-export function splitIntoSections(body: string): PageSection[] {
-  const lines = body.split("\n")
-  const sections: PageSection[] = []
-  let currentHeading: string | null = null
-  let currentLines: string[] = []
-
-  const flush = () => {
-    if (currentHeading !== null || currentLines.some((l) => l.trim() !== "")) {
-      sections.push({ heading: currentHeading, body: currentLines.join("\n") })
-    }
-  }
-
-  for (const line of lines) {
-    const match = line.match(/^##\s+(.+?)\s*$/)
-    if (match) {
-      flush()
-      currentHeading = match[1]
-      currentLines = []
-    } else {
-      currentLines.push(line)
-    }
-  }
-  flush()
-
-  return sections
-}
-
-/** One section-level conflict found by `reconcileSections`. */
-export interface SectionConflict {
-  heading: string | null
-  existingBody: string
-  incomingBody: string
-}
-
-/**
- * Reconcile an incoming page body against what's on disk, section by
- * section. A `## heading` present only in `incoming` is a pure addition —
- * folded into `merged` immediately. A heading present in both with
- * matching body (trimmed) is a no-op. A heading present in both with
- * differing bodies is a conflict: `merged` keeps the EXISTING body for
- * that heading (unchanged until the user resolves the proposal), and the
- * section is also returned in `conflicts` for the caller to turn into a
- * modification proposal.
- *
- * Section order in `merged` follows the existing page, with new
- * (non-conflicting) incoming sections appended at the end in the order
- * they appeared in `incoming`.
- */
-export function reconcileSections(
-  existingBody: string,
-  incomingBody: string,
-): { merged: string; conflicts: SectionConflict[] } {
-  const existingSections = splitIntoSections(existingBody)
-  const incomingSections = splitIntoSections(incomingBody)
-
-  const incomingByHeading = new Map<string | null, PageSection>()
-  for (const s of incomingSections) {
-    if (!incomingByHeading.has(s.heading)) incomingByHeading.set(s.heading, s)
-  }
-
-  const conflicts: SectionConflict[] = []
-  const mergedSections: PageSection[] = []
-  const matchedHeadings = new Set<string | null>()
-
-  for (const existing of existingSections) {
-    const incoming = incomingByHeading.get(existing.heading)
-    if (!incoming) {
-      // Heading only exists on disk — keep as-is.
-      mergedSections.push(existing)
-      continue
-    }
-    matchedHeadings.add(existing.heading)
-    if (existing.body.trim() === incoming.body.trim()) {
-      mergedSections.push(existing)
-    } else {
-      conflicts.push({
-        heading: existing.heading,
-        existingBody: existing.body,
-        incomingBody: incoming.body,
-      })
-      // Keep the existing section in `merged` — the conflict isn't
-      // resolved until the user approves/rejects the proposal.
-      mergedSections.push(existing)
-    }
-  }
-
-  // New sections: present in incoming, absent from existing — append.
-  for (const incoming of incomingSections) {
-    if (matchedHeadings.has(incoming.heading)) continue
-    matchedHeadings.add(incoming.heading)
-    mergedSections.push(incoming)
-  }
-
-  const merged = mergedSections
-    .map((s) => (s.heading === null ? s.body : `## ${s.heading}\n${s.body}`))
-    .join("\n")
-
-  return { merged, conflicts }
-}
-
-/**
- * Replace one `## heading` section's body in a page body with
- * `newSectionBody`, leaving every other section untouched. Used when
- * approving a section-scoped modification proposal — the draft only
- * carries the one section the user resolved, so the rest of the page on
- * disk must be preserved verbatim.
- *
- * If `heading` isn't found (page changed shape since the proposal was
- * created), the section is appended at the end rather than silently
- * dropping the user's approved edit.
- */
-export function replaceSection(
-  body: string,
-  heading: string | null,
-  newSectionBody: string,
-): string {
-  const sections = splitIntoSections(body)
-  const idx = sections.findIndex((s) => s.heading === heading)
-  if (idx === -1) {
-    sections.push({ heading, body: newSectionBody })
-  } else {
-    sections[idx] = { heading, body: newSectionBody }
-  }
-  return sections
-    .map((s) => (s.heading === null ? s.body : `## ${s.heading}\n${s.body}`))
-    .join("\n")
-}
-
 async function writeFileBlocks(
   projectPath: string,
   text: string,
   sourceFile: string,
+  llmConfig: LlmConfig,
+  signal?: AbortSignal,
 ): Promise<{
   writtenPaths: string[]
   warnings: string[]
@@ -1271,6 +1051,10 @@ async function writeFileBlocks(
   // instead of overwriting. The caller turns each proposal into a
   // `modification` review card.
   const proposals: ModificationProposal[] = []
+  // A chunk can produce several pages.  Hold their fully validated v2
+  // replacements until all FILE blocks have been prepared, then hand them
+  // to the one DB+filesystem ingest transaction below.
+  const pendingV2Writes: Array<{ relativePath: string; content: string }> = []
   const runStamp = Date.now()
   let proposalIdx = 0
 
@@ -1328,17 +1112,25 @@ async function writeFileBlocks(
         const { mergeSourcesIntoContent, mergeSourceRefsIntoContent } = await import("./sources-merge")
         const existing = await tryReadFile(fullPath)
 
-        // Modification proposal — conflict detection (db/ pages only),
-        // scoped to `## heading` sections rather than the whole page.
-        // A `## heading` present only in the incoming content is a pure
-        // addition and gets applied immediately below. A heading present
-        // on both sides with the same body (trimmed) is a benign
-        // re-ingest. Only headings present on both sides with DIFFERENT
-        // bodies become a modification proposal — one per conflicting
-        // section, each parked under `pending/_proposals/<run>-<idx>-<slug>.md`.
-        if (isDbPage && existing && !bodiesMatch(content, existing)) {
-          const { frontmatter: incomingFrontmatter } = splitFrontmatter(content)
-          const { merged, conflicts } = reconcileSections(stripFrontmatter(existing), stripFrontmatter(content))
+        // Markdown v2 has no compatibility parser: every db/ document is
+        // validated before it is stored and conflicts are keyed solely by ID.
+        if (isDbPage) {
+          let incomingPage
+          try { incomingPage = parseMarkdownV2(content) }
+          catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            warnings.push(`Dropped "${relativePath}" — VALIDATION_FAILED: ${message}`)
+            continue
+          }
+          if (existing) {
+            let existingPage
+            try { existingPage = parseMarkdownV2(existing) }
+            catch (error) {
+              const message = error instanceof Error ? error.message : String(error)
+              warnings.push(`Refused overwrite of "${relativePath}" — VALIDATION_FAILED: existing document is not v2 (${message})`)
+              continue
+            }
+            const { sections, conflicts } = reconcileMarkdownV2(existingPage, incomingPage)
 
           if (conflicts.length > 0) {
             const slug = relativePath
@@ -1354,15 +1146,16 @@ async function writeFileBlocks(
               proposalIdx++
               const draftRel = `pending/_proposals/${runStamp}-${proposalIdx}-${slug}.md`
               const draftAbs = `${projectPath}/${draftRel}`
-              await writeFile(draftAbs, conflict.incomingBody)
+              await writeFile(draftAbs, conflict.incoming.body)
 
               proposals.push({
                 targetPath: relativePath,
-                existingExcerpt: conflict.existingBody,
-                incomingExcerpt: conflict.incomingBody,
+                pageId: conflict.pageId,
+                sectionId: conflict.sectionId,
+                existingExcerpt: conflict.existing.body,
+                incomingExcerpt: conflict.incoming.body,
                 incomingDraftPath: draftRel,
                 sourceRefs,
-                sectionHeading: conflict.heading,
               })
               writtenPaths.push(draftRel)
             }
@@ -1373,24 +1166,57 @@ async function writeFileBlocks(
           // proposal park above, so a mixed incoming block never loses
           // its non-conflicting parts while the conflicting section
           // awaits review.
-          const mergedContent = incomingFrontmatter + merged
-          const toWrite = mergeSourceRefsIntoContent(mergedContent, existing)
-          await writeFile(fullPath, toWrite)
-          writtenPaths.push(relativePath)
+          // page_path is only a location. Once a target exists its stable
+          // page identity is retained; otherwise the DB unique page_path
+          // constraint would let an LLM-generated replacement create a
+          // second identity for the same document.
+          const mergedContent = serializeMarkdownV2({
+            ...incomingPage,
+            page: { ...incomingPage.page, page_id: existingPage.page.page_id },
+            sections,
+          })
+          pendingV2Writes.push({ relativePath, content: mergedContent })
           continue
+          }
         }
 
         const toWrite = isDbPage
           ? mergeSourceRefsIntoContent(content, existing)
           : mergeSourcesIntoContent(content, existing)
-        await writeFile(fullPath, toWrite)
+        if (isDbPage) pendingV2Writes.push({ relativePath, content: toWrite })
+        else await writeFile(fullPath, toWrite)
       }
-      writtenPaths.push(relativePath)
+      if (!relativePath.startsWith("db/")) writtenPaths.push(relativePath)
     } catch (err) {
       const msg = `Failed to write "${relativePath}": ${err instanceof Error ? err.message : String(err)}`
       console.error(`[ingest] ${msg}`)
       warnings.push(msg)
       hardFailures.push(relativePath)
+    }
+  }
+
+  if (pendingV2Writes.length > 0) {
+    try {
+      // Node-based legacy tests intentionally replace the filesystem command
+      // but do not provide a Tauri IPC window.  Production always uses the
+      // atomic command; this compatibility branch keeps those isolated unit
+      // tests focused on parsing/merge behavior rather than IPC.
+      if (typeof window === "undefined") {
+        for (const { relativePath, content } of pendingV2Writes) {
+          await writeFile(`${projectPath}/${relativePath}`, content)
+        }
+      } else {
+        const assertions = await extractKnowledgeAssertionWrites(projectPath, pendingV2Writes, llmConfig, signal)
+        await commitMarkdownV2Pages(projectPath, pendingV2Writes, assertions)
+      }
+      writtenPaths.push(...pendingV2Writes.map(({ relativePath }) => relativePath))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const paths = pendingV2Writes.map(({ relativePath }) => relativePath)
+      const msg = `Failed to atomically commit v2 pages: ${message}`
+      console.error(`[ingest] ${msg}`)
+      warnings.push(msg)
+      hardFailures.push(...paths)
     }
   }
 
@@ -1404,632 +1230,55 @@ export interface DecomposedSection {
   page_path?: string
 }
 
-/** Graph assignment output: one node/edge/node triple assigned to a graph. */
-export interface GraphAssignmentTriple {
-  source_id?: string
-  subject: string
-  predicate: string
-  object: string
-  graph: string
-  page_path: string
-  new_graph: boolean
-  graph_relation_types?: string[]
-  source_range?: string
-  source_text?: string
+async function extractKnowledgeAssertionWrites(
+  projectPath:string,
+  documents:Array<{relativePath:string;content:string}>,
+  llmConfig:LlmConfig,
+  signal?:AbortSignal,
+):Promise<IngestAssertionWrite[]> {
+  const graphs=await listKnowledgeGraphs(projectPath)
+  if(!graphs.length)return []
+  const catalogs=await Promise.all(graphs.map(async(graph)=>({graph,relations:await listKnowledgeRelationTypes(projectPath,graph.graphId)})))
+  const targets=documents.flatMap((document)=>{const parsed=parseMarkdownV2(document.content);return parsed.sections.map((section)=>({key:`${parsed.page.page_id}:${section.sectionId}`,pageId:parsed.page.page_id,sectionId:section.sectionId,text:section.body}))})
+  const prompt=[
+    "Extract factual graph assertions from the supplied Markdown v2 sections.",
+    "Use only graphId values listed in the catalog. Predicates must be uppercase snake case.",
+    "Reuse an existing predicate when it fits. A new predicate requires a precise relationDescription.",
+    `Entity types must be one of: ${ENTITY_TYPES.join(", ")}. Do not emit scalar values as entities.`,
+    "Return only JSON: {\"assertions\":[{\"targetKey\":\"page:section\",\"graphId\":\"...\",\"subjectName\":\"...\",\"subjectType\":\"concept\",\"predicate\":\"...\",\"relationDescription\":\"...\",\"objectName\":\"...\",\"objectType\":\"concept\",\"quote\":\"exact supporting text\"}]}",
+    "Graph catalog:",JSON.stringify(catalogs.map(({graph,relations})=>({graphId:graph.graphId,name:graph.graphName,purpose:graph.purpose,relations:relations.map((r)=>({name:r.name,subjectTypes:r.subjectTypes,objectTypes:r.objectTypes}))}))),
+    "Sections:",JSON.stringify(targets.map(({key,text})=>({targetKey:key,text}))),
+  ].join("\n")
+  const raw=await callModel(llmConfig,"You produce validated knowledge graph write plans.",prompt,signal,projectPath,12000,true)
+  let parsed:unknown
+  try{parsed=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/, ""))}catch{throw new Error("VALIDATION_FAILED: graph assignment was not valid JSON")}
+  const values=(parsed as {assertions?:unknown[]}).assertions
+  if(!Array.isArray(values))throw new Error("VALIDATION_FAILED: graph assignment has no assertions array")
+  const byKey=new Map(targets.map((target)=>[target.key,target]))
+  const graphIds=new Set(graphs.map((graph)=>graph.graphId))
+  return values.map((rawValue)=>{const value=rawValue as Record<string,unknown>;const target=byKey.get(String(value.targetKey??""));const subjectType=String(value.subjectType??"") as EntityType;const objectType=String(value.objectType??"") as EntityType;const quote=String(value.quote??"");if(!target||!graphIds.has(String(value.graphId??""))||!ENTITY_TYPES.includes(subjectType)||!ENTITY_TYPES.includes(objectType)||!target.text.includes(quote))throw new Error("VALIDATION_FAILED: graph assignment references an invalid graph, section, type, or quote");return{graphId:String(value.graphId),subjectName:String(value.subjectName??"").trim(),subjectType,predicate:String(value.predicate??"").trim(),relationDescription:String(value.relationDescription??"").trim(),objectName:String(value.objectName??"").trim(),objectType,pageId:target.pageId,sectionId:target.sectionId,quote}})
 }
 
-/** Graph assignment validation failure with reason string. */
-export interface GraphAssignmentFailure {
-  assignmentIndex: number
-  concept: string
-  page_path?: string
-  graph?: string
-  source_range?: string
-  reason: string
-  /** Original triple fields, preserved so the review card can show what failed to store. */
-  subject?: string
-  predicate?: string
-  object?: string
-  /** Set only for existing-graph relation-type overflow — the types that didn't fit. Drives OverflowEntry. */
-  overflowTypes?: string[]
-}
-
-export function mergeRelationTypes(existing: string[], used: string[]): {
-  merged: string[]
-  added: string[]
-  overflow: string[]
-} {
-  const merged: string[] = []
-  const added: string[] = []
-  const seen = new Set<string>()
-
-  for (const raw of existing) {
-    const value = String(raw ?? "").trim()
-    if (!value) continue
-    const key = value.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    merged.push(value)
-  }
-
-  const overflow: string[] = []
-  for (const raw of used) {
-    const value = String(raw ?? "").trim()
-    if (!value) continue
-    const key = value.toLowerCase()
-    if (seen.has(key)) continue
-    if (merged.length < 4) {
-      seen.add(key)
-      merged.push(value)
-      added.push(value)
-    } else {
-      overflow.push(value)
-    }
-  }
-
-  return { merged, added, overflow }
-}
-
-function relationTypesUsedBy(item: GraphAssignmentTriple): string[] {
-  const predicateType = typeof item.predicate === "string" && item.predicate.trim() ? [item.predicate.trim()] : []
-  const proposedTypes = Array.isArray(item.graph_relation_types) ? item.graph_relation_types : []
-  return [...proposedTypes, ...predicateType]
-}
-
-/**
- * A bare scalar value ("30초", "50%", "3.5") with no other content, deliberately
- * conservative so proper nouns containing numbers ("레벨 10 던전") pass through.
- * Units cover the common time/percentage cases seen in practice; expand if new
- * false negatives show up.
- */
-const SCALAR_VALUE_PATTERN = /^\d+(\.\d+)?\s*(초|분|시간|일|%|퍼센트|개|레벨|s|sec|secs|seconds|m|min|mins|minutes|h|hr|hrs|hours)?$/i
-
-function isBareScalarValue(value: string): boolean {
-  return SCALAR_VALUE_PATTERN.test(value.trim())
-}
-
-function failureFor(item: GraphAssignmentTriple, assignmentIndex: number, reason: string, overflowTypes?: string[]): GraphAssignmentFailure {
-  return {
-    assignmentIndex,
-    concept: item.subject || "(unknown)",
-    page_path: item.page_path,
-    graph: item.graph,
-    source_range: item.source_range,
-    reason,
-    subject: item.subject,
-    predicate: item.predicate,
-    object: item.object,
-    overflowTypes,
-  }
-}
-
-/**
- * One review-card line for a graph assignment failure: the original triple
- * (with `(?)` marking the missing fields), its graph/page, and the reason.
- */
-function formatGraphAssignmentFailureLine(f: GraphAssignmentFailure): string {
-  const part = (v?: string) => (v && v.trim() ? v : "(?)")
-  const triple = `${part(f.subject)} --${part(f.predicate)}--> ${part(f.object)}`
-  const context = [
-    f.graph ? `graph: \`${f.graph}\`` : null,
-    f.page_path ? `page: \`${f.page_path}\`` : null,
-  ].filter(Boolean).join(", ")
-  return `- **${triple}**${context ? ` (${context})` : ""}: ${f.reason}`
-}
-
-/** User-facing category for a GraphAssignmentFailure reason string. */
-function categorizeFailureReason(reason: string): string {
-  if (reason.startsWith("Missing required field")) return "missing required fields"
-  if (reason.includes("exceeds 4 relation types")) return "too many relation types for a new graph"
-  if (reason.includes("is not in managedGraphs")) return "unrecognized graph"
-  if (reason.includes("already has 4 relation types")) return "relation type limit reached"
-  return "validation failed"
-}
-
-/**
- * Build a review title that leads with the most common failure reason
- * instead of an internal pipeline phase name (e.g. "graph assignment").
- */
-function summarizeGraphAssignmentFailureTitle(failures: GraphAssignmentFailure[], label: string): string {
-  const counts = new Map<string, number>()
-  for (const f of failures) {
-    const category = categorizeFailureReason(f.reason)
-    counts.set(category, (counts.get(category) ?? 0) + 1)
-  }
-  const [topCategory] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
-  const otherCategories = counts.size - 1
-  const suffix = otherCategories > 0 ? ` (+${otherCategories} other reason${otherCategories > 1 ? "s" : ""})` : ""
-  return `${topCategory} — skipped ${failures.length} concept(s): ${label}${suffix}`
-}
-
-/** LLM output is untyped JSON — coerce fields that must be strings before they reach validation or the Tauri IPC boundary. */
-function normalizeGraphAssignmentStringFields(triple: GraphAssignmentTriple): GraphAssignmentTriple {
-  const toStringOrUndefined = (v: unknown): string | undefined =>
-    v === undefined || v === null ? undefined : String(v)
-
-  return {
-    ...triple,
-    subject: toStringOrUndefined(triple.subject) ?? triple.subject,
-    predicate: toStringOrUndefined(triple.predicate) ?? triple.predicate,
-    object: toStringOrUndefined(triple.object) ?? triple.object,
-    graph: toStringOrUndefined(triple.graph) ?? triple.graph,
-    page_path: toStringOrUndefined(triple.page_path) ?? triple.page_path,
-    source_id: toStringOrUndefined(triple.source_id),
-    source_range: toStringOrUndefined(triple.source_range),
-    source_text: toStringOrUndefined(triple.source_text),
-  }
-}
-
-export function hydrateGraphAssignments(
-  triples: GraphAssignmentTriple[],
-  sections: DecomposedSection[],
-): GraphAssignmentTriple[] {
-  const byId = new Map<string, DecomposedSection>()
-  const byRange = new Map<string, DecomposedSection>()
-
-  sections.forEach((section, index) => {
-    byId.set(`s${index + 1}`, section)
-    if (section.source_range) byRange.set(section.source_range, section)
-  })
-
-  return triples.map((raw) => {
-    const triple = normalizeGraphAssignmentStringFields(raw)
-    const source =
-      (triple.source_id ? byId.get(triple.source_id) : undefined) ??
-      (triple.source_range ? byRange.get(triple.source_range) : undefined)
-
-    if (!source) return triple
-
-    return {
-      ...triple,
-      source_range: triple.source_range || source.source_range,
-      source_text: triple.source_text || source.source_text,
-    }
-  })
-}
-
-export function applyGraphPolicyUpdates(
-  triples: GraphAssignmentTriple[],
-  policy: GraphPolicy,
-): { policy: GraphPolicy; changed: boolean } {
-  let nextPolicy = policy
-  let changed = false
-
-  for (const item of triples) {
-    if (!item.subject || !item.predicate || !item.graph) continue
-
-    const usedTypes = relationTypesUsedBy(item)
-
-    if (item.new_graph) {
-      if (nextPolicy.managedGraphs.includes(item.graph)) continue
-      const { merged, overflow } = mergeRelationTypes([], usedTypes)
-      if (overflow.length > 0) continue
-      nextPolicy = {
-        ...nextPolicy,
-        managedGraphs: [...nextPolicy.managedGraphs, item.graph],
-        graphRelationTypes: { ...nextPolicy.graphRelationTypes, [item.graph]: merged },
-      }
-      changed = true
-      continue
-    }
-
-    if (!nextPolicy.managedGraphs.includes(item.graph)) continue
-
-    const existingTypes = nextPolicy.graphRelationTypes[item.graph] ?? []
-    const { merged, added, overflow } = mergeRelationTypes(existingTypes, usedTypes)
-    if (added.length === 0 || overflow.length > 0) continue
-
-    nextPolicy = {
-      ...nextPolicy,
-      graphRelationTypes: { ...nextPolicy.graphRelationTypes, [item.graph]: merged },
-    }
-    changed = true
-  }
-
-  return { policy: nextPolicy, changed }
-}
-
-/**
- * Validate graph assignment triples against the current graph policy.
- * Returns an array of failures (empty = all good).
- */
-export function validateGraphAssignments(triples: GraphAssignmentTriple[], policy: GraphPolicy): GraphAssignmentFailure[] {
-  const failures: GraphAssignmentFailure[] = []
-
-  for (const [assignmentIndex, item] of triples.entries()) {
-    if (!item.subject || !item.predicate || !item.object || !item.graph || !item.page_path) {
-      failures.push(failureFor(item, assignmentIndex, "Missing required field: subject, predicate, object, graph, or page_path"))
-      continue
-    }
-
-    if (isBareScalarValue(item.subject) || isBareScalarValue(item.object)) {
-      failures.push(failureFor(item, assignmentIndex, "subject/object is a bare scalar value (number+unit) — scalar values must not become graph nodes; encode the fact via predicate + attribute-concept object instead"))
-      continue
-    }
-
-    const usedTypes = relationTypesUsedBy(item)
-
-    if (item.new_graph) {
-      const { overflow } = mergeRelationTypes([], usedTypes)
-      if (overflow.length > 0) {
-        failures.push(failureFor(item, assignmentIndex, `New graph "${item.graph}" exceeds 4 relation types (overflow: ${[...new Set(overflow)].join(", ")})`))
-      }
-      continue
-    }
-
-    // Graph must be in managedGraphs
-    if (!policy.managedGraphs.includes(item.graph)) {
-      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" is not in managedGraphs and new_graph is false`))
-      continue
-    }
-
-    // Predicate type may extend this graph only while the graph stays within 4 types.
-    const existingTypes = policy.graphRelationTypes[item.graph] ?? []
-    const { overflow } = mergeRelationTypes(existingTypes, usedTypes)
-    if (overflow.length > 0) {
-      const overflowTypes = [...new Set(overflow)]
-      failures.push(failureFor(item, assignmentIndex, `Graph "${item.graph}" already has 4 relation types; new graph required for: ${overflowTypes.join(", ")}`, overflowTypes))
-    }
-  }
-
-  return failures
-}
-
-/**
- * Decomposition prompt — document decomposition.
- * Extracts concepts and assigns each a page_path, without graph assignment.
- * Output is the SECTION delimiter format (see SECTION_ONLY_INSTRUCTION), not JSON.
- */
-export function buildDecompositionPrompt(
-  dbIndex: string,
-  sourceContent: string = "",
-  dismissalContext: string = "",
-): string {
+export function buildDecompositionPrompt(dbIndex: string, sourceContent = "", dismissalContext = ""): string {
   return [
-    "You are a document decomposer. Read the source document and split it into",
-    "meaningful sections — one entry per distinct concept or topic.",
-    "Do NOT extract relations, assign graphs, or decide relation types — that is graph assignment's job.",
-    "",
+    "You are a document decomposer. Split the source into meaningful sections and assign each section a current db/ page path.",
+    "Do not infer stable IDs; IDs are generated and reconciled by the Markdown v2 pipeline.",
     languageRule(sourceContent),
-    "",
-    "## Output format (SECTION blocks — no JSON, no other text)",
-    "",
-    "Emit one SECTION block per distinct concept or topic, in this exact shape:",
-    "",
-    "---SECTION: ## 고블린 전사 | db/enemies/goblin-warrior.md---",
-    "<verbatim section text from the document>",
+    "Output only blocks shaped as:",
+    "---SECTION: heading range | db/category/page.md---",
+    "<verbatim source text>",
     "---END SECTION---",
-    "",
-    "Rules:",
-    "- The text after `SECTION:` on the opener line has two parts separated by ` | `: the `source_range` (heading path, sheet+range, or timestamp) and the `page_path` (the target db/ file path for this section).",
-    "- Choose a `page_path` under `db/` that fits the concept. Check the db/ index below — if an existing page matches, reuse that path. Otherwise propose a new path like `db/<category>/<slug>.md`.",
-    "- The body between the markers is the VERBATIM text of that section. Copy it exactly — do NOT summarize, paraphrase, or escape anything. Backslashes, quotes, brackets, parentheses, and braces must be copied as-is; there is no JSON here, so nothing needs escaping.",
-    "- One block per distinct concept or topic. If a concept spans multiple sections, merge them into one block.",
-    "- If a section is too thin to be meaningful (e.g. a single line), omit it.",
-    "- Do NOT wrap the response in a code fence. Do NOT emit JSON. The first characters of your response must be `---SECTION:`.",
-    "",
-    dbIndex ? `## Current db/ index\n\n${dbIndex}` : "## Current db/ index\n\n(empty)",
-    "",
+    dbIndex ? `## Current db/ index\n${dbIndex}` : "## Current db/ index\n(empty)",
     dismissalContext,
-  ].filter(Boolean).join("\n")
+  ].filter(Boolean).join("\n\n")
 }
 
-/**
- * Graph assignment prompt.
- * Each section is decomposed into node/edge/node triples; each triple is
- * independently assigned to the best-fit graph.
- * Output: JSON { triples: GraphAssignmentTriple[] }.
- */
-export function buildGraphAssignmentPrompt(graphPolicyPrompt: string, entityHints?: string): string {
-  return [
-    "You are a graph assignment engine. You receive a list of source sections (decomposition output)",
-    "and must decompose each section into one or more node/edge/node triples, then assign",
-    "each triple independently to the best-fit graph.",
-    "",
-    "Each section has a `source_id`, `source_range`, and `source_text`.",
-    "Read the `source_text`, extract every factual relationship as a triple, and assign",
-    "each triple to the graph whose domain best fits its meaning.",
-    "",
-    "## Rules",
-    "",
-    "1. Extract every meaningful fact from `source_text` as a `subject → predicate → object` triple.",
-    "   One section typically produces multiple triples.",
-    "2. Assign each triple to a graph independently — different triples from the same section",
-    "   may go to different graphs.",
-    "3. For each triple, pick the existing graph whose domain best matches the triple's meaning.",
-    "4. If the predicate already exists as a relation type in that graph → use it with `new_graph: false`.",
-    "5. If the predicate is new and the graph has fewer than 4 relation types → use it with `new_graph: false`,",
-    "   and include `graph_relation_types` as the full expanded list.",
-    "6. If the best-fit graph already has 4 relation types and the predicate is new → create a new graph",
-    "   with `new_graph: true` and up to 4 `graph_relation_types`.",
-    "7. If no existing graph domain fits → create a new graph with `new_graph: true`.",
-    "8. `subject` and `object` must be nouns naming an entity or concept — never a bare scalar value",
-    "   (a number+unit, a percentage, a duration). Attribute-type facts should carry their meaning in the",
-    "   `predicate`, with the `object` naming the attribute concept: `스킬A --HAS_COOLDOWN--> 쿨타임` (yes),",
-    "   `스킬A --HAS_COOLDOWN--> 30초` (no). The concrete value is not lost — the source section's verbatim",
-    "   text is stored separately.",
-    "9. `predicate` must be an uppercase snake_case ASCII string (e.g. `HAS_COOLDOWN`).",
-    "10. Each `page_path` represents one source section container. Triples from the same source section",
-    "   (`source_id`) may share a `page_path` — they will be merged into one file. Triples from",
-    "   different source sections should use different `page_path` values. There is no constraint that",
-    "   triples sharing a `page_path` must have the same subject — a single source section can produce",
-    "   triples with different subjects, and all may share the same `page_path`.",
-    "",
-    "## Output format (JSON object — no other text)",
-    "",
-    'Output ONLY a JSON object with a `triples` array, no prose:',
-    '{',
-    '  "triples": [',
-    '    {',
-    '      "source_id": "s1",',
-    '      "subject": "고블린 전사",',
-    '      "predicate": "WEAK_AGAINST",',
-    '      "object": "불",',
-    '      "graph": "combat_weakness_graph",',
-    '      "page_path": "db/enemies/goblin-warrior-weakness.md",',
-    '      "new_graph": false',
-    '    },',
-    '    {',
-    '      "source_id": "s1",',
-    '      "subject": "고블린 전사",',
-    '      "predicate": "DROPS_ITEM",',
-    '      "object": "고블린 이빨",',
-    '      "graph": "enemy_loot_graph",',
-    '      "page_path": "db/enemies/goblin-warrior-loot.md",',
-    '      "new_graph": true,',
-    '      "graph_relation_types": ["DROPS_ITEM"]',
-    '    }',
-    '  ]',
-    '}',
-    "",
-    "`graph_relation_types` meaning:",
-    "- `new_graph: true`: the full relation type list for the new graph (up to 4).",
-    "- `new_graph: false`: include only when extending an existing graph — the full list after expansion.",
-    "- If no expansion is needed, omit it or use an empty array.",
-    "",
-    "The scaffold below contains `sections` plus one seed triple per source section.",
-    "Keep `source_text` only in `sections`; do not copy it into triple objects.",
-    "Each triple must reference its source with `source_id`.",
-    "You may add additional triple objects with the same `source_id` when one section has multiple facts.",
-    "Do not add or rename keys inside triple objects.",
-    "",
-    entityHints
-      ? [
-          "## Known entity names (reuse these exact strings when the concept matches)",
-          entityHints,
-          "",
-          "Rule: If the subject or object you are about to write matches one of these names",
-          "(or is clearly the same concept), use the exact string from this list.",
-          "If it is a new concept not on this list, coin a new name.",
-          "",
-        ].join("\n")
-      : "",
-    graphPolicyPrompt,
-  ].filter(Boolean).join("\n")
-}
-
-/**
- * @deprecated Use buildDecompositionPrompt + buildGraphAssignmentPrompt (decomposition + graph assignment).
- * Kept for backward compatibility with existing tests.
- */
-export function buildAnalysisPrompt(
-  dbIndex: string,
-  sourceContent: string = "",
-  dismissalContext: string = "",
-  graphPolicyPrompt: string = "",
-  existingGraphSummary: string = "",
-): string {
-  void graphPolicyPrompt
-  void existingGraphSummary
+/** Compatibility name for callers that only need the v2 decomposition prompt. */
+export function buildAnalysisPrompt(dbIndex: string, sourceContent = "", dismissalContext = ""): string {
   return buildDecompositionPrompt(dbIndex, sourceContent, dismissalContext)
 }
 
-
-
-/**
- * Build a scaffold JSON for graph assignment: one seed triple per decomposed
- * section, with source_text in the sections array and all output fields empty.
- * LLM fills in subject/predicate/object/graph/page_path/new_graph per triple.
- * LLM may add more triples with the same source_id when a section has multiple facts.
- */
-export function buildGraphAssignmentScaffold(sections: DecomposedSection[]): string {
-  const scaffold = {
-    sections: sections.map((s, index) => ({
-      source_id: `s${index + 1}`,
-      source_range: s.source_range,
-      source_text: s.source_text,
-    })),
-    triples: sections.map((_s, index) => ({
-      source_id: `s${index + 1}`,
-      subject: "",
-      predicate: "",
-      object: "",
-      graph: "",
-      page_path: "",
-      new_graph: false,
-      graph_relation_types: [] as string[],
-    })),
-  }
-  return JSON.stringify(scaffold, null, 2)
-}
-
-/**
- * Check graph assignment triples against the entity dictionary for fuzzy name
- * conflicts (e.g. "고블린전사" vs the registered "고블린 전사"). Exact
- * matches and brand-new names pass through as `clean` — only fuzzy matches
- * (ambiguous enough to need a human call) are pulled into `conflicts`.
- */
-async function checkEntityConflicts(
-  triples: GraphAssignmentTriple[],
-  projectPath: string,
-): Promise<{ clean: GraphAssignmentTriple[]; conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] }> {
-  const dict = await loadEntityDict(projectPath)
-  const conflictGroups = new Map<string, { candidates: EntityCandidate[]; triples: GraphAssignmentTriple[] }>()
-  const conflictedTripleSet = new Set<GraphAssignmentTriple>()
-
-  for (const triple of triples) {
-    for (const name of [triple.subject, triple.object]) {
-      const candidates = findCandidates(name, dict)
-      const hasFuzzyOnly = candidates.length > 0 && !candidates.some((c) => c.match === "exact")
-      if (!hasFuzzyOnly) continue
-
-      conflictedTripleSet.add(triple)
-      const group = conflictGroups.get(name) ?? { candidates, triples: [] }
-      group.triples.push(triple)
-      conflictGroups.set(name, group)
-    }
-  }
-
-  const clean = triples.filter((t) => !conflictedTripleSet.has(t))
-  const conflicts: Omit<ReviewItem, "id" | "resolved" | "createdAt">[] = Array.from(conflictGroups.entries()).map(
-    ([incomingName, group]) => ({
-      type: "entity_confirmation",
-      title: `엔티티 확인: "${incomingName}"`,
-      description: `"${incomingName}"과 유사한 기존 엔티티가 있습니다: ${group.candidates.map((c) => c.entry.canonicalName).join(", ")}`,
-      affectedPages: [...new Set(group.triples.map((t) => t.page_path).filter(Boolean))],
-      entityConfirmation: {
-        incomingName,
-        candidates: group.candidates,
-        triples: group.triples,
-        pagePaths: [...new Set(group.triples.map((t) => t.page_path).filter(Boolean))],
-      },
-      options: [
-        ...group.candidates.map((c) => ({ label: `같은 엔티티: ${c.entry.canonicalName}`, action: `entity:same:${c.entry.id}` })),
-        { label: "새 엔티티", action: "entity:new" },
-        { label: "무시", action: "entity:ignore" },
-      ],
-    }),
-  )
-
-  return { clean, conflicts }
-}
-
-interface GraphAssignmentResult {
-  assignments: GraphAssignmentTriple[]
-  policy: GraphPolicy
-  reviewItem?: Omit<ReviewItem, "id" | "resolved" | "createdAt">
-}
-
-/**
- * Run graph assignment for a given set of confirmed sections. Used both in
- * the inline pipeline (confirmed docs) and from the Approve handler (after
- * user resolves a modification proposal).
- * Returns valid assignments, the (possibly updated) policy, and an optional
- * suggestion review item for graph assignment failures.
- */
-async function runGraphAssignment(
-  llmConfig: LlmConfig,
-  sections: DecomposedSection[],
-  policy: GraphPolicy,
-  signal: AbortSignal | undefined,
-  projectPath: string,
-  chunkLabel: string,
-  fileName: string,
-): Promise<GraphAssignmentResult> {
-  const scaffold = buildGraphAssignmentScaffold(sections)
-  const entityHints = buildEntityHintsForPrompt(await loadEntityDict(projectPath))
-  const raw = await callModel(
-    llmConfig,
-    buildGraphAssignmentPrompt(buildGraphPolicyPrompt(policy), entityHints),
-    `Read the sections, then fill in the empty fields of each seed triple below. Do not add or rename any keys inside triple objects. Use \`source_id\` to refer to source sections; do not copy \`source_text\` into triples. You may add additional triple objects using the same schema when one source_text contains multiple facts.\n\n${JSON_ONLY_INSTRUCTION}\n\n${scaffold}`,
-    signal,
-    projectPath,
-  )
-
-  let parsed: GraphAssignmentTriple[] = []
-  try {
-    const cleaned = raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "").trim()
-    const obj = JSON.parse(cleaned)
-    parsed = hydrateGraphAssignments(
-      Array.isArray(obj) ? obj : (obj.triples ?? []),
-      sections,
-    )
-  } catch {
-    // parse failure — return empty
-  }
-
-  if (parsed.length === 0) {
-    invoke("app_debug", { message: `[ingest:graph:EMPTY] ${chunkLabel}runGraphAssignment produced no triples` }).catch(() => {})
-    return {
-      assignments: [],
-      policy,
-      reviewItem: {
-        type: "suggestion",
-        stage: "primary",
-        title: `no graph assignments produced — skipped: ${fileName}`,
-        description: `Graph assignment produced no triples from ${sections.length} section(s). The document was decomposed but nothing could be assigned to a graph — no relations were extracted or saved.`,
-        sourcePath: fileName,
-        affectedPages: [],
-        options: [{ label: "Dismiss", action: "Dismiss" }],
-      },
-    }
-  }
-
-  const policyUpdate = applyGraphPolicyUpdates(parsed, policy)
-  let nextPolicy = policyUpdate.policy
-  if (policyUpdate.changed) {
-    try { await saveGraphPolicy(projectPath, nextPolicy) } catch { /* non-fatal */ }
-  }
-
-  const failures = validateGraphAssignments(parsed, nextPolicy)
-  const failedIndexes = new Set(failures.map((f) => f.assignmentIndex))
-  const assignments = parsed.filter((_, i) => !failedIndexes.has(i))
-
-  let reviewItem: Omit<ReviewItem, "id" | "resolved" | "createdAt"> | undefined
-  if (failures.length > 0) {
-    invoke("app_debug", { message: `[ingest:graph:PARTIAL] ${chunkLabel}file=${fileName} skipped=${failures.length}` }).catch(() => {})
-    const overflowMap = new Map<string, { newTypes: Set<string>; paths: string[] }>()
-    for (const f of failures) {
-      if (!f.graph || !f.overflowTypes?.length) continue
-      const entry = overflowMap.get(f.graph) ?? { newTypes: new Set(), paths: [] }
-      for (const t of f.overflowTypes) entry.newTypes.add(t)
-      if (f.page_path) entry.paths.push(f.page_path)
-      overflowMap.set(f.graph, entry)
-    }
-    const overflowEntries: OverflowEntry[] = Array.from(overflowMap.entries()).map(([graph, { newTypes, paths }]) => ({
-      graph,
-      newTypes: Array.from(newTypes),
-      existingTypes: nextPolicy.graphRelationTypes[graph] ?? [],
-      suggestedGraph: `${graph}_ext`,
-      affectedPaths: paths,
-    }))
-    const hasOverflow = overflowEntries.length > 0
-    reviewItem = {
-      type: "suggestion",
-      stage: "primary",
-      title: summarizeGraphAssignmentFailureTitle(failures, fileName),
-      description: failures.map(formatGraphAssignmentFailureLine).join("\n"),
-      sourcePath: fileName,
-      affectedPages: [...new Set(failures.map((f) => f.page_path).filter((p): p is string => Boolean(p)))],
-      overflowEntries: hasOverflow ? overflowEntries : undefined,
-      options: hasOverflow
-        ? [
-            ...overflowEntries.map((e) => ({
-              label: `Create "${e.suggestedGraph}"`,
-              action: `overflow:create:${e.graph}:${e.suggestedGraph}:${e.newTypes.join(",")}`,
-            })),
-            { label: "Dismiss", action: "Dismiss" },
-          ]
-        : [{ label: "Dismiss", action: "Dismiss" }],
-    }
-  }
-
-  return { assignments, policy: nextPolicy, reviewItem }
-}
-
-/**
- * Re-process a saved document:
- *   1. Delete all existing triples for this page_path from the graph backend.
- *   2. Remove the page from page-graph-index.
- *   3. Run decomposition on the full document content (page_path already
- *      known, so force it onto every section — skip LLM page_path
- *      assignment). If the caller already has the document's field values
- *      in hand (e.g. a structured wizard export), pass dataTypeId +
- *      prefilledFields to skip the decomposition model call entirely — the
- *      fields are assembled directly into a single section instead.
- *   4. Run graph assignment (triple extraction).
- *   5. Sync to graph backend + update page-graph-index.
- */
+/** Replace a saved v2 document while preserving its page and section IDs. */
 export async function reIngestDocument(
   projectPath: string,
   projectName: string,
@@ -2041,67 +1290,14 @@ export async function reIngestDocument(
 ): Promise<void> {
   const pp = normalizePath(projectPath)
   try {
-    // 1. Delete existing triples for this page
-    const backend = await getGraphBackend(pp)
-    await backend.deleteEdgesByPagePath(projectName, pagePath)
-
-    // 2. Remove from page-graph-index
-    await removePageFromIndex(pp, pagePath)
-
-    // 3. Decomposition: decompose document, force page_path on all sections
-    const policy = await loadGraphPolicy(pp)
-    let sections: DecomposedSection[]
-
-    if (dataTypeId && prefilledFields) {
-      // Fields are already known — skip the decomposition model call and
-      // build the section directly, matching the `## field\ncontent` shape
-      // a data-type extraction model call would have produced.
-      const fieldsBlock = Object.entries(prefilledFields)
-        .map(([field, value]) => `## ${field}\n\n${value}`)
-        .join("\n\n")
-      sections = [{ source_range: pagePath, source_text: fieldsBlock, page_path: pagePath }]
-    } else {
-      const dbIndex = await buildDbIndex(pp)
-      let decompositionRaw: string
-      try {
-        decompositionRaw = await callModel(
-          llmConfig,
-          buildDecompositionPrompt(dbIndex, content),
-          `Decompose this document into SECTION blocks.\n\n${SECTION_ONLY_INSTRUCTION}\n\n---\n\n${content}`,
-          undefined,
-          pp,
-          16000,
-          false,
-        )
-      } catch (err) {
-        console.warn(`[ingest] reIngestDocument decomposition failed for ${pagePath}: ${err instanceof Error ? err.message : String(err)}`)
-        return
-      }
-
-      sections = parseDecomposedSections(decompositionRaw).map((s) => ({
-        ...s,
-        page_path: pagePath,
-      }))
-    }
-
-    if (sections.length === 0) return
-
-    // 4. Graph assignment: triple extraction
-    const result = await runGraphAssignment(llmConfig, sections, policy, undefined, pp, "", pagePath)
-
-    // 5. Sync
-    if (result.assignments.length > 0) {
-      const { clean, conflicts } = await checkEntityConflicts(result.assignments, pp)
-      if (clean.length > 0) {
-        await syncGraphToBackend(pp, projectName, clean)
-      }
-      if (conflicts.length > 0) {
-        useReviewStore.getState().addItems(conflicts)
-      }
-    }
-    if (result.reviewItem) {
-      useReviewStore.getState().addItems([result.reviewItem])
-    }
+    // Re-ingest is now a v2 document replacement, not a bridge back to the
+    // legacy graph backend. The content must already carry stable IDs; this
+    // deliberately rejects v1 rather than inventing identity from headings.
+    void projectName
+    void llmConfig
+    void dataTypeId
+    void prefilledFields
+    await commitMarkdownV2Page(pp, pagePath, content)
   } catch (err) {
     console.warn(`[ingest] reIngestDocument failed for ${pagePath}: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -2134,24 +1330,32 @@ export function buildFileBlocksFromSections(
   const blocks: string[] = []
   for (const [pagePath, group] of groups) {
     const first = group[0]
-    const sourceRange = first.source_range ?? ""
-
-    const sourcesYaml = [
-      `sources:`,
-      `  - file: ${fileName}`,
-      sourceRange ? `    range: "${sourceRange.replace(/"/g, '\\"')}"` : null,
-    ].filter(Boolean).join("\n")
-
-    const frontmatter = [
-      "---",
-      `title: ${sourceRange || pagePath}`,
-      `status: draft`,
-      sourcesYaml,
-      "---",
-    ].join("\n")
-
-    const body = group.map((s) => s.source_text).filter(Boolean).join("\n\n")
-    const content = body ? [frontmatter, body].join("\n\n") : frontmatter
+    const title = first.source_range || pagePath
+    const sections = group.map((section, ordinal) => ({
+      sectionId: createSectionId(),
+      headingText: `Section ${ordinal + 1}`,
+      headingLevel: 2 as const,
+      ordinal,
+      metadata: { section_type: "overview" as const },
+      // H2 is reserved for v2 section boundaries. Preserve source hierarchy
+      // below the generated section by demoting embedded H2 headings to H3.
+      body: (section.source_text || "").replace(/^##(?!#)(?=\s)/gm, "###"),
+      startOffset: 0,
+      endOffset: 0,
+    }))
+    const content = serializeMarkdownV2({
+      page: {
+        schema: "llm-wiki/page/v2",
+        page_id: createPageId(),
+        title,
+        page_type: "guide",
+        summary: `Generated from ${fileName}`,
+        sections: Object.fromEntries(sections.map((section) => [section.sectionId, section.metadata])),
+      },
+      h1: title,
+      sections,
+      source: "",
+    })
 
     blocks.push(`---FILE: ${pagePath}---\n${content}\n---END FILE---`)
   }
@@ -2185,12 +1389,12 @@ export async function startIngest(
   store.clearMessages()
   store.setStreaming(false)
 
-  const [sourceContent, index, graphPolicy] = await Promise.all([
+  const [sourceContent, index, graphs] = await Promise.all([
     tryReadFile(sp),
     tryReadFile(`${pp}/db/index.md`),
-    loadGraphPolicy(pp),
+    listKnowledgeGraphs(pp),
   ])
-  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
+  const graphCatalog = graphs.length ? `## Knowledge graphs\n${graphs.map((g)=>`- ${g.graphName}: ${g.purpose}`).join("\n")}` : ""
 
   const fileName = getFileName(sp)
 
@@ -2200,7 +1404,7 @@ export async function startIngest(
     languageRule(sourceContent),
     "",
     index ? `## Current Wiki Index\n${index}` : "",
-    graphPolicyPrompt,
+    graphCatalog,
   ]
     .filter(Boolean)
     .join("\n\n")
@@ -2253,11 +1457,11 @@ export async function executeIngestWrites(
   const pp = normalizePath(projectPath)
   const store = getStore()
 
-  const [index, graphPolicy] = await Promise.all([
+  const [index, graphs] = await Promise.all([
     tryReadFile(`${pp}/db/index.md`),
-    loadGraphPolicy(pp),
+    listKnowledgeGraphs(pp),
   ])
-  const graphPolicyPrompt = buildGraphPolicyPrompt(graphPolicy)
+  const relationCatalog = (await Promise.all(graphs.map(async(g)=>({g,types:await listKnowledgeRelationTypes(pp,g.graphId)})))).map(({g,types})=>`- ${g.graphName}: ${types.map((t)=>t.name).join(", ")}`).join("\n")
 
   const conversationHistory = store.messages
     .filter((m) => m.role !== "system")
@@ -2269,11 +1473,23 @@ export async function executeIngestWrites(
     userGuidance ? `Additional guidance: ${userGuidance}` : "",
     "",
     index ? `## Current Wiki Index\n${index}` : "",
+    relationCatalog ? `## Knowledge graph relation types\n${relationCatalog}` : "",
     "",
     "Output ONLY the file contents in this exact format for each file:",
     "```",
     "---FILE: db/path/to/file.md---",
-    "(file content here)",
+    "---",
+    "schema: llm-wiki/page/v2",
+    "page_id: page-<stable ULID>",
+    "title: Page title",
+    "page_type: guide",
+    "sections:",
+    "  sec-<stable ULID>:",
+    "    section_type: overview",
+    "---",
+    "# Page title",
+    "## Section heading {#sec-<same stable ULID>}",
+    "(section content)",
     "---END FILE---",
     "```",
     "",
@@ -2303,7 +1519,7 @@ export async function executeIngestWrites(
     "You are a wiki generation assistant. Your task is to produce structured wiki file contents.",
     "",
     languageRule(historyText),
-    graphPolicyPrompt,
+    relationCatalog ? `## Knowledge graph relation types\n${relationCatalog}` : "",
   ]
     .filter(Boolean)
     .join("\n\n")
@@ -2326,32 +1542,8 @@ export async function executeIngestWrites(
     signal,
   )
 
-  const writtenPaths: string[] = []
-  const matches = accumulated.matchAll(FILE_BLOCK_REGEX)
-
-  for (const match of matches) {
-    const relativePath = match[1].trim()
-    const content = match[2]
-
-    if (!relativePath) continue
-
-    const fullPath = `${pp}/${relativePath}`
-
-    try {
-      if (relativePath.endsWith("/log.md")) {
-        const existing = await tryReadFile(fullPath)
-        const appended = existing
-          ? `${existing}\n\n${content.trim()}`
-          : content.trim()
-        await writeFile(fullPath, appended)
-      } else {
-        await writeFile(fullPath, content)
-      }
-      writtenPaths.push(fullPath)
-    } catch (err) {
-      console.error(`Failed to write ${fullPath}:`, err)
-    }
-  }
+  const result = await writeFileBlocks(pp, accumulated, "interactive-ingest", llmConfig, signal)
+  const writtenPaths = result.writtenPaths.map((path) => `${pp}/${path}`)
 
   if (writtenPaths.length > 0) {
     const fileList = writtenPaths.map((p) => `- ${p}`).join("\n")

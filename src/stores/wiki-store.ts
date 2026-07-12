@@ -108,7 +108,7 @@ export interface WikiState {
   outputLanguage: OutputLanguage
   selectedBranch: string | null
   dataVersion: number
-  selectedGraph: string // Active sub-graph name for visualization
+  selectedGraph: string // Stable graphId selected by graph UI
   highlightSource: string | null // Source file path to highlight in graph
   /** Absolute path set when the user clicks a Reference — GraphView.Files picks this up. */
   pendingOpenFile: string | null
@@ -116,7 +116,7 @@ export interface WikiState {
   /** Set by goBack when it needs GraphView to restore its internal tab/file state. */
   pendingGraphRestore: { graphTab: "knowledge" | "files"; graphDbFile: string | null } | null
   /** Inline reference preview shown to the right of the Chat panel. */
-  chatReferencePreview: { path: string; highlightSection?: string } | null
+  chatReferencePreview: { pageId: string; sectionId: string; quotedText: string; prefix?: string; suffix?: string; startOffset?: number; endOffset?: number } | null
   /** Absolute path of the file shown in the "Edit in Wiki" modal editor; null = closed. */
   editingFile: string | null
 
@@ -162,7 +162,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   selectedBranch: null,
 
   dataVersion: 0,
-  selectedGraph: "main",
+  selectedGraph: "",
   highlightSource: null,
   pendingOpenFile: null,
   navHistory: [],

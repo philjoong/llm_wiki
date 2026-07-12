@@ -232,22 +232,6 @@ async function vectorCountChunks(projectPath: string): Promise<number> {
   })
 }
 
-export async function legacyVectorRowCount(projectPath: string): Promise<number> {
-  try {
-    return await invoke("vector_legacy_row_count", {
-      projectPath: normalizePath(projectPath),
-    })
-  } catch {
-    return 0
-  }
-}
-
-export async function dropLegacyVectorTable(projectPath: string): Promise<void> {
-  await invoke("vector_drop_legacy", {
-    projectPath: normalizePath(projectPath),
-  })
-}
-
 // ── Chunk enrichment ─────────────────────────────────────────────────────
 
 /**

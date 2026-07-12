@@ -5,11 +5,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useWikiStore } from "@/stores/wiki-store"
 import {
-  dropLegacyVectorTable,
   embedAllPages,
   getEmbeddingCount,
   getLastEmbeddingError,
-  legacyVectorRowCount,
 } from "@/lib/embedding"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
 
@@ -29,20 +27,14 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
   const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
 
   const [chunkCount, setChunkCount] = useState<number | null>(null)
-  const [legacyCount, setLegacyCount] = useState<number>(0)
   const [lastError, setLastError] = useState<string | null>(null)
   const [reindex, setReindex] = useState<ReindexState>({ kind: "idle" })
-  const [legacyDropped, setLegacyDropped] = useState(false)
 
   const refreshStats = useCallback(async () => {
     if (!project) return
     try {
-      const [chunks, legacy] = await Promise.all([
-        getEmbeddingCount(project.path),
-        legacyVectorRowCount(project.path),
-      ])
+      const chunks = await getEmbeddingCount(project.path)
       setChunkCount(chunks)
-      setLegacyCount(legacy)
     } catch {
       setChunkCount(null)
     }
@@ -62,16 +54,6 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
     setReindex({ kind: "done", count })
     await refreshStats()
   }, [project, embeddingConfig, refreshStats])
-
-  const handleDropLegacy = useCallback(async () => {
-    if (!project) return
-    await dropLegacyVectorTable(project.path)
-    setLegacyCount(0)
-    setLegacyDropped(true)
-  }, [project])
-
-  const showLegacyMigration =
-    legacyCount > 0 && (chunkCount === null || chunkCount === 0)
 
   return (
     <div className="space-y-6">
@@ -217,17 +199,6 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
             </div>
           </div>
 
-          {showLegacyMigration && (
-            <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-              <div className="text-sm font-medium text-destructive">
-                {t("settings.sections.embedding.legacyPromptTitle")}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {t("settings.sections.embedding.legacyPromptBody", { count: legacyCount })}
-              </p>
-            </div>
-          )}
-
           <div className="space-y-3 rounded-md border p-3">
             <div className="text-sm font-medium">
               {t("settings.sections.embedding.statsHeading")}
@@ -251,27 +222,11 @@ export function EmbeddingSection({ draft, setDraft }: Props) {
                   : t("settings.sections.embedding.reindexAll")}
               </Button>
 
-              {legacyCount > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDropLegacy}
-                  disabled={!project}
-                >
-                  {t("settings.sections.embedding.dropLegacy")}
-                </Button>
-              )}
             </div>
 
             {reindex.kind === "done" && (
               <p className="text-xs text-muted-foreground">
                 {t("settings.sections.embedding.reindexDone", { count: reindex.count })}
-              </p>
-            )}
-
-            {legacyDropped && (
-              <p className="text-xs text-muted-foreground">
-                {t("settings.sections.embedding.dropLegacyDone")}
               </p>
             )}
 

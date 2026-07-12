@@ -39,8 +39,6 @@ import {
   embedPage,
   embedAllPages,
   getLastEmbeddingError,
-  legacyVectorRowCount,
-  dropLegacyVectorTable,
   getEmbeddingCount,
   removePageEmbedding,
   type PageSearchResult,
@@ -723,34 +721,9 @@ describe("embedAllPages", () => {
   })
 })
 
-// ── Legacy & misc helpers ───────────────────────────────────────────
+// ── Misc helpers ────────────────────────────────────────────────────
 
-describe("legacyVectorRowCount / dropLegacyVectorTable / getEmbeddingCount / removePageEmbedding", () => {
-  it("legacyVectorRowCount: returns the Rust row count on success, 0 on error", async () => {
-    mockInvoke.mockResolvedValueOnce(42)
-    const n = await legacyVectorRowCount("/proj")
-    expect(n).toBe(42)
-    expect(mockInvoke).toHaveBeenCalledWith("vector_legacy_row_count", {
-      projectPath: "/proj",
-    })
-
-    mockInvoke.mockRejectedValueOnce(new Error("legacy table missing"))
-    const n2 = await legacyVectorRowCount("/proj")
-    expect(n2).toBe(0)
-  })
-
-  it("dropLegacyVectorTable: invokes the Rust command with normalized path, propagates throws", async () => {
-    mockInvoke.mockResolvedValueOnce(undefined)
-    await dropLegacyVectorTable("/proj")
-    expect(mockInvoke).toHaveBeenCalledWith("vector_drop_legacy", {
-      projectPath: "/proj",
-    })
-
-    // Unlike the read helpers, drop is destructive enough that a
-    // failure SHOULD propagate — callers can show the error in UI.
-    mockInvoke.mockRejectedValueOnce(new Error("lock contention"))
-    await expect(dropLegacyVectorTable("/proj")).rejects.toThrow("lock contention")
-  })
+describe("getEmbeddingCount / removePageEmbedding", () => {
 
   it("getEmbeddingCount: returns chunk count, swallows errors to 0", async () => {
     mockInvoke.mockResolvedValueOnce(128)

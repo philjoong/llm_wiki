@@ -34,6 +34,7 @@ import {
   parseSourceRefs,
 } from "@/lib/sources-merge"
 import { pathToSlug } from "@/lib/modification-resolve"
+import { commitMarkdownV2Page } from "@/lib/ingest-v2"
 import {
   useReviewStore,
   type ModificationProposal,
@@ -181,7 +182,10 @@ export async function promotePending(
     : null
   const merged = mergeSourceRefsIntoContent(incoming, existing)
 
-  await writeFile(targetAbs, merged)
+  // v2 pages must reach disk and the knowledge DB through the single
+  // crash-recoverable ingest command; direct file writes would split the
+  // Markdown/DB operation.
+  await commitMarkdownV2Page(pp, item.targetPath, merged)
   await deleteFile(fileAbs)
 }
 

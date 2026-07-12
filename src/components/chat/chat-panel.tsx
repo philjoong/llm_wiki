@@ -15,7 +15,7 @@ import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
 import { loadQuestionTypes } from "@/lib/question-types"
 import { citationPrompt, finalizeCitations, issueCitationMap } from "@/lib/chat-citations"
-import { searchSectionCandidates, type SectionCandidate } from "@/lib/knowledge"
+import { resolveAllowedGraphIds, searchSectionCandidates, type SectionCandidate } from "@/lib/knowledge"
 
 
 function formatDate(timestamp: number): string {
@@ -209,11 +209,14 @@ export function ChatPanel({
 
         // Section retrieval is the sole document input for Chat. `useEmbedding`
         // is deliberately not used to re-enable the retired file-search path.
-        const sectionCandidates = await searchSectionCandidates(pp, text, graphPrefixFilter)
+        // Prefixes are UI-only; resolve them once to stable graph IDs and
+        // give the exact same allowlist to document traversal and graph context.
+        const allowedGraphIds = await resolveAllowedGraphIds(pp, graphPrefixFilter)
+        const sectionCandidates = await searchSectionCandidates(pp, text, allowedGraphIds)
 
         // Preserve graph empty-state behavior, but do not inject graph output
         // as a second, uncitable document source.
-        const graphBlocks = await getGraphContext(text, pp, project.name, llmConfig, graphPrefixFilter)
+        const graphBlocks = await getGraphContext(text, pp, project.name, llmConfig, allowedGraphIds)
         const noGraphContext = graphBlocks.length === 0
         citationEntries = issueCitationMap(sectionCandidates as SectionCandidate[])
         const noRelevantDocs = citationEntries.length === 0

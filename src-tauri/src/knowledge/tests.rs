@@ -31,6 +31,29 @@ fn cardinality_conflict_and_alias_normalization_are_transactional() {
 }
 
 #[test]
+fn review_resolution_preserves_approved_ids_and_rejection_cascades_evidence() {
+ let dir=project(); let p=dir.to_str().unwrap(); commands::bootstrap_knowledge_db(p.into()).unwrap();
+ let a=entity(p,"Alpha","concept"); let b=entity(p,"Beta","concept"); let c=entity(p,"Gamma","concept");
+ let graph=GraphRecord{graph_id:"g-review".into(),graph_name:"Review".into(),purpose:"test".into()}; commands::register_graph(p.into(),graph.clone()).unwrap(); commands::register_relation_type(p.into(),RegisterRelationTypeInput{relation_type:RelationTypeRecord{graph_id:graph.graph_id.clone(),name:"OWNER".into(),description:"owner".into(),subject_types:vec!["concept".into()],object_types:vec!["concept".into()],inverse_name:None,symmetric:false,object_cardinality:"one".into()}}).unwrap();
+ let active=commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:graph.graph_id.clone(),subject_entity_id:a.entity_id.clone(),predicate:"OWNER".into(),object_entity_id:b.entity_id.clone(),evidence:None}).unwrap();
+ let approved=commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:graph.graph_id.clone(),subject_entity_id:a.entity_id.clone(),predicate:"OWNER".into(),object_entity_id:c.entity_id.clone(),evidence:None}).unwrap(); assert_eq!(approved.status,"review");
+ let db=db::open_project(p,false).unwrap(); db.execute("INSERT INTO assertion_evidence VALUES('ev-active',?1,NULL,NULL,'supports',NULL,NULL)",[&active.assertion_id]).unwrap(); db.execute("INSERT INTO assertion_evidence VALUES('ev-approved',?1,NULL,NULL,'supports',NULL,NULL)",[&approved.assertion_id]).unwrap(); drop(db);
+ commands::resolve_cardinality_conflict(p.into(),ResolveCardinalityConflictInput{assertion_id:approved.assertion_id.clone()}).unwrap();
+ let db=db::open_project(p,false).unwrap(); assert_eq!(db.query_row("SELECT status FROM assertions WHERE assertion_id=?1",[&active.assertion_id],|r|r.get::<_,String>(0)).unwrap(),"superseded"); assert_eq!(db.query_row("SELECT status FROM assertions WHERE assertion_id=?1",[&approved.assertion_id],|r|r.get::<_,String>(0)).unwrap(),"active"); assert_eq!(db.query_row("SELECT evidence_id FROM assertion_evidence WHERE assertion_id=?1",[&approved.assertion_id],|r|r.get::<_,String>(0)).unwrap(),"ev-approved"); drop(db);
+ let rejected=commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:graph.graph_id,subject_entity_id:a.entity_id,predicate:"OWNER".into(),object_entity_id:b.entity_id,evidence:None}).unwrap(); assert_eq!(rejected.status,"review");
+ let db=db::open_project(p,false).unwrap(); db.execute("INSERT INTO assertion_evidence VALUES('ev-rejected',?1,NULL,NULL,'supports',NULL,NULL)",[&rejected.assertion_id]).unwrap(); drop(db);
+ commands::reject_review_assertion(p.into(),rejected.assertion_id.clone()).unwrap(); let db=db::open_project(p,false).unwrap(); assert_eq!(db.query_row("SELECT COUNT(*) FROM assertions WHERE assertion_id=?1",[&rejected.assertion_id],|r|r.get::<_,i64>(0)).unwrap(),0); assert_eq!(db.query_row("SELECT COUNT(*) FROM assertion_evidence WHERE evidence_id='ev-rejected'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+ fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn assertion_edit_uses_stable_id_and_revalidates_cardinality() {
+ let dir=project();let p=dir.to_str().unwrap();commands::bootstrap_knowledge_db(p.into()).unwrap();
+ let a=entity(p,"Alpha","concept");let b=entity(p,"Beta","concept");let c=entity(p,"Gamma","concept");let graph=GraphRecord{graph_id:"g-edit".into(),graph_name:"Edit".into(),purpose:"test".into()};commands::register_graph(p.into(),graph.clone()).unwrap();commands::register_relation_type(p.into(),RegisterRelationTypeInput{relation_type:RelationTypeRecord{graph_id:graph.graph_id.clone(),name:"PARENT".into(),description:"parent".into(),subject_types:vec!["concept".into()],object_types:vec!["concept".into()],inverse_name:None,symmetric:false,object_cardinality:"one".into()}}).unwrap();
+ let active=commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:graph.graph_id.clone(),subject_entity_id:a.entity_id.clone(),predicate:"PARENT".into(),object_entity_id:b.entity_id,evidence:None}).unwrap();let edited=commands::edit_knowledge_assertion(p.into(),EditAssertionInput{assertion_id:active.assertion_id.clone(),graph_id:graph.graph_id,subject_entity_id:a.entity_id,predicate:"PARENT".into(),object_entity_id:c.entity_id,evidence:None}).unwrap();assert_eq!(edited.assertion_id,active.assertion_id);assert_eq!(edited.status,"active");fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn graph_projection_snapshot_and_delete_are_knowledge_db_only() {
  let dir=project(); let p=dir.to_str().unwrap(); commands::bootstrap_knowledge_db(p.into()).unwrap();
  let alpha=entity(p,"Alpha","concept"); let beta=entity(p,"Beta","concept");
@@ -44,6 +67,39 @@ fn graph_projection_snapshot_and_delete_are_knowledge_db_only() {
  let impact=commands::get_knowledge_delete_impact(p.into(),DeleteImpactInput{node_id:Some(projection.node.node_id.clone()),assertion_id:None,entity_id:None}).unwrap(); assert_eq!(impact.assertion_ids,vec![assertion.assertion_id]);
  commands::delete_graph_projection(p.into(),projection.node.node_id).unwrap(); assert_eq!(commands::get_knowledge_graph_snapshot(p.into(),graph.graph_id).unwrap().nodes.len(),1);
  fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn entity_delete_rechecks_the_reviewed_impact() {
+ let dir=project(); let p=dir.to_str().unwrap(); commands::bootstrap_knowledge_db(p.into()).unwrap();
+ let alpha=entity(p,"Alpha","concept"); let beta=entity(p,"Beta","concept");
+ let graph=GraphRecord{graph_id:"g-delete".into(),graph_name:"Delete".into(),purpose:"test".into()}; commands::register_graph(p.into(),graph.clone()).unwrap(); commands::register_relation_type(p.into(),RegisterRelationTypeInput{relation_type:RelationTypeRecord{graph_id:graph.graph_id.clone(),name:"REL".into(),description:"relation".into(),subject_types:vec!["concept".into()],object_types:vec!["concept".into()],inverse_name:None,symmetric:false,object_cardinality:"many".into()}}).unwrap();
+ let impact=commands::get_knowledge_delete_impact(p.into(),DeleteImpactInput{node_id:None,assertion_id:None,entity_id:Some(alpha.entity_id.clone())}).unwrap();
+ commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:graph.graph_id,subject_entity_id:alpha.entity_id.clone(),predicate:"REL".into(),object_entity_id:beta.entity_id,evidence:None}).unwrap();
+ let err=commands::delete_knowledge_entity(p.into(),DeleteEntityInput{entity_id:alpha.entity_id.clone(),impact_revision:impact.revision}).unwrap_err(); assert_eq!(err.code,super::error::KnowledgeErrorCode::ValidationFailed);
+ assert!(commands::find_knowledge_entities(p.into(),"Alpha".into()).unwrap().iter().any(|entity|entity.entity_id==alpha.entity_id)); fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn entity_merge_keeps_all_references_on_the_target_stable_id() {
+ let dir=project(); let p=dir.to_str().unwrap(); commands::bootstrap_knowledge_db(p.into()).unwrap();
+ let source=entity(p,"Source","concept"); let target=entity(p,"Target","concept"); commands::add_knowledge_entity_alias(p.into(),EntityAliasInput{entity_id:source.entity_id.clone(),alias:"Source alias".into()}).unwrap();
+ let graph=GraphRecord{graph_id:"g-merge".into(),graph_name:"Merge".into(),purpose:"test".into()}; commands::register_graph(p.into(),graph.clone()).unwrap(); commands::register_relation_type(p.into(),RegisterRelationTypeInput{relation_type:RelationTypeRecord{graph_id:graph.graph_id.clone(),name:"REL".into(),description:"relation".into(),subject_types:vec!["concept".into()],object_types:vec!["concept".into()],inverse_name:None,symmetric:false,object_cardinality:"many".into()}}).unwrap();
+ commands::create_or_link_graph_node(p.into(),CreateOrLinkGraphNodeInput{graph_id:graph.graph_id.clone(),entity_id:Some(source.entity_id.clone()),canonical_name:None,entity_type:None,description:None,aliases:None,role:None}).unwrap(); commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:graph.graph_id.clone(),subject_entity_id:source.entity_id.clone(),predicate:"REL".into(),object_entity_id:target.entity_id.clone(),evidence:None}).unwrap();
+ let c=db::open_project(p,true).unwrap(); c.execute("INSERT INTO pages(page_id,page_path,title,page_type,summary,primary_entity_id,updated_at) VALUES('page-merge','db/merge.md','Merge','guide',NULL,NULL,'now')",[]).unwrap(); c.execute("INSERT INTO page_entities(page_id,section_id,entity_id,role) VALUES('page-merge',NULL,?1,'mentions')",[&source.entity_id]).unwrap(); drop(c);
+ commands::merge_knowledge_entities(p.into(),MergeEntitiesInput{source_entity_id:source.entity_id.clone(),target_entity_id:target.entity_id.clone()}).unwrap();
+ let snapshot=commands::get_knowledge_graph_snapshot(p.into(),graph.graph_id).unwrap(); assert!(snapshot.nodes.iter().any(|node|node.entity.entity_id==target.entity_id)); assert!(snapshot.assertions.iter().all(|assertion|assertion.assertion.subject_entity_id==target.entity_id || assertion.assertion.object_entity_id==target.entity_id));
+ let c=db::open_project(p,false).unwrap(); assert_eq!(c.query_row("SELECT entity_id FROM page_entities WHERE page_id='page-merge'",[],|r|r.get::<_,String>(0)).unwrap(),target.entity_id); assert_eq!(c.query_row("SELECT entity_id FROM entity_aliases WHERE alias='Source alias'",[],|r|r.get::<_,String>(0)).unwrap(),target.entity_id); fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn entity_split_moves_only_the_selected_graph_assertions() {
+ let dir=project(); let p=dir.to_str().unwrap(); commands::bootstrap_knowledge_db(p.into()).unwrap();
+ let source=entity(p,"Shared","concept"); let other=entity(p,"Other","concept");
+ for graph in [GraphRecord{graph_id:"g-split-a".into(),graph_name:"A".into(),purpose:"test".into()},GraphRecord{graph_id:"g-split-b".into(),graph_name:"B".into(),purpose:"test".into()}] { commands::register_graph(p.into(),graph.clone()).unwrap(); commands::register_relation_type(p.into(),RegisterRelationTypeInput{relation_type:RelationTypeRecord{graph_id:graph.graph_id.clone(),name:"REL".into(),description:"relation".into(),subject_types:vec!["concept".into()],object_types:vec!["concept".into()],inverse_name:None,symmetric:false,object_cardinality:"many".into()}}).unwrap(); }
+ let node_a=commands::create_or_link_graph_node(p.into(),CreateOrLinkGraphNodeInput{graph_id:"g-split-a".into(),entity_id:Some(source.entity_id.clone()),canonical_name:None,entity_type:None,description:None,aliases:None,role:None}).unwrap().node; commands::create_or_link_graph_node(p.into(),CreateOrLinkGraphNodeInput{graph_id:"g-split-b".into(),entity_id:Some(source.entity_id.clone()),canonical_name:None,entity_type:None,description:None,aliases:None,role:None}).unwrap();
+ let a=commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:"g-split-a".into(),subject_entity_id:source.entity_id.clone(),predicate:"REL".into(),object_entity_id:other.entity_id.clone(),evidence:None}).unwrap(); let b=commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:"g-split-b".into(),subject_entity_id:source.entity_id.clone(),predicate:"REL".into(),object_entity_id:other.entity_id,evidence:None}).unwrap();
+ let split=commands::split_knowledge_entity(p.into(),SplitEntityInput{entity_id:source.entity_id.clone(),canonical_name:"Split".into(),node_ids:vec![node_a.node_id]}).unwrap(); let c=db::open_project(p,false).unwrap(); assert_eq!(c.query_row("SELECT subject_entity_id FROM assertions WHERE assertion_id=?1",[a.assertion_id],|r|r.get::<_,String>(0)).unwrap(),split.entity_id); assert_eq!(c.query_row("SELECT subject_entity_id FROM assertions WHERE assertion_id=?1",[b.assertion_id],|r|r.get::<_,String>(0)).unwrap(),source.entity_id); fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -96,5 +152,20 @@ fn traversal_keeps_a_longer_path_when_it_preserves_graph_switch_budget() {
  commands::create_manual_assertion(p.into(),CreateAssertionInput{graph_id:"g2".into(),subject_entity_id:by_name("E"),predicate:"REL".into(),object_entity_id:by_name("G"),evidence:None}).unwrap();
  let hits=commands::traverse_knowledge_graph(p.into(),TraversalRequest{seed_page_ids:None,seed_entity_ids:Some(vec![by_name("A")]),allowed_graph_ids:None,max_cost:Some(8),max_graph_switches:Some(2)}).unwrap();
  let goal=hits.iter().find(|hit|hit.entity_id==by_name("G")).unwrap(); assert_eq!((goal.cost,goal.graph_switches),(8,1));
+ fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn integrity_reports_schema_and_orphan_files_without_repairing_them() {
+ let dir=project(); let p=dir.to_str().unwrap(); commands::bootstrap_knowledge_db(p.into()).unwrap();
+ fs::write(dir.join(".llm-wiki/tag-schema.yaml"),"namespaces: {}\n").unwrap();
+ let c=db::open_project(p,false).unwrap(); c.execute("INSERT INTO tags(tag_id,namespace,value) VALUES('tag-invalid','undeclared','value')",[]).unwrap(); drop(c);
+ let orphan=dir.join("db/.page.operation.tmp"); fs::create_dir_all(orphan.parent().unwrap()).unwrap(); fs::write(&orphan,"uncommitted").unwrap();
+ let issues=commands::run_knowledge_integrity_check(p.into()).unwrap();
+ assert!(issues.iter().any(|issue|issue.category=="unused_tag"&&issue.record_id.as_deref()==Some("tag-invalid")));
+ assert!(issues.iter().any(|issue|issue.category=="tag_schema"&&issue.record_id.as_deref()==Some("tag-invalid")));
+ assert!(issues.iter().any(|issue|issue.category=="orphan_write_file"&&issue.record_id.as_deref()==Some(orphan.to_string_lossy().as_ref())));
+ assert!(orphan.is_file());
+ let c=db::open_project(p,false).unwrap(); assert_eq!(c.query_row("SELECT COUNT(*) FROM tags WHERE tag_id='tag-invalid'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
  fs::remove_dir_all(dir).unwrap();
 }

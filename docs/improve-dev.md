@@ -10,6 +10,30 @@
 - `npm run typecheck`, `npm run test:mocks`, `cargo test --manifest-path src-tauri/Cargo.toml`, `npm run build`가 통과한다.
 - real LLM 품질·성능 측정은 API 환경에서 수행하는 별도 운영 검증으로 남긴다.
 
+## 구현 이행 현황
+
+이 문서는 v2 전환의 authoritative 설계와 이행 현황을 함께 관리한다. 이전의 Step 9~11
+계획은 아래 결과로 통합했으며 별도 계획 문서는 제거했다.
+
+- graph/entity/review/ingest의 production 경로를 knowledge DB와 stable ID command로
+  전환하고, legacy graph backend·policy·page graph index·entity dictionary를 제거했다.
+- Markdown v2의 page/section stable ID parser·validator와, Markdown write·assertion·evidence를
+  한 operation으로 처리하는 recovery 가능한 atomic ingest 경로를 도입했다.
+- multi-graph traversal과 section candidate 검색을 Graph/Chat의 공용 기반으로 전환하고,
+  structured citation은 `pageId`/`sectionId`와 assertion/evidence provenance를 보존한다.
+- source/reference를 구조화된 `SourceRef`로 전환하고, graph prefix는 단일
+  `allowedGraphIds` allowlist로 해석하도록 정리했다.
+- entity merge/split의 stable ID projection과 entity delete impact revision 재검증을
+  transaction test로 고정했다.
+- lifecycle에서 project open은 recovery, seed, cleanup, legacy migration을 실행하지
+  않는다. 새 project만 초기 schema와 identity를 생성한다.
+- export/import는 SQLite snapshot lock, SHA-256 manifest, schema version/checksum,
+  zip path traversal·symlink 검증 및 staging directory atomic rename을 사용하며,
+  Rust roundtrip test로 page/section stable ID 보존을 검증한다.
+
+Step 12의 review assertion, RAG-off scope 통합, integrity 확장 및 최종 통합 검증까지
+완료했다.
+
 이 문서는 현재 데이터 형식과의 호환성을 전제로 하지 않는 차세대 설계안이다. 목표는 다음과 같다.
 
 - 문서에서 관련 triple과 이웃 triple을 찾고, 그 결과에서 근거 문서로 되돌아갈 수 있어야 한다.

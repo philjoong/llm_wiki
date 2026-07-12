@@ -21,6 +21,8 @@ export const renameKnowledgeRelationType = (projectPath: string, graphId: string
 export const deleteKnowledgeRelationType = (projectPath: string, graphId: string, name: string) => invoke<void>("delete_knowledge_relation_type", { ...args(projectPath), graphId, name })
 export const createAssertionWithEvidence = (projectPath: string, input: CreateAssertionInput) => invoke<AssertionRecord>("create_assertion_with_evidence", { ...args(projectPath), input })
 export const createManualAssertion = (projectPath: string, input: CreateAssertionInput) => invoke<AssertionRecord>("create_manual_assertion", { ...args(projectPath), input })
+export interface EditAssertionInput extends CreateAssertionInput { assertionId: string }
+export const editKnowledgeAssertion = (projectPath: string, input: EditAssertionInput) => invoke<AssertionRecord>("edit_knowledge_assertion", { ...args(projectPath), input })
 export const resolveCardinalityConflict = (projectPath: string, assertionId: string) => invoke<void>("resolve_cardinality_conflict", { ...args(projectPath), input: { assertionId } })
 export const deleteKnowledgePage = (projectPath: string, pageId: string) => invoke<void>("delete_page", { ...args(projectPath), pageId })
 export const runKnowledgeIntegrityCheck = (projectPath: string) => invoke<IntegrityIssue[]>("run_knowledge_integrity_check", args(projectPath))
@@ -34,7 +36,7 @@ export const addKnowledgeEntityAlias = (projectPath: string, entityId: string, a
 export const removeKnowledgeEntityAlias = (projectPath: string, entityId: string, alias: string) => invoke<void>("remove_knowledge_entity_alias", { ...args(projectPath), input: { entityId, alias } })
 export const mergeKnowledgeEntities = (projectPath: string, sourceEntityId: string, targetEntityId: string) => invoke<void>("merge_knowledge_entities", { ...args(projectPath), input: { sourceEntityId, targetEntityId } })
 export const splitKnowledgeEntity = (projectPath: string, entityId: string, canonicalName: string, nodeIds: string[]) => invoke<EntityRecord>("split_knowledge_entity", { ...args(projectPath), input: { entityId, canonicalName, nodeIds } })
-export const deleteKnowledgeEntity = (projectPath: string, entityId: string) => invoke<void>("delete_knowledge_entity", { ...args(projectPath), entityId })
+export const deleteKnowledgeEntity = (projectPath: string, entityId: string, impactRevision: string) => invoke<void>("delete_knowledge_entity", { ...args(projectPath), input: { entityId, impactRevision } })
 export const getKnowledgeGraphSnapshot = (projectPath: string, graphId: string) => invoke<KnowledgeGraphSnapshot>("get_knowledge_graph_snapshot", { ...args(projectPath), graphId })
 export const createOrLinkGraphNode = (projectPath: string, input: CreateOrLinkGraphNodeInput) => invoke<{ node: GraphNodeRecord; entity: EntityRecord }>("create_or_link_graph_node", { ...args(projectPath), input })
 export const listAllowedRelationTypes = (projectPath: string, graphId: string, sourceEntityId: string, targetEntityId: string) => invoke<RelationTypeRecord[]>("list_allowed_relation_types", { ...args(projectPath), graphId, sourceEntityId, targetEntityId })

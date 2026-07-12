@@ -46,6 +46,7 @@ which = "7"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 unicode-normalization = "0.1"
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

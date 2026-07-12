@@ -15,7 +15,7 @@ import { checkIngestCache, saveIngestCache } from "@/lib/ingest-cache"
 import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
-import { parseSourceRefs } from "@/lib/sources-merge"
+import { parseSourceRefs, SourceRefValidationError } from "@/lib/sources-merge"
 import { listKnowledgeGraphs, listKnowledgeRelationTypes } from "@/commands/knowledge"
 import {
   loadCounterexamples,
@@ -1109,7 +1109,7 @@ async function writeFileBlocks(
         // entry and the source-delete flow would later treat the page
         // as single-sourced and delete it outright — silent data loss.
         const isDbPage = relativePath.startsWith("db/")
-        const { mergeSourcesIntoContent, mergeSourceRefsIntoContent } = await import("./sources-merge")
+        const { mergeSourceRefsIntoContent } = await import("./sources-merge")
         const existing = await tryReadFile(fullPath)
 
         // Markdown v2 has no compatibility parser: every db/ document is
@@ -1180,15 +1180,16 @@ async function writeFileBlocks(
           }
         }
 
-        const toWrite = isDbPage
-          ? mergeSourceRefsIntoContent(content, existing)
-          : mergeSourcesIntoContent(content, existing)
+        const toWrite = mergeSourceRefsIntoContent(content, existing)
         if (isDbPage) pendingV2Writes.push({ relativePath, content: toWrite })
         else await writeFile(fullPath, toWrite)
       }
       if (!relativePath.startsWith("db/")) writtenPaths.push(relativePath)
     } catch (err) {
-      const msg = `Failed to write "${relativePath}": ${err instanceof Error ? err.message : String(err)}`
+      const detail = err instanceof Error ? err.message : String(err)
+      const msg = err instanceof SourceRefValidationError
+        ? `Refused overwrite of "${relativePath}" — VALIDATION_FAILED: non-v2 source metadata (${detail}). Restore or migrate this document from a backup.`
+        : `Failed to write "${relativePath}": ${detail}`
       console.error(`[ingest] ${msg}`)
       warnings.push(msg)
       hardFailures.push(relativePath)
@@ -1197,18 +1198,8 @@ async function writeFileBlocks(
 
   if (pendingV2Writes.length > 0) {
     try {
-      // Node-based legacy tests intentionally replace the filesystem command
-      // but do not provide a Tauri IPC window.  Production always uses the
-      // atomic command; this compatibility branch keeps those isolated unit
-      // tests focused on parsing/merge behavior rather than IPC.
-      if (typeof window === "undefined") {
-        for (const { relativePath, content } of pendingV2Writes) {
-          await writeFile(`${projectPath}/${relativePath}`, content)
-        }
-      } else {
-        const assertions = await extractKnowledgeAssertionWrites(projectPath, pendingV2Writes, llmConfig, signal)
-        await commitMarkdownV2Pages(projectPath, pendingV2Writes, assertions)
-      }
+      const assertions = await extractKnowledgeAssertionWrites(projectPath, pendingV2Writes, llmConfig, signal)
+      await commitMarkdownV2Pages(projectPath, pendingV2Writes, assertions)
       writtenPaths.push(...pendingV2Writes.map(({ relativePath }) => relativePath))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

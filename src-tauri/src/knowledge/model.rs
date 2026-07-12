@@ -125,7 +125,7 @@ pub struct CreateOrLinkGraphNodeResult { pub node: GraphNodeRecord, pub entity: 
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeleteImpact { pub node_ids: Vec<String>, pub assertion_ids: Vec<String>, pub evidence_ids: Vec<String>, pub page_ids: Vec<String> }
+pub struct DeleteImpact { pub node_ids: Vec<String>, pub assertion_ids: Vec<String>, pub evidence_ids: Vec<String>, pub page_ids: Vec<String>, pub revision: String }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,6 +177,17 @@ pub struct CreateEntityInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAssertionInput {
+    pub graph_id: String,
+    pub subject_entity_id: String,
+    pub predicate: String,
+    pub object_entity_id: String,
+    pub evidence: Option<Vec<CreateEvidenceInput>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditAssertionInput {
+    pub assertion_id: String,
     pub graph_id: String,
     pub subject_entity_id: String,
     pub predicate: String,
@@ -244,6 +255,10 @@ pub struct CreateOrLinkGraphNodeInput { pub graph_id: String, pub entity_id: Opt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteImpactInput { pub node_id: Option<String>, pub assertion_id: Option<String>, pub entity_id: Option<String> }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteEntityInput { pub entity_id: String, pub impact_revision: String }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

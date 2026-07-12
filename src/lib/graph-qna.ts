@@ -1,4 +1,5 @@
 import { loadKnowledgeGraphContexts } from "@/lib/knowledge"
+import { resolveAllowedGraphIds } from "@/lib/knowledge/graph-scope"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { streamChat } from "./llm-client"
 import { extractJsonObject } from "./sweep-reviews"
@@ -29,20 +30,22 @@ interface GraphSelectionResponse {
  * blocks. Returns [] if nothing is relevant — callers must not fabricate
  * context when this is empty.
  *
- * `graphPrefixFilter`, when given, narrows the candidate graphs to those
- * whose name starts with it (e.g. "casemap_", "persona_") before the LLM
- * even sees the list — used by per-tab queries that must only see their own
- * domain's graphs. Omitted (chat) means the full `managedGraphs` list.
+ * Chat resolves UI prefixes to stable graph IDs once and passes that same
+ * allowlist to every retrieval path. The string form remains for isolated
+ * non-Chat callers and is resolved before snapshots are loaded.
  */
 export async function getGraphContext(
   question: string,
   projectPath: string,
   projectName: string,
   llmConfig: LlmConfig,
-  graphPrefixFilter?: string,
+  graphScope?: readonly string[] | string,
 ): Promise<GraphContextBlock[]> {
   void projectName
-  const contexts = await loadKnowledgeGraphContexts(projectPath, graphPrefixFilter)
+  const allowedGraphIds = typeof graphScope === "string"
+    ? await resolveAllowedGraphIds(projectPath, graphScope)
+    : graphScope
+  const contexts = await loadKnowledgeGraphContexts(projectPath, allowedGraphIds)
   if (contexts.length === 0) return []
   const scopedPolicy = {
     managedGraphs: contexts.map((context) => context.graph.graphName),

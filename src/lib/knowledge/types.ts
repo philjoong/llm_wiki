@@ -89,7 +89,7 @@ export interface KnowledgeGraphSnapshot {
   assertions: Array<AssertionRecord & { evidenceState: EvidenceState; evidence: AssertionEvidenceRecord[] }>
 }
 
-export interface DeleteImpact { nodeIds: string[]; assertionIds: string[]; evidenceIds: string[]; pageIds: string[] }
+export interface DeleteImpact { nodeIds: string[]; assertionIds: string[]; evidenceIds: string[]; pageIds: string[]; revision: string }
 export interface CreateOrLinkGraphNodeInput { graphId: string; entityId?: string; canonicalName?: string; entityType?: EntityType; description?: string; aliases?: string[]; role?: string }
 export interface TraversalRequest { seedPageIds?: string[]; seedEntityIds?: string[]; allowedGraphIds?: string[]; maxCost?: number; maxGraphSwitches?: number }
 export interface TraversalStep { kind: "assertion" | "graph_switch"; graphId: string; entityId: string; assertionId?: string; predicate?: string; forward?: boolean }

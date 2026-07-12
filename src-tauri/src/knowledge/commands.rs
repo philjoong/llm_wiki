@@ -200,11 +200,92 @@ pub fn create_assertion_with_evidence(project_path:String,input:CreateAssertionI
 #[tauri::command]
 pub fn create_manual_assertion(project_path:String,input:CreateAssertionInput)->Result<AssertionRecord,KnowledgeError>{let mut c=db::open_project(&project_path,true)?;let tx=c.transaction().map_err(sql)?;let r=assertion(&tx,input,"manual")?;tx.commit().map_err(sql)?;Ok(r)}
 #[tauri::command]
+pub fn edit_knowledge_assertion(project_path:String,input:EditAssertionInput)->Result<AssertionRecord,KnowledgeError>{
+ let mut c=db::open_project(&project_path,true)?;let tx=c.transaction().map_err(sql)?;
+ let origin:String=tx.query_row("SELECT origin FROM assertions WHERE assertion_id=?1",[&input.assertion_id],|r|r.get(0)).optional().map_err(sql)?.ok_or_else(||fail(KnowledgeErrorCode::NotFound,"Assertion does not exist"))?;
+ let(symmetric,cardinality)=validate_entity_types(&tx,&input.graph_id,&input.predicate,&input.subject_entity_id,&input.object_entity_id)?;
+ let(subject,object)=if symmetric&&input.subject_entity_id>input.object_entity_id{(input.object_entity_id,input.subject_entity_id)}else{(input.subject_entity_id,input.object_entity_id)};
+ let conflict:bool=cardinality=="one"&&tx.query_row("SELECT EXISTS(SELECT 1 FROM assertions WHERE graph_id=?1 AND subject_entity_id=?2 AND predicate=?3 AND status='active' AND object_entity_id<>?4 AND assertion_id<>?5)",params![input.graph_id,subject,input.predicate,object,input.assertion_id],|r|r.get(0)).map_err(sql)?;
+ let status=if conflict{"review"}else{"active"};
+ tx.execute("UPDATE assertions SET graph_id=?1,subject_entity_id=?2,predicate=?3,object_entity_id=?4,status=?5 WHERE assertion_id=?6",params![input.graph_id,subject,input.predicate,object,status,input.assertion_id]).map_err(sql)?;
+ tx.execute("DELETE FROM assertion_evidence WHERE assertion_id=?1",[&input.assertion_id]).map_err(sql)?;
+ for evidence in input.evidence.unwrap_or_default(){if let Some(section_id)=&evidence.section_id{let section_page:Option<String>=tx.query_row("SELECT page_id FROM sections WHERE section_id=?1",[section_id],|r|r.get(0)).optional().map_err(sql)?;if section_page.as_deref()!=evidence.page_id.as_deref(){return Err(fail(KnowledgeErrorCode::ValidationFailed,"Evidence section must belong to its page"));}}tx.execute("INSERT INTO assertion_evidence(evidence_id,assertion_id,page_id,section_id,evidence_type,quote,confidence) VALUES(?1,?2,?3,?4,'supports',?5,?6)",params![id("evidence"),input.assertion_id,evidence.page_id,evidence.section_id,evidence.quote,evidence.confidence]).map_err(sql)?;}
+ let record=tx.query_row("SELECT assertion_id,graph_id,subject_entity_id,predicate,object_entity_id,origin,status,created_at FROM assertions WHERE assertion_id=?1",[input.assertion_id],|r|Ok(AssertionRecord{assertion_id:r.get(0)?,graph_id:r.get(1)?,subject_entity_id:r.get(2)?,predicate:r.get(3)?,object_entity_id:r.get(4)?,origin:r.get(5)?,status:r.get(6)?,created_at:r.get(7)?})).map_err(sql)?;
+ debug_assert_eq!(record.origin,origin);tx.commit().map_err(sql)?;Ok(record)
+}
+#[tauri::command]
 pub fn resolve_cardinality_conflict(project_path:String,input:ResolveCardinalityConflictInput)->Result<(),KnowledgeError>{let mut c=db::open_project(&project_path,true)?;let tx=c.transaction().map_err(sql)?;let a:(String,String,String,String)=tx.query_row("SELECT graph_id,subject_entity_id,predicate,object_entity_id FROM assertions WHERE assertion_id=?1 AND status='review'",[&input.assertion_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(sql)?.ok_or_else(||fail(KnowledgeErrorCode::NotFound,"Review assertion not found"))?;tx.execute("UPDATE assertions SET status='superseded' WHERE graph_id=?1 AND subject_entity_id=?2 AND predicate=?3 AND status='active'",params![a.0,a.1,a.2]).map_err(sql)?;tx.execute("UPDATE assertions SET status='active' WHERE assertion_id=?1",[input.assertion_id]).map_err(sql)?;tx.commit().map_err(sql)?;Ok(())}
 #[tauri::command]
 pub fn delete_page(project_path:String,page_id:String)->Result<(),KnowledgeError>{let c=db::open_project(&project_path,true)?;c.execute("DELETE FROM pages WHERE page_id=?1",[page_id]).map_err(sql)?;Ok(())}
 #[tauri::command]
-pub fn run_knowledge_integrity_check(project_path:String)->Result<Vec<IntegrityIssue>,KnowledgeError>{let c=db::open_project(&project_path,false)?;let mut issues=integrity::run(&c)?;let root=Path::new(&project_path);if !root.join(".llm-wiki/tag-schema.yaml").is_file(){issues.push(IntegrityIssue{category:"tag_schema".into(),message:"tag-schema.yaml is missing".into(),record_id:None});}let journals=journal_dir(&project_path);if journals.is_dir(){for entry in fs::read_dir(journals).map_err(|e|fail(KnowledgeErrorCode::ValidationFailed,e.to_string()))?{let path=entry.map_err(|e|fail(KnowledgeErrorCode::ValidationFailed,e.to_string()))?.path();if path.extension().and_then(|v|v.to_str())==Some("json"){issues.push(IntegrityIssue{category:"recovery_journal".into(),message:"Unfinished ingest recovery journal".into(),record_id:path.file_name().map(|v|v.to_string_lossy().into_owned())});}}}let mut pages=c.prepare("SELECT page_id,page_path FROM pages").map_err(sql)?;let rows=pages.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;for(page_id,page_path)in rows{let path=root.join(&page_path);let content=fs::read_to_string(&path).ok();if content.as_ref().is_none_or(|text|!text.contains(&format!("page_id: {page_id}"))){issues.push(IntegrityIssue{category:"markdown_db_mismatch".into(),message:format!("Markdown page identity does not match {page_path}"),record_id:Some(page_id.clone())});continue;}let mut sections=c.prepare("SELECT section_id FROM sections WHERE page_id=?1").map_err(sql)?;for section in sections.query_map([&page_id],|r|r.get::<_,String>(0)).map_err(sql)?{let section=section.map_err(sql)?;if content.as_ref().is_none_or(|text|!text.contains(&format!("{{#{section}}}"))){issues.push(IntegrityIssue{category:"markdown_db_mismatch".into(),message:format!("Markdown section identity is missing in {page_path}"),record_id:Some(section)});}}}Ok(issues)}
+pub fn run_knowledge_integrity_check(project_path: String) -> Result<Vec<IntegrityIssue>, KnowledgeError> {
+    let connection = db::open_project(&project_path, false)?;
+    let mut issues = integrity::run(&connection)?;
+    let root = Path::new(&project_path);
+    let tag_schema = root.join(".llm-wiki/tag-schema.yaml");
+    let schema_namespaces = match fs::read_to_string(&tag_schema) {
+        Ok(text) if text.lines().any(|line| line.trim_start() == "namespaces:" || line.trim_start().starts_with("namespaces:")) => text.lines()
+            .filter_map(|line| line.trim().strip_suffix(':'))
+            .filter(|name| *name != "namespaces" && !name.contains(' '))
+            .map(str::to_owned).collect::<std::collections::HashSet<_>>(),
+        Ok(_) => {
+            issues.push(IntegrityIssue { category: "tag_schema".into(), message: "tag-schema.yaml has no namespaces mapping".into(), record_id: None });
+            std::collections::HashSet::new()
+        }
+        Err(_) => {
+            issues.push(IntegrityIssue { category: "tag_schema".into(), message: "tag-schema.yaml is missing or unreadable".into(), record_id: None });
+            std::collections::HashSet::new()
+        }
+    };
+    let mut tags = connection.prepare("SELECT tag_id, namespace FROM tags").map_err(sql)?;
+    for tag in tags.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(sql)? {
+        let (tag_id, namespace) = tag.map_err(sql)?;
+        if !schema_namespaces.contains(&namespace) {
+            issues.push(IntegrityIssue { category: "tag_schema".into(), message: format!("Tag namespace '{namespace}' is not declared"), record_id: Some(tag_id) });
+        }
+    }
+    let journals = journal_dir(&project_path);
+    if journals.is_dir() {
+        for entry in fs::read_dir(&journals).map_err(|e| fail(KnowledgeErrorCode::ValidationFailed, e.to_string()))? {
+            let path = entry.map_err(|e| fail(KnowledgeErrorCode::ValidationFailed, e.to_string()))?.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                issues.push(IntegrityIssue { category: "recovery_journal".into(), message: "Unfinished ingest recovery journal".into(), record_id: path.file_name().map(|value| value.to_string_lossy().into_owned()) });
+            }
+        }
+    }
+    for scan_root in [root.join("db"), journals] { collect_orphan_write_files(&scan_root, &mut issues)?; }
+    let mut pages = connection.prepare("SELECT page_id,page_path FROM pages").map_err(sql)?;
+    let rows = pages.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(sql)?.collect::<Result<Vec<_>, _>>().map_err(sql)?;
+    for (page_id, page_path) in rows {
+        let path = root.join(&page_path);
+        let content = fs::read_to_string(&path).ok();
+        if content.as_ref().is_none_or(|text| !text.contains(&format!("page_id: {page_id}"))) {
+            issues.push(IntegrityIssue { category: "markdown_db_mismatch".into(), message: format!("Markdown page identity does not match {page_path}"), record_id: Some(page_id.clone()) });
+            continue;
+        }
+        let mut sections = connection.prepare("SELECT section_id FROM sections WHERE page_id=?1").map_err(sql)?;
+        for section in sections.query_map([&page_id], |row| row.get::<_, String>(0)).map_err(sql)? {
+            let section = section.map_err(sql)?;
+            if content.as_ref().is_none_or(|text| !text.contains(&format!("{{#{section}}}"))) {
+                issues.push(IntegrityIssue { category: "markdown_db_mismatch".into(), message: format!("Markdown section identity is missing in {page_path}"), record_id: Some(section) });
+            }
+        }
+    }
+    Ok(issues)
+}
+
+fn collect_orphan_write_files(path: &Path, issues: &mut Vec<IntegrityIssue>) -> Result<(), KnowledgeError> {
+    if !path.is_dir() { return Ok(()); }
+    for entry in fs::read_dir(path).map_err(|e| fail(KnowledgeErrorCode::ValidationFailed, e.to_string()))? {
+        let path = entry.map_err(|e| fail(KnowledgeErrorCode::ValidationFailed, e.to_string()))?.path();
+        if path.is_dir() { collect_orphan_write_files(&path, issues)?; continue; }
+        let name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+        if name.ends_with(".tmp") || name.ends_with(".bak") {
+            issues.push(IntegrityIssue { category: "orphan_write_file".into(), message: "Orphaned ingest temporary or backup file".into(), record_id: Some(path.to_string_lossy().into_owned()) });
+        }
+    }
+    Ok(())
+}
 
 #[tauri::command]
 pub fn get_knowledge_page(project_path:String,page_id:String)->Result<Option<PageRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;c.query_row("SELECT page_id,page_path,title,page_type,summary,primary_entity_id,updated_at FROM pages WHERE page_id=?1",[page_id],|r|Ok(PageRecord{page_id:r.get(0)?,page_path:r.get(1)?,title:r.get(2)?,page_type:r.get(3)?,summary:r.get(4)?,primary_entity_id:r.get(5)?,updated_at:r.get(6)?})).optional().map_err(sql)}
@@ -225,7 +306,7 @@ pub fn merge_knowledge_entities(project_path:String,input:MergeEntitiesInput)->R
 #[tauri::command]
 pub fn split_knowledge_entity(project_path:String,input:SplitEntityInput)->Result<EntityRecord,KnowledgeError>{if input.node_ids.is_empty(){return Err(fail(KnowledgeErrorCode::ValidationFailed,"Select at least one graph projection"));}let mut c=db::open_project(&project_path,true)?;let tx=c.transaction().map_err(sql)?;let source_type:String=tx.query_row("SELECT entity_type FROM entities WHERE entity_id=?1",[&input.entity_id],|r|r.get(0)).optional().map_err(sql)?.ok_or_else(||fail(KnowledgeErrorCode::NotFound,"Entity does not exist"))?;let entity=EntityRecord{entity_id:id("ent"),canonical_name:input.canonical_name.trim().into(),entity_type:source_type,description:None};if entity.canonical_name.is_empty(){return Err(fail(KnowledgeErrorCode::ValidationFailed,"Canonical name is required"));}tx.execute("INSERT INTO entities VALUES(?1,?2,?3,?4)",params![entity.entity_id,entity.canonical_name,entity.entity_type,entity.description]).map_err(sql)?;tx.execute("INSERT INTO entity_aliases VALUES(?1,?2,?3)",params![entity.entity_id,entity.canonical_name,normalized_alias(&entity.canonical_name)]).map_err(sql)?;for node_id in input.node_ids{let graph_id:Option<String>=tx.query_row("SELECT graph_id FROM graph_nodes WHERE node_id=?1 AND entity_id=?2",params![node_id,input.entity_id],|r|r.get(0)).optional().map_err(sql)?;let graph_id=graph_id.ok_or_else(||fail(KnowledgeErrorCode::ValidationFailed,"Projection does not belong to entity"))?;tx.execute("UPDATE graph_nodes SET entity_id=?1 WHERE node_id=?2",params![entity.entity_id,node_id]).map_err(sql)?;tx.execute("UPDATE assertions SET subject_entity_id=?1 WHERE graph_id=?2 AND subject_entity_id=?3",params![entity.entity_id,graph_id,input.entity_id]).map_err(sql)?;tx.execute("UPDATE assertions SET object_entity_id=?1 WHERE graph_id=?2 AND object_entity_id=?3",params![entity.entity_id,graph_id,input.entity_id]).map_err(sql)?;}tx.commit().map_err(sql)?;Ok(entity)}
 #[tauri::command]
-pub fn delete_knowledge_entity(project_path:String,entity_id:String)->Result<(),KnowledgeError>{let mut c=db::open_project(&project_path,true)?;let tx=c.transaction().map_err(sql)?;tx.execute("DELETE FROM assertions WHERE subject_entity_id=?1 OR object_entity_id=?1",[&entity_id]).map_err(sql)?;tx.execute("DELETE FROM graph_nodes WHERE entity_id=?1",[&entity_id]).map_err(sql)?;tx.execute("DELETE FROM page_entities WHERE entity_id=?1",[&entity_id]).map_err(sql)?;tx.execute("UPDATE pages SET primary_entity_id=NULL WHERE primary_entity_id=?1",[&entity_id]).map_err(sql)?;tx.execute("UPDATE sections SET content_entity_id=NULL WHERE content_entity_id=?1",[&entity_id]).map_err(sql)?;tx.execute("UPDATE sections SET host_entity_id=NULL WHERE host_entity_id=?1",[&entity_id]).map_err(sql)?;let n=tx.execute("DELETE FROM entities WHERE entity_id=?1",[entity_id]).map_err(sql)?;if n==0{return Err(fail(KnowledgeErrorCode::NotFound,"Entity does not exist"));}tx.commit().map_err(sql)?;Ok(())}
+pub fn delete_knowledge_entity(project_path:String,input:DeleteEntityInput)->Result<(),KnowledgeError>{let mut c=db::open_project(&project_path,true)?;let tx=c.transaction().map_err(sql)?;let current=entity_impact_revision(&tx,&input.entity_id)?;if current!=input.impact_revision{return Err(fail(KnowledgeErrorCode::ValidationFailed,"Delete impact changed; review the current impact before retrying"));}tx.execute("DELETE FROM assertions WHERE subject_entity_id=?1 OR object_entity_id=?1",[&input.entity_id]).map_err(sql)?;tx.execute("DELETE FROM graph_nodes WHERE entity_id=?1",[&input.entity_id]).map_err(sql)?;tx.execute("DELETE FROM page_entities WHERE entity_id=?1",[&input.entity_id]).map_err(sql)?;tx.execute("UPDATE pages SET primary_entity_id=NULL WHERE primary_entity_id=?1",[&input.entity_id]).map_err(sql)?;tx.execute("UPDATE sections SET content_entity_id=NULL WHERE content_entity_id=?1",[&input.entity_id]).map_err(sql)?;tx.execute("UPDATE sections SET host_entity_id=NULL WHERE host_entity_id=?1",[&input.entity_id]).map_err(sql)?;let n=tx.execute("DELETE FROM entities WHERE entity_id=?1",[input.entity_id]).map_err(sql)?;if n==0{return Err(fail(KnowledgeErrorCode::NotFound,"Entity does not exist"));}tx.commit().map_err(sql)?;Ok(())}
 
 fn entity_for_node(tx: &Transaction<'_>, input: &CreateOrLinkGraphNodeInput) -> Result<EntityRecord, KnowledgeError> {
     if let Some(entity_id) = &input.entity_id { return tx.query_row("SELECT entity_id,canonical_name,entity_type,description FROM entities WHERE entity_id=?1", [entity_id], |r| Ok(EntityRecord { entity_id:r.get(0)?, canonical_name:r.get(1)?, entity_type:r.get(2)?, description:r.get(3)? })).optional().map_err(sql)?.ok_or_else(|| fail(KnowledgeErrorCode::NotFound, "Entity does not exist")); }
@@ -256,7 +337,14 @@ pub fn get_knowledge_delete_impact(project_path:String,input:DeleteImpactInput)-
  let mut evidence=Vec::new(); let mut pages=Vec::new();
  for a in &assertions { let mut q=c.prepare("SELECT evidence_id,page_id FROM assertion_evidence WHERE assertion_id=?1").map_err(sql)?; for x in q.query_map([a],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?))).map_err(sql)? { let(x,p)=x.map_err(sql)?; evidence.push(x); if let Some(p)=p { pages.push(p) } } }
  let nodes=if let Some(e)=entity_id.as_ref() { let mut q=c.prepare("SELECT node_id FROM graph_nodes WHERE entity_id=?1").map_err(sql)?; let result=q.query_map([e],|r|r.get(0)).map_err(sql)?.collect::<Result<Vec<String>,_>>().map_err(sql)?; result } else { vec![] };
- pages.sort();pages.dedup(); Ok(DeleteImpact{node_ids:nodes,assertion_ids:assertions,evidence_ids:evidence,page_ids:pages})
+ pages.sort();pages.dedup(); let revision=entity_id.as_ref().map(|id|entity_impact_revision(&c,id)).transpose()?.unwrap_or_default(); Ok(DeleteImpact{node_ids:nodes,assertion_ids:assertions,evidence_ids:evidence,page_ids:pages,revision})
+}
+
+fn entity_impact_revision(c:&rusqlite::Connection,entity_id:&str)->Result<String,KnowledgeError>{
+ let mut values=Vec::new();
+ for query in ["SELECT node_id FROM graph_nodes WHERE entity_id=?1 ORDER BY node_id","SELECT assertion_id FROM assertions WHERE subject_entity_id=?1 OR object_entity_id=?1 ORDER BY assertion_id","SELECT page_id FROM page_entities WHERE entity_id=?1 ORDER BY page_id","SELECT page_id FROM pages WHERE primary_entity_id=?1 ORDER BY page_id","SELECT section_id FROM sections WHERE content_entity_id=?1 OR host_entity_id=?1 ORDER BY section_id"] { let mut statement=c.prepare(query).map_err(sql)?; let rows=statement.query_map([entity_id],|r|r.get::<_,String>(0)).map_err(sql)?; for row in rows { values.push(row.map_err(sql)?); } }
+ let mut evidence=c.prepare("SELECT evidence_id FROM assertion_evidence WHERE assertion_id IN (SELECT assertion_id FROM assertions WHERE subject_entity_id=?1 OR object_entity_id=?1) ORDER BY evidence_id").map_err(sql)?; for row in evidence.query_map([entity_id],|r|r.get::<_,String>(0)).map_err(sql)? { values.push(row.map_err(sql)?); }
+ Ok(values.join("\u{1f}"))
 }
 
 #[tauri::command]

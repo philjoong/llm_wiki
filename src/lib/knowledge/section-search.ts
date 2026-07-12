@@ -28,7 +28,7 @@ function markdownFiles(nodes: FileNode[]): FileNode[] {
  * This intentionally has no path-result compatibility layer: stale files,
  * caches and non-v2 Markdown cannot become a Chat citation candidate.
  */
-export async function searchSectionCandidates(projectPath: string, query: string, graphPrefix?: string): Promise<SectionCandidate[]> {
+export async function searchSectionCandidates(projectPath: string, query: string, allowedGraphIds?: readonly string[]): Promise<SectionCandidate[]> {
   if (!query.trim()) return []
   const root = normalizePath(projectPath)
   let files: FileNode[]
@@ -59,13 +59,13 @@ export async function searchSectionCandidates(projectPath: string, query: string
       }
     } catch { /* deleted, stale, or invalid documents are excluded */ }
   }
-  const graphs=(await listKnowledgeGraphs(root)).filter((graph)=>!graphPrefix||graph.graphName.startsWith(graphPrefix))
-  if(graphPrefix&&graphs.length===0)return []
+  const graphs=(await listKnowledgeGraphs(root)).filter((graph)=>!allowedGraphIds||allowedGraphIds.includes(graph.graphId))
+  if(allowedGraphIds&&graphs.length===0)return []
   const snapshots=await Promise.all(graphs.map((graph)=>getKnowledgeGraphSnapshot(root,graph.graphId)))
   const bySection=new Map<string,Array<{assertionId:string;evidenceState:SectionCandidate["evidenceState"];graphId:string}>>()
   for(const snapshot of snapshots)for(const assertion of snapshot.assertions)for(const evidence of assertion.evidence){if(!evidence.sectionId)continue;const values=bySection.get(evidence.sectionId)??[];values.push({assertionId:assertion.assertionId,evidenceState:assertion.evidenceState,graphId:snapshot.graph.graphId});bySection.set(evidence.sectionId,values)}
   const hits=await traverseKnowledgeGraph(root,{seedPageIds:Array.from(new Set(candidates.map((candidate)=>candidate.pageId))),allowedGraphIds:graphs.map((graph)=>graph.graphId),maxCost:3,maxGraphSwitches:2})
   const graphPathByAssertion=new Map<string,string[]>()
   for(const hit of hits)for(const step of hit.path)if(step.assertionId&&!graphPathByAssertion.has(step.assertionId))graphPathByAssertion.set(step.assertionId,hit.path.map((item)=>item.graphId))
-  return candidates.flatMap((candidate)=>{const provenance=bySection.get(candidate.sectionId)??[];if(graphPrefix&&!provenance.length)return[];const assertionIds=Array.from(new Set(provenance.map((item)=>item.assertionId)));const evidenceState:SectionCandidate["evidenceState"]=provenance.some((item)=>item.evidenceState==="contradicted")?"contradicted":provenance.some((item)=>item.evidenceState==="documented")?"documented":"manual";const graphPath=Array.from(new Set(assertionIds.flatMap((id)=>graphPathByAssertion.get(id)??provenance.filter((item)=>item.assertionId===id).map((item)=>item.graphId))));return[{...candidate,assertionIds,evidenceState,graphPath}]}).sort((a,b)=>a.ordinal-b.ordinal).slice(0,12)
+  return candidates.flatMap((candidate)=>{const provenance=bySection.get(candidate.sectionId)??[];if(allowedGraphIds&&!provenance.length)return[];const assertionIds=Array.from(new Set(provenance.map((item)=>item.assertionId)));const evidenceState:SectionCandidate["evidenceState"]=provenance.some((item)=>item.evidenceState==="contradicted")?"contradicted":provenance.some((item)=>item.evidenceState==="documented")?"documented":"manual";const graphPath=Array.from(new Set(assertionIds.flatMap((id)=>graphPathByAssertion.get(id)??provenance.filter((item)=>item.assertionId===id).map((item)=>item.graphId))));return[{...candidate,assertionIds,evidenceState,graphPath}]}).sort((a,b)=>a.ordinal-b.ordinal).slice(0,12)
 }

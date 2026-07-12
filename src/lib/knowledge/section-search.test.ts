@@ -26,12 +26,12 @@ beforeEach(()=>{
 describe("section candidate graph scope",()=>{
  it("passes prefix-resolved graph IDs to traversal and preserves provenance",async()=>{
   expect(parseMarkdownV2(markdown).sections[0].sectionId).toBe(sectionId)
-  const result=await searchSectionCandidates("/project","Alpha","casemap_")
+  const result=await searchSectionCandidates("/project","Alpha",[graph.graphId])
   expect(traverseKnowledgeGraph).toHaveBeenCalledWith("/project",expect.objectContaining({allowedGraphIds:[graph.graphId]}))
   expect(result[0]).toMatchObject({pageId,sectionId,assertionIds:["assert-1"],evidenceState:"documented",graphPath:[graph.graphId]})
  })
  it("does not issue a scoped candidate for a section without allowed evidence",async()=>{
   vi.mocked(getKnowledgeGraphSnapshot).mockResolvedValue({graph,nodes:[],assertions:[]})
-  expect(await searchSectionCandidates("/project","Alpha","casemap_")).toEqual([])
+  expect(await searchSectionCandidates("/project","Alpha",[graph.graphId])).toEqual([])
  })
 })

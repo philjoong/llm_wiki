@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 import type { FileNode, WikiProject } from "@/types/wiki"
 import { ensureProjectId, upsertProjectInfo } from "@/lib/project-identity"
-import { getKnowledgeDbStatus, recoverIngestTransactions, runKnowledgeIntegrityCheck } from "@/commands/knowledge"
+import { getKnowledgeDbStatus, runKnowledgeIntegrityCheck } from "@/commands/knowledge"
 
 /** Raw shape returned by the Rust commands — id is attached client-side. */
 interface RawProject {
@@ -71,6 +71,8 @@ export async function createProject(
   path: string,
 ): Promise<WikiProject> {
   const raw = await invoke<RawProject>("create_project", { name, path })
+  // Project-local identity is created only as part of creating a new project.
+  await createDirectory(`${raw.path}/.llm-wiki`)
   const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
   return { id, name: raw.name, path: raw.path }
@@ -78,21 +80,19 @@ export async function createProject(
 
 export async function openProject(path: string): Promise<WikiProject> {
   const raw = await invoke<RawProject>("open_project", { path })
-  await recoverIngestTransactions(raw.path)
   await getKnowledgeDbStatus(raw.path)
   const integrityIssues = await runKnowledgeIntegrityCheck(raw.path)
   if (integrityIssues.length > 0) {
     throw new Error(`Knowledge integrity check failed: ${integrityIssues.map((issue) => issue.category).join(", ")}`)
   }
-  // second-fix-develop.md §2 migration: convert binary originals under
-  // raw/sources/ to markdown and drop the legacy processed_1/ tree.
-  // Best-effort + idempotent via a stamp in .llm-wiki/project.json.
+  let id: string
   try {
-    await invoke("migrate_raw_sources", { projectPath: raw.path })
-  } catch (err) {
-    console.warn("[migrate] migrate_raw_sources failed:", err)
+    const identity = JSON.parse(await readFile(`${raw.path}/.llm-wiki/project.json`)) as { id?: unknown }
+    if (typeof identity.id !== "string" || !identity.id) throw new Error("missing id")
+    id = identity.id
+  } catch {
+    throw new Error("Invalid v2 project: missing .llm-wiki/project.json. Create a new v2 project and restore a v2 export instead.")
   }
-  const id = await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
   return { id, name: raw.name, path: raw.path }
 }

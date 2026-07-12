@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Read as IoRead;
 use std::path::{Path, PathBuf};
+use sha2::{Digest, Sha256};
 
 use calamine::{Reader, open_workbook_auto, Data};
 
@@ -1317,33 +1318,21 @@ pub fn file_exists(path: String) -> Result<bool, String> {
     run_guarded("file_exists", || Ok(Path::new(&path).exists()))
 }
 
-fn zip_add_dir_recursive(
-    zip: &mut zip::ZipWriter<fs::File>,
-    options: zip::write::SimpleFileOptions,
-    root: &Path,
-    dir: &Path,
-) -> Result<(), String> {
-    use std::io::Write;
-    for entry in fs::read_dir(dir)
-        .map_err(|e| format!("Cannot read dir '{}': {}", dir.display(), e))?
-    {
-        let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ExportManifest { format: String, schema_version: i32, files: std::collections::BTreeMap<String, String> }
+
+fn sha256_hex(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
+
+fn collect_export_files(root: &Path, path: &Path, files: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+    for entry in fs::read_dir(path).map_err(|e| format!("Cannot read dir '{}': {e}", path.display()))? {
+        let entry = entry.map_err(|e| format!("Dir entry error: {e}"))?;
         let path = entry.path();
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|e| format!("Path strip error: {}", e))?;
-        let zip_name = relative.to_string_lossy().replace('\\', "/");
-        if path.is_dir() {
-            zip.add_directory(&format!("{}/", zip_name), options)
-                .map_err(|e| format!("Failed to add dir '{}': {}", zip_name, e))?;
-            zip_add_dir_recursive(zip, options, root, &path)?;
-        } else {
-            zip.start_file(&zip_name, options)
-                .map_err(|e| format!("Failed to start file '{}': {}", zip_name, e))?;
-            let bytes =
-                fs::read(&path).map_err(|e| format!("Failed to read '{}': {}", zip_name, e))?;
-            zip.write_all(&bytes)
-                .map_err(|e| format!("Failed to write '{}': {}", zip_name, e))?;
+        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() { return Err(format!("Refusing to export symlink '{}'", path.display())); }
+        if metadata.is_dir() { collect_export_files(root, &path, files)?; }
+        else if metadata.is_file() {
+            let name = path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+            files.push((name, fs::read(path).map_err(|e| e.to_string())?));
         }
     }
     Ok(())
@@ -1369,7 +1358,10 @@ pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(),
     }
     let connection = crate::knowledge::db::open_project(&project_path, false)
         .map_err(|e| format!("Knowledge DB validation failed: {e}"))?;
-    connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    // Checkpoint first, then hold the writer lock while collecting the DB and
+    // Markdown.  The lock prevents a later writer from changing either side
+    // of the exported logical snapshot.
+    connection.execute_batch("PRAGMA wal_checkpoint(FULL); BEGIN IMMEDIATE;")
         .map_err(|e| format!("Knowledge DB checkpoint failed: {e}"))?;
     let issues = crate::knowledge::integrity::run(&connection)
         .map_err(|e| format!("Knowledge integrity check failed: {e}"))?;
@@ -1377,7 +1369,19 @@ pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(),
         return Err(format!("Cannot export project with {} integrity issue(s)", issues.len()));
     }
 
-    let include_dirs = ["db", "question_types", "data_types", ".llm-wiki"];
+    let mut files = Vec::new();
+    for dir_name in ["db", "question_types", "data_types"] {
+        let dir = root.join(dir_name);
+        if dir.exists() { collect_export_files(root, &dir, &mut files)?; }
+    }
+    for file_name in [".llm-wiki/knowledge.sqlite", ".llm-wiki/tag-schema.yaml", ".llm-wiki/project.json"] {
+        let path = root.join(file_name);
+        if path.is_file() { files.push((file_name.into(), fs::read(path).map_err(|e| e.to_string())?)); }
+    }
+    let schema_version: i32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|e| format!("Cannot read knowledge schema version: {e}"))?;
+    let manifest = ExportManifest { format: "llm-wiki-v2".into(), schema_version,
+        files: files.iter().map(|(name, bytes)| (name.clone(), sha256_hex(bytes))).collect() };
 
     let zip_file = fs::File::create(&dest_zip_path)
         .map_err(|e| format!("Cannot create zip at '{}': {}", dest_zip_path, e))?;
@@ -1385,32 +1389,15 @@ pub fn project_export(project_path: String, dest_zip_path: String) -> Result<(),
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    for dir_name in &include_dirs[..3] {
-        let dir_path = root.join(dir_name);
-        if !dir_path.exists() {
-            continue;
-        }
-        let zip_dir_name = dir_name.replace('\\', "/");
-        zip.add_directory(&format!("{}/", zip_dir_name), options)
-            .map_err(|e| format!("Failed to add dir '{}': {}", zip_dir_name, e))?;
-        zip_add_dir_recursive(&mut zip, options, root, &dir_path)?;
+    for (name, bytes) in files {
+        zip.start_file(&name, options).map_err(|e| format!("Failed to start file '{name}': {e}"))?;
+        zip.write_all(&bytes).map_err(|e| format!("Failed to write '{name}': {e}"))?;
     }
+    zip.start_file(".llm-wiki/export-manifest.json", options).map_err(|e| e.to_string())?;
+    zip.write_all(&serde_json::to_vec(&manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
 
-    // These are the only .llm-wiki files that cross a project boundary.
-    for file_name in [".llm-wiki/knowledge.sqlite", ".llm-wiki/tag-schema.yaml", ".llm-wiki/project.json"] {
-        let file_path = root.join(file_name);
-        if file_path.exists() {
-            zip.start_file(file_name, options)
-                .map_err(|e| format!("Failed to start file '{}': {}", file_name, e))?;
-            let bytes = fs::read(&file_path)
-                .map_err(|e| format!("Failed to read '{}': {}", file_name, e))?;
-            zip.write_all(&bytes)
-                .map_err(|e| format!("Failed to write '{}': {}", file_name, e))?;
-        }
-    }
-
-    zip.finish()
-        .map_err(|e| format!("Failed to finalize zip: {}", e))?;
+    zip.finish().map_err(|e| format!("Failed to finalize zip: {}", e))?;
+    connection.execute_batch("COMMIT;").map_err(|e| format!("Cannot release export snapshot lock: {e}"))?;
     Ok(())
 }
 
@@ -1422,45 +1409,133 @@ pub fn project_import(zip_path: String, dest_folder: String) -> Result<(), Strin
     if dest.exists() {
         return Err(format!("Import destination already exists: '{}'", dest.display()));
     }
-    fs::create_dir_all(dest)
-        .map_err(|e| format!("Cannot create destination '{}': {}", dest_folder, e))?;
+    let staging = dest.with_extension(format!("import-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&staging).map_err(|e| format!("Cannot create import staging directory: {e}"))?;
     let result = (|| -> Result<(), String> {
         let zip_file = fs::File::open(&zip_path)
             .map_err(|e| format!("Cannot open zip '{}': {}", zip_path, e))?;
         let mut archive = zip::ZipArchive::new(zip_file)
             .map_err(|e| format!("Failed to read zip '{}': {}", zip_path, e))?;
-        let mut has_knowledge_db = false;
-        let mut has_tag_schema = false;
+        let mut has_knowledge_db = false; let mut has_tag_schema = false; let mut manifest = None;
+        let mut entries = std::collections::BTreeMap::new();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).map_err(|e| format!("Failed to read zip entry {i}: {e}"))?;
-            let name = entry.name();
-            let allowed = name == ".llm-wiki/" || name == ".llm-wiki/knowledge.sqlite" || name == ".llm-wiki/tag-schema.yaml" || name == ".llm-wiki/project.json" || name.starts_with("db/") || name.starts_with("question_types/") || name.starts_with("data_types/");
+            let name = entry.name().to_string();
+            let allowed = name == ".llm-wiki/export-manifest.json" || name == ".llm-wiki/" || name == ".llm-wiki/knowledge.sqlite" || name == ".llm-wiki/tag-schema.yaml" || name == ".llm-wiki/project.json" || name.starts_with("db/") || name.starts_with("question_types/") || name.starts_with("data_types/");
             if !allowed { return Err(format!("Unsupported archive entry: '{name}'")); }
             let relative: PathBuf = entry.enclosed_name().ok_or_else(|| format!("Unsafe archive entry: '{name}'"))?.to_owned();
-            let out_path = dest.join(relative);
+            if entry.is_symlink() { return Err(format!("Symlink archive entry is forbidden: '{name}'")); }
+            let out_path = staging.join(relative);
             if entry.is_dir() {
                 fs::create_dir_all(&out_path).map_err(|e| format!("Failed to create dir '{}': {e}", out_path.display()))?;
                 continue;
             }
+            let mut bytes = Vec::new(); std::io::copy(&mut entry, &mut bytes).map_err(|e| format!("Failed to read '{name}': {e}"))?;
+            if name == ".llm-wiki/export-manifest.json" { manifest = Some(serde_json::from_slice::<ExportManifest>(&bytes).map_err(|e| format!("Invalid export manifest: {e}"))?); continue; }
+            if entries.insert(name.to_string(), bytes.clone()).is_some() { return Err(format!("Duplicate archive entry: '{name}'")); }
             if name == ".llm-wiki/knowledge.sqlite" { has_knowledge_db = true; }
             if name == ".llm-wiki/tag-schema.yaml" { has_tag_schema = true; }
             if let Some(parent) = out_path.parent() { fs::create_dir_all(parent).map_err(|e| format!("Failed to create '{}': {e}", parent.display()))?; }
-            let mut outfile = fs::File::create(&out_path).map_err(|e| format!("Failed to create '{}': {e}", out_path.display()))?;
-            std::io::copy(&mut entry, &mut outfile).map_err(|e| format!("Failed to write '{}': {e}", out_path.display()))?;
+            fs::write(&out_path, bytes).map_err(|e| format!("Failed to write '{}': {e}", out_path.display()))?;
         }
+        let manifest = manifest.ok_or("Import archive is missing export manifest")?;
+        if manifest.format != "llm-wiki-v2" { return Err("Unsupported export format".into()); }
+        if manifest.files.len() != entries.len() || manifest.files.iter().any(|(name, checksum)| entries.get(name).is_none_or(|bytes| sha256_hex(bytes) != *checksum)) { return Err("Import archive checksum validation failed".into()); }
         if !has_knowledge_db { return Err("Import archive is missing .llm-wiki/knowledge.sqlite".into()); }
         if !has_tag_schema { return Err("Import archive is missing .llm-wiki/tag-schema.yaml".into()); }
-        crate::knowledge::db::open_project(&dest_folder, false).map_err(|e| format!("Imported knowledge DB is invalid: {e}"))?;
+        let db = crate::knowledge::db::open_project(staging.to_str().ok_or("Invalid staging path")?, false).map_err(|e| format!("Imported knowledge DB is invalid or legacy: {e}. Create a new v2 project and restore a v2 export instead; keep the original archive as backup."))?;
+        let version: i32 = db.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+        if version != manifest.schema_version { return Err("Import archive schema version does not match manifest".into()); }
         Ok(())
     })();
-    if result.is_err() { let _ = fs::remove_dir_all(dest); }
-    result
+    if result.is_err() { let _ = fs::remove_dir_all(&staging); return result; }
+    fs::rename(&staging, dest).map_err(|e| format!("Cannot atomically install imported project: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn project_export_import_roundtrip_preserves_knowledge_db() {
+        let base = std::env::temp_dir().join(format!("llm-wiki-transfer-{}", uuid::Uuid::new_v4()));
+        let source = base.join("source");
+        let imported = base.join("imported");
+        let archive = base.join("project.llmwiki");
+        fs::create_dir_all(source.join(".llm-wiki")).unwrap();
+        fs::create_dir_all(source.join("db")).unwrap();
+        fs::write(source.join(".llm-wiki/tag-schema.yaml"), "namespaces: {}\n").unwrap();
+        fs::write(source.join("db/page.md"), "---\npage_id: page-transfer\n---\n# Page {#sec-transfer}\n").unwrap();
+        let source_text = source.to_string_lossy().to_string();
+        crate::knowledge::commands::bootstrap_knowledge_db(source_text.clone()).unwrap();
+        let db = crate::knowledge::db::open_project(&source_text, true).unwrap();
+        db.execute("INSERT INTO pages VALUES('page-transfer','db/page.md','Page','guide',NULL,NULL,'now')", []).unwrap();
+        db.execute("INSERT INTO sections VALUES('sec-transfer','page-transfer',NULL,1,'Page','overview',NULL,NULL,NULL,NULL,NULL,NULL,0,NULL)", []).unwrap();
+        project_export(source_text, archive.to_string_lossy().to_string()).unwrap();
+        project_import(archive.to_string_lossy().to_string(), imported.to_string_lossy().to_string()).unwrap();
+        let imported_db = crate::knowledge::db::open_project(imported.to_str().unwrap(), false).unwrap();
+        assert_eq!(imported_db.query_row("SELECT page_id FROM pages", [], |r| r.get::<_, String>(0)).unwrap(), "page-transfer");
+        assert_eq!(imported_db.query_row("SELECT section_id FROM sections", [], |r| r.get::<_, String>(0)).unwrap(), "sec-transfer");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn project_import_rejects_path_traversal_and_invalid_checksums() {
+        let base = std::env::temp_dir().join(format!("llm-wiki-import-reject-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let traversal = base.join("traversal.llmwiki");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&traversal).unwrap());
+        zip.start_file("db/../../outside.md", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"unsafe").unwrap(); zip.finish().unwrap();
+        let traversal_dest = base.join("traversal-dest");
+        assert!(project_import(traversal.to_string_lossy().into(), traversal_dest.to_string_lossy().into()).unwrap_err().contains("Unsafe archive entry"));
+        assert!(!traversal_dest.exists());
+
+        let checksum = base.join("checksum.llmwiki");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&checksum).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file(".llm-wiki/knowledge.sqlite", options).unwrap(); zip.write_all(b"not-a-db").unwrap();
+        zip.start_file(".llm-wiki/tag-schema.yaml", options).unwrap(); zip.write_all(b"namespaces: {}\n").unwrap();
+        let manifest = ExportManifest { format:"llm-wiki-v2".into(), schema_version:1, files:std::collections::BTreeMap::from([
+            (".llm-wiki/knowledge.sqlite".into(), "wrong".into()),
+            (".llm-wiki/tag-schema.yaml".into(), "wrong".into()),
+        ])};
+        zip.start_file(".llm-wiki/export-manifest.json", options).unwrap(); zip.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap(); zip.finish().unwrap();
+        let checksum_dest = base.join("checksum-dest");
+        assert!(project_import(checksum.to_string_lossy().into(), checksum_dest.to_string_lossy().into()).unwrap_err().contains("checksum"));
+        assert!(!checksum_dest.exists());
+
+        let legacy_db = base.join("legacy.sqlite");
+        let legacy_connection = rusqlite::Connection::open(&legacy_db).unwrap(); legacy_connection.execute_batch("CREATE TABLE nodes(id TEXT);").unwrap(); drop(legacy_connection);
+        let legacy_bytes = fs::read(&legacy_db).unwrap(); let schema = b"namespaces: {}\n".to_vec();
+        let legacy_archive = base.join("legacy.llmwiki");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&legacy_archive).unwrap());
+        zip.start_file(".llm-wiki/knowledge.sqlite", options).unwrap(); zip.write_all(&legacy_bytes).unwrap();
+        zip.start_file(".llm-wiki/tag-schema.yaml", options).unwrap(); zip.write_all(&schema).unwrap();
+        let manifest = ExportManifest { format:"llm-wiki-v2".into(), schema_version:0, files:std::collections::BTreeMap::from([
+            (".llm-wiki/knowledge.sqlite".into(), sha256_hex(&legacy_bytes)),
+            (".llm-wiki/tag-schema.yaml".into(), sha256_hex(&schema)),
+        ])};
+        zip.start_file(".llm-wiki/export-manifest.json", options).unwrap(); zip.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap(); zip.finish().unwrap();
+        let legacy_dest = base.join("legacy-dest");
+        let error = project_import(legacy_archive.to_string_lossy().into(), legacy_dest.to_string_lossy().into()).unwrap_err();
+        assert!(error.contains("legacy") && error.contains("backup")); assert!(!legacy_dest.exists());
+
+        let version_source = base.join("version-source"); fs::create_dir_all(version_source.join(".llm-wiki")).unwrap();
+        crate::knowledge::commands::bootstrap_knowledge_db(version_source.to_string_lossy().into()).unwrap();
+        let version_db = fs::read(version_source.join(".llm-wiki/knowledge.sqlite")).unwrap();
+        let version_archive = base.join("version.llmwiki"); let mut zip = zip::ZipWriter::new(fs::File::create(&version_archive).unwrap());
+        zip.start_file(".llm-wiki/knowledge.sqlite", options).unwrap(); zip.write_all(&version_db).unwrap();
+        zip.start_file(".llm-wiki/tag-schema.yaml", options).unwrap(); zip.write_all(&schema).unwrap();
+        let manifest = ExportManifest { format:"llm-wiki-v2".into(), schema_version:999, files:std::collections::BTreeMap::from([
+            (".llm-wiki/knowledge.sqlite".into(), sha256_hex(&version_db)),
+            (".llm-wiki/tag-schema.yaml".into(), sha256_hex(&schema)),
+        ])};
+        zip.start_file(".llm-wiki/export-manifest.json", options).unwrap(); zip.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap(); zip.finish().unwrap();
+        let version_dest = base.join("version-dest"); assert!(project_import(version_archive.to_string_lossy().into(), version_dest.to_string_lossy().into()).unwrap_err().contains("schema version")); assert!(!version_dest.exists());
+        let _ = fs::remove_dir_all(base);
+    }
 
     /// Write `bytes` to a fresh tmp path with `.pdf` suffix and return
     /// the path (the OS tmpdir is NOT cleaned up — acceptable for tests).

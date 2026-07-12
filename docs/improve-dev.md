@@ -569,15 +569,15 @@ interface SectionCandidate {
 
 ## 10. 현재 구현에서의 전환 계획
 
-이 절은 `ingest-current-state.md`, `answer-guide.md`, `import-export-status.md`에 기록된 현재 흐름을 새 모델로 옮길 때의 작업 경계다. 이 설계는 기존 저장 형식과의 무결점 호환을 목표로 하지 않지만, 한 프로젝트 안에서 구·신 저장소를 동시에 진실 원천으로 사용하는 기간은 만들지 않는다.
+이 절은 `ingest-current-state.md`, `answer-guide.md`, `import-export-status.md`에 기록된 현재 흐름을 새 모델로 교체할 때의 작업 경계다. 이전 버전에서 보존하거나 변환해야 할 사용자 데이터는 없다고 전제한다. 따라서 기존 저장 형식의 읽기·쓰기·변환·호환 계층은 만들지 않으며, 새 모델 전환과 함께 관련 레거시 코드와 저장 산출물을 남김없이 제거한다. 구·신 저장소를 동시에 운영하거나 레거시 형식으로 폴백하는 기간도 두지 않는다.
 
 ### 10.1 저장소와 스키마 기반
 
-1. SQLite schema version과 transaction migration runner를 추가한다.
-2. 기존 graph backend의 `graphs/nodes/edges`와 새 `pages/sections/entities/graph_nodes/relation_types/assertions/assertion_evidence/page_entities/tags/page_tags`를 한 DB 경계에서 관리한다.
+1. 빈 프로젝트에서 최신 SQLite schema를 직접 생성하는 bootstrap을 추가한다. 과거 schema를 단계적으로 올리는 migration runner나 legacy schema 감지·변환 분기는 구현하지 않는다.
+2. 기존 graph backend의 `graphs/nodes/edges` 저장 모델을 제거하고 `pages/sections/entities/graphs/graph_nodes/relation_types/assertions/assertion_evidence/page_entities/tags/page_tags`만 단일 DB 경계에서 관리한다. 기존 테이블과 새 테이블을 함께 읽거나 쓰는 adapter는 두지 않는다.
 3. `graph-policy.json`의 `managedGraphs` 및 그래프별 최대 4개 relation type 정책을 `graphs`와 `relation_types`로 이동한다. 새 모델에서는 임의의 4개 제한을 두지 않으며, subject/object type과 cardinality가 필수다.
 4. `page-graph-index.json`은 영속 진실 원천에서 제거한다. Graph 탭과 Chat 모두 DB 관계를 조회하고, 필요하면 재생성 가능한 캐시만 사용한다.
-5. SQLite foreign key를 연결마다 활성화하고 schema version이 지원 범위 밖이면 쓰기를 중단한다. 부분 migration 후 앱이 정상 실행되는 상태를 허용하지 않는다.
+5. SQLite foreign key를 연결마다 활성화한다. DB의 schema version이 현재 버전과 다르면 자동 변환하지 않고 명확한 오류와 함께 열기를 중단한다.
 
 ### 10.2 Markdown v2 parser와 파일 쓰기
 
@@ -614,7 +614,9 @@ interface SectionCandidate {
 3. `graphPrefixFilter`를 유지해 Casemap/Persona scoped Chat이 허용된 graph 밖으로 전환하지 못하게 한다.
 4. `context-budget.ts`의 예산 안에서 상위 section 본문만 읽고, prompt의 Page List와 References에는 `page_id`, `section_id`, 현재 `page_path`를 함께 매핑한다.
 5. 관련 section이 없을 때 폴백 문서를 넣지 않는 현재 동작, graph context가 없을 때 섹션을 생략하는 동작, RAG off, question type Answer Format, 출력 언어 reminder 위치를 그대로 보존한다.
-6. 답변의 citation은 안정 ID를 저장하고 화면 표시 시 현재 path를 해석한다. 문서 이동 뒤에도 저장된 대화의 References가 열려야 한다.
+6. prompt에 제공하는 각 근거 구간에 구조화된 citation key를 부여하고 모델은 답변에서 그 key만 참조한다. 스트리밍 완료 시 key를 검색 후보의 `page_id`, `section_id`, 실제 근거 구간의 `quoted_text`로 결정론적으로 변환해 메시지에 저장하며, 모델이 임의로 작성한 quote나 path는 신뢰하지 않는다. 필요하면 동일 문구를 구분하기 위한 앞뒤 문맥도 anchor로 함께 저장한다. 화면 표시 시 안정 ID로 현재 path와 section을 해석한 뒤 anchor를 다시 찾으므로 문서 이동이나 heading rename 뒤에도 저장된 대화의 References가 열려야 한다.
+7. 사용자가 References 항목을 선택하면 해당 문서의 section을 미리보기로 열고 `quoted_text`와 일치하는 실제 근거 구간을 하이라이트한다. 정확한 anchor를 찾지 못하면 section은 열되 임의의 유사 문장을 하이라이트하지 않고 “근거 구간을 찾을 수 없음” 상태를 표시한다. 여러 근거 구간이 있으면 모두 표시하되 선택한 citation의 구간을 우선 강조한다.
+8. 새 메시지는 구조화된 citation만 저장·렌더링한다. 과거 메시지 호환을 위한 HTML 주석, `[N]`, `[[wikilink]]` 순차 파싱 fallback과 구형 reference shape adapter는 제거한다.
 
 ### 10.6 Import/Export와 프로젝트 수명주기
 
@@ -622,14 +624,17 @@ interface SectionCandidate {
 2. export는 DB checkpoint/snapshot과 Markdown이 같은 논리 시점을 가리키도록 잠금 또는 snapshot transaction 안에서 만든다. 임시 산출물은 성공·실패 모두 정리한다.
 3. import는 zip entry를 canonicalize해 대상 폴더 밖 경로, absolute path, symlink를 거부하고, checksum/schema version 검증이 끝난 뒤 임시 폴더를 최종 위치로 rename한다. 기존 대상 폴더를 조용히 덮어쓰지 않는다.
 4. import 후 graph가 이미 있다는 이유로 일부만 건너뛰지 않는다. 프로젝트 snapshot 전체를 복원하거나 충돌로 실패한다. 루트의 임시 `graphs.json`도 남기지 않는다.
-5. 프로젝트 내부 `question_types/`, `data_types/`, tag/relation schema가 authoritative source다. 번들 `schema/...` seed는 새 프로젝트 생성 시에만 실행하고 open/import 시 자동 보강하지 않는다.
+5. 프로젝트 내부 `question_types/`, `data_types/`, tag/relation schema가 authoritative source다. question type은 YAML 형식만 허용하고 레거시 Markdown question type parser와 관련 type·fixture를 제거한다. 번들 `schema/...` seed는 새 프로젝트 생성 시에만 실행하고 open/import 시 자동 보강하지 않는다.
 6. `.llm-wiki/` 전체를 무조건 내보내지 않고 공유 schema/DB와 local-only queue, chat, review, cache를 분류한다. 포함/제외 목록을 manifest와 테스트 fixture로 고정한다.
 
 ### 10.7 운영 도구와 전환 완료
 
 1. integrity check, orphan/evidence review, graph path inspector, embedding/cache rebuild 명령을 제공한다.
-2. 개발 fixture에 한해 기존 Markdown/graph snapshot을 v2로 변환하는 일회성 importer를 둘 수 있다. 변환할 수 없는 heading/entity 충돌은 자동 fuzzy merge하지 않고 report로 남긴다.
-3. 새 read/write 경로가 준비되면 ingest, Graph 탭, Chat, import/export를 같은 DB API로 한 번에 전환하고 `page-graph-index` 및 레거시 graph snapshot write 경로를 제거한다.
+2. 개발 fixture도 새 Markdown v2와 새 DB schema로 다시 만든다. 기존 Markdown/graph snapshot을 변환하는 importer, compatibility adapter, legacy fixture는 유지하지 않는다.
+3. 새 read/write 경로가 준비되면 ingest, Graph 탭, Chat, import/export를 같은 DB API로 한 번에 전환한다.
+4. 전환 커밋에서 `page-graph-index`, 레거시 graph snapshot, 기존 `graphs/nodes/edges` backend와 이에 연결된 read/write command, type, serializer, test helper를 삭제한다. 사용되지 않는 코드로 남겨 두거나 feature flag로 보존하지 않는다.
+5. 모든 legacy compatibility adapter와 fallback을 제거한다. 여기에는 레거시 파일 탐색, legacy schema 판별·변환, 구형 import/export 수용, 레거시 Markdown question type parser, 구형 chat reference 변환·파싱, 읽기 실패 시 구형 경로 재시도가 포함된다. 새 형식이 아니면 지원하지 않는 형식으로 실패한다. 관련 문서 없음, LLM selector 오류처럼 현재 형식의 정상적인 실패를 처리하는 제품 동작은 legacy fallback으로 보지 않는다.
+6. 저장소 전체 검색과 빌드 산출물 검사를 CI에 추가해 레거시 module import, command 등록, 형식명, fixture, 생성 파일이 남아 있으면 전환 완료로 처리하지 않는다.
 
 ## 11. 필수 테스트 계획
 
@@ -637,7 +642,7 @@ interface SectionCandidate {
 
 ### 11.1 스키마·ID·정합성
 
-- clean DB 생성, schema upgrade 성공, 중간 migration 오류 시 전체 rollback, 지원하지 않는 미래 버전 거부
+- clean DB에서 최신 schema 직접 생성, 현재 schema 재오픈, 현재 버전과 다른 과거·미래 schema 거부, legacy migration/adapter가 호출되지 않음을 확인
 - 모든 FK/unique/check 제약, delete cascade/set-null 정책, 앱 재시작 후 foreign key 활성화
 - path/제목/heading rename 뒤 ID 및 assertion/evidence 유지, 서로 다른 page에서 section ID 중복 거부
 - relation type 허용 entity type, inverse/symmetric, `one`/`many` cardinality와 범용 predicate 금지
@@ -666,8 +671,11 @@ interface SectionCandidate {
 - entity alias, relation 열거, 2-hop 영향, 두 entity shortest path, 빈 graph context, LLM selector malformed JSON fallback
 - metadata scoring과 부분 section 읽기가 context budget을 넘지 않고 history/response 예약량을 침범하지 않는지 확인
 - Casemap/Persona prefix 밖 graph 전환 차단과 메인 Chat 전체 graph 허용
-- 관련 문서 없음 응답, question type 형식, 다국어 reminder, streaming 완료/실패, citation parsing·저장·재로드
-- page 이동과 heading rename 후 과거 메시지의 section reference preview가 현재 파일의 올바른 section을 여는지 확인
+- 관련 문서 없음 응답, YAML question type 형식, Markdown question type 거부, 다국어 reminder, streaming 완료/실패, 구조화된 citation 저장·재로드
+- citation 선택 시 현재 파일의 올바른 section을 미리보기로 열고 실제 `quoted_text` 구간을 하이라이트하는지 확인
+- 동일 문구가 여러 번 등장할 때 문맥 anchor로 올바른 구간을 선택하고, 여러 근거 구간을 모두 표시하며, anchor가 사라졌을 때 임의의 유사 문장을 강조하지 않는지 확인
+- page 이동과 heading rename 후 저장 메시지의 section reference preview와 근거 하이라이트가 현재 파일의 올바른 section을 여는지 확인
+- HTML 주석, `[N]`, `[[wikilink]]` 및 구형 reference shape만 포함한 메시지를 호환 파싱하지 않고 지원하지 않는 형식으로 처리하는지 확인
 
 ### 11.5 Import/Export·수명주기·보안
 
@@ -694,8 +702,10 @@ interface SectionCandidate {
 - page 경로 및 heading text를 변경해도 기존 관계가 유지된다.
 - 원문을 읽지 않고도 UI의 범위·위치·콘텐츠 의미를 metadata로 판별할 수 있다.
 - ingest 실패 지점 어디에서도 Markdown과 관계 DB가 서로 다른 상태로 남지 않는다.
-- Chat의 기존 threshold, context budget, scoped graph, question type, citation 동작이 section 기반 검색에서도 회귀하지 않는다.
+- Chat의 기존 threshold, context budget, scoped graph와 YAML question type 동작이 section 기반 검색에서도 회귀하지 않는다.
+- 구조화된 citation을 선택하면 근거 문서의 해당 section이 열리고 실제 근거 구간이 하이라이트된다.
 - export한 프로젝트를 새 위치에 import했을 때 안정 ID와 모든 관계가 보존되고, 악성·손상 archive는 원자적으로 거부된다.
+- 레거시 저장소·인덱스·snapshot·importer·adapter·fallback·Markdown question type·chat reference parser·fixture와 관련 read/write 코드가 저장소 및 패키지 산출물에 남아 있지 않다.
 
 ---
 

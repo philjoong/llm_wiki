@@ -338,7 +338,6 @@ my-wiki/
 ├── db/                  # 위키 페이지 (markdown) — 검색·답변의 대상
 ├── raw/sources/         # 추출 원본 자료 (파일/URL/웹클립)
 ├── pending/             # 보류된 초안 (+ _proposals/: 충돌 초안)
-├── counterexamples/     # 반례로 분류한 초안
 ├── question_types/      # 질문 유형 정의 (YAML) — 프로젝트 공유
 ├── data_types/          # 데이터 유형 정의 (YAML) — 프로젝트 공유
 ├── graph.json           # 지식 그래프 스냅샷 (Sync 시 갱신)

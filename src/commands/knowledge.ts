@@ -44,6 +44,7 @@ export const getKnowledgeDeleteImpact = (projectPath: string, input: { nodeId?: 
 export const deleteGraphProjection = (projectPath: string, nodeId: string) => invoke<void>("delete_graph_projection", { ...args(projectPath), nodeId })
 export const deleteAssertion = (projectPath: string, assertionId: string) => invoke<void>("delete_assertion", { ...args(projectPath), assertionId })
 export const rejectReviewAssertion = (projectPath: string, assertionId: string) => invoke<void>("reject_review_assertion", { ...args(projectPath), assertionId })
+export const discardSectionAssertions = (projectPath: string, sectionId: string) => invoke<void>("discard_section_assertions", { ...args(projectPath), sectionId })
 export const traverseKnowledgeGraph = (projectPath: string, request: TraversalRequest) => invoke<TraversalHit[]>("traverse_knowledge_graph", { ...args(projectPath), request })
 export interface IngestPageDocument { relativePath: string; content: string; page: PageRecord; sections: SectionRecord[] }
 export interface IngestAssertionWrite { graphId:string;subjectName:string;subjectType:string;predicate:string;relationDescription:string;objectName:string;objectType:string;pageId:string;sectionId:string;quote?:string }

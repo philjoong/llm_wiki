@@ -18,7 +18,6 @@ import {
   approveModification,
   discardModification,
   pendingModification,
-  counterexampleModification,
 } from "@/lib/modification-resolve"
 import { reIngestDocument } from "@/lib/ingest"
 import { PendingView } from "@/components/review/pending-view"
@@ -58,10 +57,11 @@ export function ReviewView() {
           const { targetPath, content } = await approveModification(pp, proposal)
           // Re-decompose the approved final content so graph assignment
           // reflects what the user actually approved (post hand-edit),
-          // not the pre-conflict draft.
+          // not the pre-conflict draft. Passing sectionId discards the old
+          // assertions tied to this section and re-extracts from the new text.
           try {
             const llmConfig = useWikiStore.getState().llmConfig
-            await reIngestDocument(pp, projectName, targetPath, content, llmConfig)
+            await reIngestDocument(pp, projectName, targetPath, content, llmConfig, undefined, undefined, proposal.sectionId)
           } catch (err) {
             console.warn("[review] reIngestDocument failed:", err)
           }
@@ -90,15 +90,12 @@ export function ReviewView() {
         } else if (action === "modification:pending") {
           await pendingModification(pp, proposal)
           resolveItem(id, "Sent to pending")
-        } else if (action === "modification:counterexample") {
-          await counterexampleModification(pp, proposal)
-          resolveItem(id, "Saved as counterexample")
         } else {
           resolveItem(id, action)
         }
 
         // Refresh file tree so pending/_proposals removal & new
-        // pending/counterexamples files surface in the sidebar.
+        // pending files surface in the sidebar.
         try {
           const tree = await listDirectory(pp)
           setFileTree(tree)
@@ -482,7 +479,7 @@ function ModificationDiff({
 /**
  * Stage-aware buttons for a modification card. Primary stage exposes
  * Approve / Merge / Reject; clicking Reject flips the same card to the
- * rejection-handling stage which shows Discard / Pending / Counterexample.
+ * rejection-handling stage which shows Discard / Pending.
  */
 function ModificationActions({
   item,
@@ -539,14 +536,6 @@ function ModificationActions({
         onClick={() => onResolve(item.id, "modification:pending")}
       >
         Pending
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-7 text-xs"
-        onClick={() => onResolve(item.id, "modification:counterexample")}
-      >
-        Counterexample
       </Button>
     </>
   )

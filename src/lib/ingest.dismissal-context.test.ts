@@ -1,7 +1,6 @@
 /**
- * Dismissal context — verify that prior dismissals (counterexamples +
- * rejection log) reach the LLM by checking the system prompt sent to
- * streamChat.
+ * Dismissal context — verify that prior dismissals (rejection log)
+ * reach the LLM by checking the system prompt sent to streamChat.
  *
  * The prompt-injection effect on the model output is non-deterministic,
  * so this test only confirms the *prompt context* is correct — that's
@@ -53,10 +52,6 @@ const mockFileExists = vi.mocked(fileExists)
 const PROJECT = "/proj"
 const SOURCE = "/proj/raw/instance_server_design_v2.md"
 
-function fileNode(name: string, isDir = false): FileNode {
-  return { name, path: `/proj/${name}`, is_dir: isDir }
-}
-
 beforeEach(() => {
   streamChatSpy.mockClear()
   mockReadFile.mockReset()
@@ -85,25 +80,11 @@ beforeEach(() => {
 })
 
 describe("dismissal context injection", () => {
-  it("includes counterexample title + sources in the analysis prompt", async () => {
-    const counterexample = [
-      "---",
-      "title: 던전 A 보상 (잘못된 v2)",
-      "sources:",
-      "  - file: instance_server_design_v2.md",
-      '    range: "## 던전 A — 보상 (변경)"',
-      "---",
-      "",
-      "# 던전 A 보상",
-      "",
-      "잘못된 보상값을 적은 버전이라 반례로 등록.",
-    ].join("\n")
-
+  it("includes rejection-log entries in the analysis prompt", async () => {
     mockReadFile.mockImplementation(async (p: string) => {
       if (p === SOURCE) return "# 인스턴스 서버 v2\n\n## 던전 A — 보상 (변경)\n- 골드 1500\n"
       if (p === `${PROJECT}/schema.md`) return "# Schema\n- db/content/dungeons/{id}/rewards.md\n"
       if (p === `${PROJECT}/purpose.md`) return "Game-dev wiki."
-      if (p === `${PROJECT}/counterexamples/dungeon_a_rewards.md`) return counterexample
       if (p === `${PROJECT}/.llm-wiki/rejection-log.jsonl`) {
         return (
           JSON.stringify({
@@ -119,9 +100,6 @@ describe("dismissal context injection", () => {
     })
     mockListDirectory.mockImplementation(async (p: string) => {
       if (p === `${PROJECT}/db`) return [] as FileNode[]
-      if (p === `${PROJECT}/counterexamples`) {
-        return [fileNode("dungeon_a_rewards.md")] as FileNode[]
-      }
       throw new Error(`unexpected listDirectory: ${p}`)
     })
     mockFileExists.mockImplementation(async (p: string) =>
@@ -135,18 +113,16 @@ describe("dismissal context injection", () => {
     const messages = firstCall[1] as Array<{ role: string; content: string }>
     const systemPrompt = messages.find((m) => m.role === "system")?.content ?? ""
 
-    // The dismissal section must be present with both counterexample +
-    // rejection-log content the model needs to apply the prior decision.
+    // The dismissal section must be present with the rejection-log
+    // content the model needs to apply the prior decision.
     expect(systemPrompt).toContain("Prior dismissals")
-    expect(systemPrompt).toContain("Counterexamples")
-    expect(systemPrompt).toContain("던전 A 보상 (잘못된 v2)")
-    expect(systemPrompt).toContain("instance_server_design_v2.md:## 던전 A — 보상 (변경)")
     expect(systemPrompt).toContain("Discards")
     expect(systemPrompt).toContain("db/content/dungeons/dungeon_a/rewards.md")
+    expect(systemPrompt).toContain("instance_server_design_v2.md:## 던전 A — 보상 (변경)")
     expect(systemPrompt).toContain("wrong v2")
   })
 
-  it("omits the dismissal section when there are no counterexamples or rejections", async () => {
+  it("omits the dismissal section when there are no rejections", async () => {
     mockReadFile.mockImplementation(async (p: string) => {
       if (p === SOURCE) return "# Source\n## section\nbody\n"
       if (p === `${PROJECT}/schema.md`) return "# Schema\n"
@@ -155,7 +131,6 @@ describe("dismissal context injection", () => {
     })
     mockListDirectory.mockImplementation(async (p: string) => {
       if (p === `${PROJECT}/db`) return [] as FileNode[]
-      if (p === `${PROJECT}/counterexamples`) return [] as FileNode[]
       throw new Error(`unexpected listDirectory: ${p}`)
     })
     mockFileExists.mockResolvedValue(false)

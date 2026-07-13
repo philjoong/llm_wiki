@@ -307,8 +307,8 @@ export async function sweepResolvedReviews(
   // Modification proposal — `modification` review cards represent a
   // parked proposal file plus a user decision tree. They are NEVER
   // auto-resolved by sweep: only the user can pick Approve / Merge /
-  // Discard / Pending / Counterexample. Filtering them out here keeps
-  // the LLM judge from touching them.
+  // Discard / Pending. Filtering them out here keeps the LLM judge
+  // from touching them.
   const pending = store.items.filter((i) => !i.resolved && i.type !== "modification")
 
   if (pending.length === 0) return 0

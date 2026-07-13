@@ -21,8 +21,8 @@ export interface ReviewOption {
  *   without extra disk reads.
  * - `pageId` / `sectionId` — stable identity used for conflict resolution.
  * - `incomingDraftPath` — relative path of the parked proposal file
- *   under `pending/_proposals/...`. Approve / Pending / Counterexample
- *   all start by reading or moving this file.
+ *   under `pending/_proposals/...`. Approve / Pending all start by
+ *   reading or moving this file.
  * - `sourceRefs` — what the incoming raw range was. Used to populate the
  *   commit message trailer when the user resolves the proposal.
  */
@@ -49,9 +49,8 @@ export interface ReviewItem {
   /**
    * Modification-proposal two-step decision tree. Only meaningful for
    * `type: "modification"`. `"primary"` shows [Approve | Merge | Reject];
-   * `"rejection-handling"` shows [Discard | Pending | Counterexample]
-   * after the user clicks Reject. Other types stay implicitly in a
-   * single-stage flow.
+   * `"rejection-handling"` shows [Discard | Pending] after the user
+   * clicks Reject. Other types stay implicitly in a single-stage flow.
    */
   stage?: "primary" | "rejection-handling"
   /** Modification-only payload — the diff data and the parked draft. */
@@ -75,7 +74,7 @@ interface ReviewState {
   /**
    * Modification-proposal: flip a `modification` review from `"primary"` to
    * `"rejection-handling"` without resolving it. The card stays open
-   * but its action set switches to [Discard | Pending | Counterexample].
+   * but its action set switches to [Discard | Pending].
    */
   transitionToRejectionHandling: (id: string) => void
   dismissItem: (id: string) => void

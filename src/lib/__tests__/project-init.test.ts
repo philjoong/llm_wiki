@@ -56,7 +56,6 @@ describe("initProject", () => {
     expect(SYSTEM_PREFIX_DIRS).toEqual([
       "db",
       "pending",
-      "counterexamples",
       "question_types",
       "data_types",
     ])

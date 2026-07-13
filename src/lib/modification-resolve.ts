@@ -8,7 +8,7 @@
  * call when the user picks an outcome:
  *
  *   primary stage:           [Approve][Merge][Reject]
- *   rejection-handling stage: [Discard][Pending][Counterexample]
+ *   rejection-handling stage: [Discard][Pending]
  *
  *   - Approve  — copy proposal → target, source-merge frontmatter, commit.
  *   - Merge    — UI-only (open the proposal in the editor for hand-edit).
@@ -17,9 +17,6 @@
  *   - Discard  — drop the proposal, append a rejection-log entry, commit.
  *   - Pending  — move the proposal to `pending/<slug>.md` for human triage,
  *                commit.
- *   - Counterexample — move the proposal to `counterexamples/<slug>.md`,
- *                commit. The dismissal-context loader will inject these
- *                back into the decomposition prompt.
  *
  * File moves are handled here; git commits are deferred to Sync to Remote.
  */
@@ -32,9 +29,9 @@ import type { SourceRef } from "@/lib/source-ref"
 
 /**
  * Convert a target db/ path to a flat slug usable as a filename in
- * `pending/` or `counterexamples/`. Strips the `db/` prefix and the
- * `.md` extension, then collapses `/` to `_`. Two distinct target paths
- * always produce distinct slugs.
+ * `pending/`. Strips the `db/` prefix and the `.md` extension, then
+ * collapses `/` to `_`. Two distinct target paths always produce
+ * distinct slugs.
  *
  *   db/content/dungeons/dungeon_a/rewards.md → content_dungeons_dungeon_a_rewards
  */
@@ -123,17 +120,3 @@ export async function pendingModification(
   await deleteFile(draftAbs)
 }
 
-export async function counterexampleModification(
-  projectPath: string,
-  proposal: ModificationProposal,
-): Promise<void> {
-  const pp = normalizePath(projectPath)
-  const draftAbs = `${pp}/${proposal.incomingDraftPath}`
-  const slug = pathToSlug(proposal.targetPath)
-  const destRel = `counterexamples/${slug}.md`
-  const destAbs = `${pp}/${destRel}`
-
-  const content = await readFile(draftAbs)
-  await writeFile(destAbs, content)
-  await deleteFile(draftAbs)
-}

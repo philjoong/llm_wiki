@@ -16,9 +16,8 @@ import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
 import { parseSourceRefs, SourceRefValidationError } from "@/lib/sources-merge"
-import { listKnowledgeGraphs, listKnowledgeRelationTypes } from "@/commands/knowledge"
+import { listKnowledgeGraphs, listKnowledgeRelationTypes, discardSectionAssertions } from "@/commands/knowledge"
 import {
-  loadCounterexamples,
   loadRejectionLog,
   findRelatedRejections,
   formatDismissalContext,
@@ -87,7 +86,6 @@ const CLOSER_LINE = /^---\s*END\s+FILE\s*---\s*$/i
 const SAFE_INGEST_PREFIXES = [
   "db/",
   "pending/",
-  "counterexamples/",
   "question_types/",
   "exclusions/",
 ]
@@ -259,7 +257,7 @@ export function parseFileBlocks(text: string): ParseFileBlocksResult {
     if (!isSafeIngestPath(path)) {
       // Path-traversal guard. Drops blocks whose path tries to escape
       // the allowed prefixes — see isSafeIngestPath for the threat model.
-      const msg = `FILE block with unsafe path "${path}" rejected (must be under db/, pending/, counterexamples/, question_types/, or exclusions/; no .., no absolute paths).`
+      const msg = `FILE block with unsafe path "${path}" rejected (must be under db/, pending/, question_types/, or exclusions/; no .., no absolute paths).`
       console.warn(`[ingest] ${msg}`)
       warnings.push(msg)
       continue
@@ -611,20 +609,14 @@ export async function autoIngestImpl(
   // pages already live there.
   const dbIndex = await buildDbIndex(pp)
 
-  // Dismissal context — load prior dismissals (counterexamples + rejection
-  // log) so the analysis prompt can re-apply the user's earlier decisions
-  // instead of re-proposing the same modification card every time the
-  // source is re-ingested. `pending/` is intentionally not loaded — those
-  // entries are awaiting human triage and shouldn't bias the model.
-  const [counterexamples, rejectionLog] = await Promise.all([
-    loadCounterexamples(pp),
-    loadRejectionLog(pp),
-  ])
+  // Dismissal context — load prior dismissals (rejection log) so the
+  // analysis prompt can re-apply the user's earlier decisions instead of
+  // re-proposing the same modification card every time the source is
+  // re-ingested. `pending/` is intentionally not loaded — those entries
+  // are awaiting human triage and shouldn't bias the model.
+  const rejectionLog = await loadRejectionLog(pp)
   const relevantRejections = findRelatedRejections(rejectionLog, fileName)
-  const dismissalContext = formatDismissalContext(
-    counterexamples,
-    relevantRejections,
-  )
+  const dismissalContext = formatDismissalContext(relevantRejections)
 
   // Split oversized sources into chunks. Small files run as a single
   // chunk (length 1) — semantically identical to the pre-chunking flow.
@@ -855,10 +847,10 @@ export async function autoIngestImpl(
         ? `Re-ingest of "${fileName}" produced different content for ` +
           `${sectionLabel} of ${proposal.targetPath}. Approve to overwrite ` +
           `that section, Merge to hand-edit, or Reject to send the proposal ` +
-          `to discard / pending / counterexample.`
+          `to discard / pending.`
         : `Re-ingest of "${fileName}" produced different content for ` +
           `${proposal.targetPath}. Approve to overwrite, Merge to hand-edit, ` +
-          `or Reject to send the proposal to discard / pending / counterexample.`,
+          `or Reject to send the proposal to discard / pending.`,
       sourcePath: sp,
       affectedPages: [proposal.targetPath],
       options: [],
@@ -1221,16 +1213,19 @@ export interface DecomposedSection {
   page_path?: string
 }
 
-async function extractKnowledgeAssertionWrites(
+export async function extractKnowledgeAssertionWrites(
   projectPath:string,
   documents:Array<{relativePath:string;content:string}>,
   llmConfig:LlmConfig,
   signal?:AbortSignal,
+  sectionIds?:string[],
 ):Promise<IngestAssertionWrite[]> {
   const graphs=await listKnowledgeGraphs(projectPath)
   if(!graphs.length)return []
   const catalogs=await Promise.all(graphs.map(async(graph)=>({graph,relations:await listKnowledgeRelationTypes(projectPath,graph.graphId)})))
-  const targets=documents.flatMap((document)=>{const parsed=parseMarkdownV2(document.content);return parsed.sections.map((section)=>({key:`${parsed.page.page_id}:${section.sectionId}`,pageId:parsed.page.page_id,sectionId:section.sectionId,text:section.body}))})
+  const allTargets=documents.flatMap((document)=>{const parsed=parseMarkdownV2(document.content);return parsed.sections.map((section)=>({key:`${parsed.page.page_id}:${section.sectionId}`,pageId:parsed.page.page_id,sectionId:section.sectionId,text:section.body}))})
+  const targets=sectionIds?allTargets.filter((target)=>sectionIds.includes(target.sectionId)):allTargets
+  if(targets.length===0)return []
   const prompt=[
     "Extract factual graph assertions from the supplied Markdown v2 sections.",
     "Use only graphId values listed in the catalog. Predicates must be uppercase snake case.",
@@ -1269,7 +1264,15 @@ export function buildAnalysisPrompt(dbIndex: string, sourceContent = "", dismiss
   return buildDecompositionPrompt(dbIndex, sourceContent, dismissalContext)
 }
 
-/** Replace a saved v2 document while preserving its page and section IDs. */
+/**
+ * Replace a saved v2 document while preserving its page and section IDs.
+ *
+ * When `sectionId` is given (the modification-approve path), also discards
+ * the prior graph assertions whose evidence pointed at that section and
+ * re-extracts assertions from its new text — otherwise an approved edit
+ * would leave stale assertions in the graph pointing at text that no longer
+ * exists, and never pick up new relations the edit introduced.
+ */
 export async function reIngestDocument(
   projectPath: string,
   projectName: string,
@@ -1278,16 +1281,26 @@ export async function reIngestDocument(
   llmConfig: LlmConfig,
   dataTypeId?: string,
   prefilledFields?: Record<string, string>,
+  sectionId?: string,
 ): Promise<void> {
   const pp = normalizePath(projectPath)
+  // Re-ingest is now a v2 document replacement, not a bridge back to the
+  // legacy graph backend. The content must already carry stable IDs; this
+  // deliberately rejects v1 rather than inventing identity from headings.
+  void projectName
+  void dataTypeId
+  void prefilledFields
+  if (sectionId) {
+    try {
+      const assertions = await extractKnowledgeAssertionWrites(pp, [{ relativePath: pagePath, content }], llmConfig, undefined, [sectionId])
+      await discardSectionAssertions(pp, sectionId)
+      await commitMarkdownV2Pages(pp, [{ relativePath: pagePath, content }], assertions)
+      return
+    } catch (err) {
+      console.warn(`[ingest] reIngestDocument graph reassignment failed for ${pagePath}, falling back to content-only commit: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
   try {
-    // Re-ingest is now a v2 document replacement, not a bridge back to the
-    // legacy graph backend. The content must already carry stable IDs; this
-    // deliberately rejects v1 rather than inventing identity from headings.
-    void projectName
-    void llmConfig
-    void dataTypeId
-    void prefilledFields
     await commitMarkdownV2Page(pp, pagePath, content)
   } catch (err) {
     console.warn(`[ingest] reIngestDocument failed for ${pagePath}: ${err instanceof Error ? err.message : String(err)}`)

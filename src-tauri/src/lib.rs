@@ -167,6 +167,7 @@ pub fn run() {
             knowledge::commands::delete_graph_projection,
             knowledge::commands::delete_assertion,
             knowledge::commands::reject_review_assertion,
+            knowledge::commands::discard_section_assertions,
             knowledge::commands::traverse_knowledge_graph,
             knowledge::commands::commit_ingest_plan,
             knowledge::commands::recover_ingest_transactions,

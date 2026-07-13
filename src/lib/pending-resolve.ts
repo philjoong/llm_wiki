@@ -230,7 +230,7 @@ export async function reReviewPending(
       description:
         `Pending entry pushed back into the modification queue. ` +
         `Approve writes to ${item.targetPath}; the Reject branch sends ` +
-        `it through Discard / Pending / Counterexample again.`,
+        `it through Discard / Pending again.`,
       affectedPages: [item.targetPath],
       options: [],
       proposal,

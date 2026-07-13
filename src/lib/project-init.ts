@@ -7,7 +7,6 @@ import { recoverPendingIngests } from "@/lib/ingest-v2"
 export const SYSTEM_PREFIX_DIRS = [
   "db",
   "pending",
-  "counterexamples",
   "question_types",
   "data_types",
 ] as const

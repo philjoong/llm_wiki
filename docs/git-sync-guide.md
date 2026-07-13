@@ -45,7 +45,7 @@ git 조작은 libgit2가 아닌 **git CLI를 subprocess로 호출**하는 방식
 | 작업 | 기록되는 파일 |
 |------|--------------|
 | 인제스트 (LLM Stage 3) | `db/` 페이지 파일들 |
-| 수정 해결 (Approve / Discard / Pending / Counterexample) | `db/`, `pending/`, `counterexamples/`, `.llm-wiki/rejection-log.jsonl` |
+| 수정 해결 (Approve / Discard / Pending) | `db/`, `pending/`, `.llm-wiki/rejection-log.jsonl` |
 | URL 인제스트 | `sources/` 원본 파일 |
 | 사용자 직접 문서 편집 | 해당 `db/` 파일 |
 | 그래프 실시간 변경 | `graph.json` 미반영 — Sync 시에만 스냅샷 기록 |

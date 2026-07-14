@@ -1,8 +1,9 @@
 import { createDirectory, fileExists, writeFile, seedDataTypes, seedQuestionTypes } from "@/commands/fs"
-import { bootstrapKnowledgeDb, listKnowledgeGraphs, registerGraph } from "@/commands/knowledge"
+import { bootstrapKnowledgeDb } from "@/commands/knowledge"
 import { gitInit } from "@/commands/git"
 import { ensureOriginalsGitignore } from "@/lib/originals"
 import { recoverPendingIngests } from "@/lib/ingest-v2"
+import { ensureProjectId } from "@/lib/project-identity"
 
 export const SYSTEM_PREFIX_DIRS = [
   "db",
@@ -19,6 +20,9 @@ export async function initProject({ projectPath }: InitProjectOptions): Promise<
   const pp = projectPath.replace(/\/+$/, "")
   await recoverPendingIngests(pp)
 
+  await createDirectory(`${pp}/.llm-wiki`)
+  await ensureProjectId(pp)
+
   for (const dir of SYSTEM_PREFIX_DIRS) {
     const dirPath = `${pp}/${dir}`
     await createDirectory(dirPath)
@@ -28,9 +32,10 @@ export async function initProject({ projectPath }: InitProjectOptions): Promise<
   await seedQuestionTypes(pp)
   await seedDataTypes(pp)
   await bootstrapKnowledgeDb(pp)
-  if ((await listKnowledgeGraphs(pp)).length === 0) {
-    await registerGraph(pp, { graphId: `graph-${crypto.randomUUID()}`, graphName: "main", purpose: "General project knowledge" })
-  }
+  // No default graph is seeded. Graphs are created on demand by ingest's graph
+  // assignment step (see extractKnowledgeAssertionWrites), each named for the
+  // domain of the relationships it holds — a single catch-all "main" graph is
+  // deliberately avoided.
   const tagSchemaPath = `${pp}/.llm-wiki/tag-schema.yaml`
   if (!await fileExists(tagSchemaPath)) {
     await writeFile(tagSchemaPath, "namespaces: {}\n")

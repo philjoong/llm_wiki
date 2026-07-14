@@ -46,11 +46,9 @@
   },
   "chat": {
     "placeholder": "Ask about your wiki...",
-    "ingestPlaceholder": "Discuss the source or ask follow-up questions...",
     "saveToWiki": "Save to Wiki",
     "saving": "Saving...",
     "saved": "Saved!",
-    "writeToWiki": "Write to Wiki",
     "emptyHint": "Ask a question or start an ingest to begin.",
     "sources": "Sources"
   },
@@ -313,8 +311,6 @@
     "clearCompleted": "Clear completed"
   },
   "fileTree": {
-    "noProject": "No project open",
-    "openInExplorer": "Open in Explorer",
     "inject": "Extract Knowledge",
     "injecting": "Extracting...",
     "injectDialogTitle": "Select files to extract knowledge from",

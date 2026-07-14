@@ -46,7 +46,7 @@ raw source file
 - 각 섹션에 대해 `db/` 아래 저장할 `page_path`도 함께 결정한다 (기존 db/ 인덱스 참고).
 
 ```text
----SECTION: ## 고블린 전사 | db/enemies/goblin-warrior.md---
+---SECTION: ## Goblin Warrior | db/enemies/goblin-warrior.md---
 (source text 원문 그대로)
 ---END SECTION---
 ```
@@ -92,12 +92,12 @@ data type id가 있지만 해당 YAML을 찾지 못하면 경고를 남기고 in
 로드 경로: `{projectPath}/data_types/{id}.yaml` — 프로젝트 공유, git에 커밋된다.
 
 ```yaml
-name: "패치노트"
+name: "Patch Notes"
 fields:
-  version: "패치 버전 번호"
-  release_date: "패치 적용 날짜"
-  balance_changes: "수치 변경 내용"
-  bug_fixes: "버그 수정 목록"
+  version: "Patch version number"
+  release_date: "Patch release date"
+  balance_changes: "Balance change details"
+  bug_fixes: "List of bug fixes"
 ```
 
 data type 선택 UI: `src/components/layout/icon-sidebar.tsx` — raw file injection / URL injection 경로에 연결된 다중 선택 체크박스 목록. N개 data type을 선택하면 파일당 N개의 ingest task가 큐에 추가되고(`enqueueIngest`를 data type마다 한 번씩 호출), 각 task가 독립적으로 처리되어 data type마다 별도 문서가 생성된다. 아무 것도 선택하지 않으면 표준(비구조화) decomposition 경로로 1개 task만 추가된다.
@@ -171,9 +171,10 @@ data type 선택 UI: `src/components/layout/icon-sidebar.tsx` — raw file injec
 
 - `writeFileBlocks()`가 모은 `pendingV2Writes`(chunk 전체, 여러 페이지 가능)의 각 페이지를 다시 `parseMarkdownV2()`로 파싱해 섹션 텍스트를 추출한다.
 - 프로젝트에 등록된 그래프 목록(`listKnowledgeGraphs`)과 그래프별 relation type 카탈로그(`listKnowledgeRelationTypes`)를 LLM 프롬프트에 그래프 카탈로그로 제공한다 — 별도의 JSON 정책 파일은 없다. 카탈로그 자체가 knowledge.sqlite의 `graphs`/`relation_types` 테이블이다.
-- LLM은 각 섹션(`targetKey: "page:section"`)에 대해 `{targetKey, graphId, subjectName, subjectType, predicate, relationDescription, objectName, objectType, quote}` 배열(JSON)을 반환한다.
-- 반환값은 엄격히 검증된다: `graphId`가 실제 등록된 그래프인지, `subjectType`/`objectType`이 `ENTITY_TYPES`(`src/lib/knowledge/vocabularies.ts`)에 속하는지, `quote`가 실제로 그 섹션 본문에 포함되는지(exact substring). 하나라도 어긋나면 `VALIDATION_FAILED` 예외로 전체가 실패한다.
-- 그래프가 프로젝트에 하나도 없으면 (`listKnowledgeGraphs`가 빈 배열) assertion 추출 자체를 건너뛴다.
+- LLM은 각 섹션(`targetKey: "page:section"`)에 대해 `{targetKey, graphId, newGraph, graphName, subjectName, subjectType, predicate, relationDescription, objectName, objectType, quote}` 배열(JSON)을 반환한다.
+- **그래프 자동 생성**: 카탈로그에 맞는 그래프가 없으면 LLM이 `newGraph:true` + `graphName`을 반환해 새 그래프를 제안할 수 있다. `graphName`은 `{purpose}_{subjectType}_{action}_{objectType}` 형태의 lower snake_case여야 한다(예: `combat_character_attacks_enemy`, `quest_npc_gives_item`). 기존 그래프의 purpose 접두사 목록을 프롬프트에 주입해 재사용을 유도한다. `extractKnowledgeAssertionWrites()`가 커밋 직전 `registerGraph()`로 신규 그래프를 등록하고 write의 `graphId`를 발급된 id로 치환하므로, Rust `commit_ingest_plan`은 기존처럼 실재하는 graphId만 받는다(원자적 커밋 로직 무변경). 커밋이 실패해 빈 그래프가 남아도 해가 없으며 graphs 탭에서 삭제할 수 있다.
+- 반환값은 엄격히 검증된다: 기존 그래프면 `graphId`가 실제 등록된 그래프인지, 신규면 `graphName`이 `^[a-z0-9]+(_[a-z0-9]+)+$`에 맞는지, `subjectType`/`objectType`이 `ENTITY_TYPES`(`src/lib/knowledge/vocabularies.ts`)에 속하는지, `quote`가 실제로 그 섹션 본문에 포함되는지(exact substring). 하나라도 어긋나면 `VALIDATION_FAILED` 예외로 전체가 실패한다.
+- 그래프가 프로젝트에 하나도 없어도 assertion 추출을 건너뛰지 않는다 — LLM이 도메인별 그래프를 새로 제안한다. 신규 프로젝트는 더 이상 `main` 디폴트 그래프를 시드하지 않는다(`project-init.ts`).
 
 ### 원자적 커밋 (`commitMarkdownV2Pages` → `commitIngestPlan`)
 
@@ -297,7 +298,7 @@ ingest loop가 끝난 뒤 다음 처리가 이어진다.
 | Approve 후 graph assignment | **실행되지 않는다.** `reIngestDocument()`는 `commitMarkdownV2Page()`만 호출하며 assertions는 빈 배열이다. 승인된 섹션에서 새로 생긴 관계는 그래프에 반영하려면 별도 재-ingest나 수동 assertion 생성(Graph 화면 knowledge 탭)이 필요하다. |
 | entity 매칭 | 정규화 문자열 완전일치만 본다. fuzzy 매칭도, 사용자 확인 단계도 없다. 이름이 갈린 엔티티는 Graph 화면 `entity` 탭에서 수동 merge. |
 | cardinality 충돌과 entity_confirmation | 서로 다른 개념이다. cardinality 충돌은 knowledge.sqlite `assertions.status` 기반이고 review-store를 거치지 않는다. entity_confirmation은 과거에 있었지만 지금은 없다. |
-| graph policy 파일 | `src/lib/graph-policy.ts` 소스는 존재하지 않는다. 그래프·relation type 카탈로그는 knowledge.sqlite의 `graphs`/`relation_types` 테이블이며, Graph 화면의 `graphs` 탭에서 직접 관리한다. 저장소에 남아있는 `.llm-wiki/graph-policy.json`은 과거 아키텍처의 잔존 데이터 파일로 현재 코드가 읽지 않는다. |
+| graph policy 파일 | `src/lib/graph-policy.ts` 소스는 존재하지 않는다. 그래프·relation type 카탈로그는 knowledge.sqlite의 `graphs`/`relation_types` 테이블이며, Graph 화면의 `graphs` 탭에서 직접 관리한다. 저장소에 남아있는 `.llm-wiki/graph-policy.json`은 과거 아키텍처의 잔존 데이터 파일로 현재 코드가 읽지 않는다. 다만 과거 정책의 **그래프 자동 생성 + 이름 규칙**은 `extractKnowledgeAssertionWrites()`의 프롬프트/검증(§6)으로 되살아났다 — 정책 파일이 아니라 ingest 코드에 인라인돼 있다. |
 | entity-dict.json | `src/lib/entity-dict.ts` 소스는 존재하지 않는다. `.llm-wiki/entity-dict.json` 데이터 파일이 프로젝트에 남아있더라도 현재 코드는 읽지 않는다. |
 | 파일 write와 DB 커밋의 원자성 | 같은 chunk 안에서는 Rust `commit_ingest_plan`의 journal+트랜잭션으로 원자적이다. 크래시 시 `recoverPendingIngests()`가 프로젝트 오픈 시점에 미완료 journal을 정리한다. |
 | chunk 간 page_path 재사용 | 여러 chunk가 같은 `page_path`를 선택할 수 있다 — chunk마다 `dbIndex`를 다시 빌드해 다음 chunk의 decomposition 프롬프트에 넘기기 때문. sectionId 매칭 원칙(§5)을 그대로 따른다. |

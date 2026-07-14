@@ -7,7 +7,7 @@
  * structural boundaries so each LLM round is small enough to finish.
  */
 import { describe, it, expect } from "vitest"
-import { chunkSourceContent } from "./ingest"
+import { chunkSourceContent, normalizeEntityName } from "./ingest"
 
 describe("chunkSourceContent", () => {
   it("returns a single chunk when content fits", () => {
@@ -100,5 +100,28 @@ describe("chunkSourceContent", () => {
 
   it("handles empty input", () => {
     expect(chunkSourceContent("", 1000)).toEqual([""])
+  })
+})
+
+describe("normalizeEntityName", () => {
+  it("strips a trailing parenthetical qualifier", () => {
+    expect(normalizeEntityName("진명왕의 집행검(무기)")).toBe("진명왕의 집행검")
+    expect(normalizeEntityName("Sword (weapon)")).toBe("Sword")
+  })
+
+  it("strips a full-width parenthetical qualifier", () => {
+    expect(normalizeEntityName("집행검（무기）")).toBe("집행검")
+  })
+
+  it("collapses internal whitespace and trims", () => {
+    expect(normalizeEntityName("  진명왕의   집행검  ")).toBe("진명왕의 집행검")
+  })
+
+  it("leaves a name without qualifiers unchanged", () => {
+    expect(normalizeEntityName("진명왕의 집행검")).toBe("진명왕의 집행검")
+  })
+
+  it("only removes a trailing parenthetical, not a leading or mid one", () => {
+    expect(normalizeEntityName("(전설) 집행검")).toBe("(전설) 집행검")
   })
 })

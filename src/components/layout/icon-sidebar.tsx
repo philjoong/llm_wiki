@@ -18,6 +18,7 @@ import { normalizePath } from "@/lib/path-utils"
 import { writeFile, fileExists } from "@/commands/fs"
 import { fetchUrlAsMarkdown } from "@/lib/url-import"
 import { loadDataTypes, type DataType } from "@/lib/data-types"
+import { loadGitRemoteUrl, loadGitToken } from "@/lib/project-store"
 import { SyncConflictDialog } from "@/components/project/sync-conflict-dialog"
 
 type NavView = WikiState["activeView"]
@@ -58,6 +59,28 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
   const [syncing, setSyncing] = useState(false)
   const [conflictFiles, setConflictFiles] = useState<string[]>([])
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
+  const [conflictRemoteUrl, setConflictRemoteUrl] = useState("")
+
+  // Recompute the authenticated remote URL (per-project token) whenever the
+  // active project changes, for use by the sync-conflict resolution dialog.
+  useEffect(() => {
+    if (!project) {
+      setConflictRemoteUrl("")
+      return
+    }
+    const projectName = project.name
+    let cancelled = false
+    async function compute() {
+      const base = (await loadGitRemoteUrl()) || ""
+      const token = await loadGitToken(projectName)
+      if (cancelled) return
+      setConflictRemoteUrl(token ? `https://oauth2:${encodeURIComponent(token)}@${base}` : `https://${base}`)
+    }
+    void compute()
+    return () => {
+      cancelled = true
+    }
+  }, [project])
 
   async function enqueueWithOptionalDataType(rels: string[], source: PendingInjection["source"]) {
     if (!project) return
@@ -454,11 +477,7 @@ export function IconSidebar({ onSwitchProject, onSync, isLocalOnly }: IconSideba
         }}
         projectPath={project.path}
         initialConflicts={conflictFiles}
-        remoteUrl={(() => {
-          const base = (import.meta as { env: Record<string, string> }).env.VITE_GIT_REPO_URL || ""
-          const token = (import.meta as { env: Record<string, string> }).env.VITE_GIT_TOKEN
-          return token ? `https://oauth2:${encodeURIComponent(token)}@${base}` : `https://${base}`
-        })()}
+        remoteUrl={conflictRemoteUrl}
       />
     )}
     </>

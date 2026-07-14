@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
-import type { AssertionRecord, CreateOrLinkGraphNodeInput, DeleteImpact, EntityRecord, GraphNodeRecord, GraphRecord, KnowledgeGraphSnapshot, PageRecord, RelationTypeRecord, SectionRecord, TraversalHit, TraversalRequest } from "@/lib/knowledge/types"
+import type { AssertionRecord, CreateOrLinkGraphNodeInput, DeleteImpact, EntityNeighborhood, EntityRecord, GraphNodeRecord, GraphRecord, KnowledgeGraphSnapshot, PageRecord, RelationTypeRecord, SectionRecord, TraversalHit, TraversalRequest } from "@/lib/knowledge/types"
 
 export interface KnowledgeDbStatus { schemaVersion: number; foreignKeysEnabled: boolean; bootstrapped: boolean }
 export interface IntegrityIssue { category: string; message: string; recordId?: string }
@@ -35,9 +35,13 @@ export const renameKnowledgeEntity = (projectPath: string, entityId: string, can
 export const addKnowledgeEntityAlias = (projectPath: string, entityId: string, alias: string) => invoke<void>("add_knowledge_entity_alias", { ...args(projectPath), input: { entityId, alias } })
 export const removeKnowledgeEntityAlias = (projectPath: string, entityId: string, alias: string) => invoke<void>("remove_knowledge_entity_alias", { ...args(projectPath), input: { entityId, alias } })
 export const mergeKnowledgeEntities = (projectPath: string, sourceEntityId: string, targetEntityId: string) => invoke<void>("merge_knowledge_entities", { ...args(projectPath), input: { sourceEntityId, targetEntityId } })
+export interface EntityMergeSuggestion { a: EntityRecord; b: EntityRecord; score: number; reason: string }
+export const suggestEntityMerges = (projectPath: string) => invoke<EntityMergeSuggestion[]>("suggest_entity_merges", args(projectPath))
 export const splitKnowledgeEntity = (projectPath: string, entityId: string, canonicalName: string, nodeIds: string[]) => invoke<EntityRecord>("split_knowledge_entity", { ...args(projectPath), input: { entityId, canonicalName, nodeIds } })
 export const deleteKnowledgeEntity = (projectPath: string, entityId: string, impactRevision: string) => invoke<void>("delete_knowledge_entity", { ...args(projectPath), input: { entityId, impactRevision } })
 export const getKnowledgeGraphSnapshot = (projectPath: string, graphId: string) => invoke<KnowledgeGraphSnapshot>("get_knowledge_graph_snapshot", { ...args(projectPath), graphId })
+export const getEntityNeighborhood = (projectPath: string, entityId: string) => invoke<EntityNeighborhood>("get_entity_neighborhood", { ...args(projectPath), entityId })
+export const listGraphsForPage = (projectPath: string, pagePath: string) => invoke<GraphRecord[]>("list_graphs_for_page", { ...args(projectPath), pagePath })
 export const createOrLinkGraphNode = (projectPath: string, input: CreateOrLinkGraphNodeInput) => invoke<{ node: GraphNodeRecord; entity: EntityRecord }>("create_or_link_graph_node", { ...args(projectPath), input })
 export const listAllowedRelationTypes = (projectPath: string, graphId: string, sourceEntityId: string, targetEntityId: string) => invoke<RelationTypeRecord[]>("list_allowed_relation_types", { ...args(projectPath), graphId, sourceEntityId, targetEntityId })
 export const getKnowledgeDeleteImpact = (projectPath: string, input: { nodeId?: string; assertionId?: string; entityId?: string }) => invoke<DeleteImpact>("get_knowledge_delete_impact", { ...args(projectPath), input })

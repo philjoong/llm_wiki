@@ -1,8 +1,9 @@
 use super::{error::{KnowledgeError, KnowledgeErrorCode}, schema::{SCHEMA_SQL, SCHEMA_VERSION}};
 use rusqlite::{Connection, OpenFlags};
-use std::{fs, path::{Path, PathBuf}};
+use std::{fs, path::Path};
 
-pub fn path_for_project(project_path: &str) -> Result<PathBuf, KnowledgeError> {
+#[cfg(test)]
+pub fn path_for_project(project_path: &str) -> Result<std::path::PathBuf, KnowledgeError> {
     let dir = Path::new(project_path).join(".llm-wiki");
     fs::create_dir_all(&dir).map_err(|e| KnowledgeError::new(KnowledgeErrorCode::ValidationFailed, format!("Cannot create knowledge directory: {e}")))?;
     Ok(dir.join("knowledge.sqlite"))

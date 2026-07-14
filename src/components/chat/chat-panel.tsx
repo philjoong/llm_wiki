@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from "react"
-import { BookOpen, Plus, Trash2, MessageSquare } from "lucide-react"
+import { Plus, Trash2, MessageSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles } from "./chat-message"
 import { ChatInput } from "./chat-input"
@@ -7,8 +7,7 @@ import { ChatReferencePanel } from "./chat-reference-panel"
 import { useChatStore, chatMessagesToLLM, type ChatStoreHook } from "@/stores/chat-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
-import { executeIngestWrites } from "@/lib/ingest"
-import { listDirectory, deleteFile } from "@/commands/fs"
+import { deleteFile } from "@/commands/fs"
 import { getGraphContext } from "@/lib/graph-qna"
 import { normalizePath } from "@/lib/path-utils"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
@@ -136,7 +135,6 @@ export function ChatPanel({
   const activeConversationId = useStore((s) => s.activeConversationId)
   const isStreaming = useStore((s) => s.isStreaming)
   const streamingContent = useStore((s) => s.streamingContent)
-  const mode = useStore((s) => s.mode)
   const addMessage = useStore((s) => s.addMessage)
   const setStreaming = useStore((s) => s.setStreaming)
   const appendStreamToken = useStore((s) => s.appendStreamToken)
@@ -153,7 +151,6 @@ export function ChatPanel({
 
   const project = useWikiStore((s) => s.project)
   const llmConfig = useWikiStore((s) => s.llmConfig)
-  const setFileTree = useWikiStore((s) => s.setFileTree)
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -371,25 +368,6 @@ export function ChatPanel({
     handleSend(lastUserMsg.content)
   }, [isStreaming, removeLastAssistantMessage, handleSend, useStore])
 
-  const handleWriteToWiki = useCallback(async () => {
-    if (!project) return
-    const pp = normalizePath(project.path)
-    try {
-      await executeIngestWrites(pp, llmConfig, undefined, undefined)
-      try {
-        const tree = await listDirectory(pp)
-        setFileTree(tree)
-      } catch {
-        // ignore
-      }
-    } catch (err) {
-      console.error("Failed to write to wiki:", err)
-    }
-  }, [project, llmConfig, setFileTree])
-
-  const hasAssistantMessages = activeMessages.some((m) => m.role === "assistant")
-  const showWriteButton = mode === "ingest" && !isStreaming && hasAssistantMessages
-
   return (
     <div className="flex h-full flex-row overflow-hidden">
       <ConversationSidebar useStore={useStore} />
@@ -427,20 +405,6 @@ export function ChatPanel({
                 <div ref={bottomRef} />
               </div>
             </div>
-
-            {showWriteButton && (
-              <div className="border-t px-3 py-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleWriteToWiki}
-                  className="w-full gap-2"
-                >
-                  <BookOpen className="h-4 w-4" />
-                  Write to Wiki
-                </Button>
-              </div>
-            )}
           </>
         )}
 
@@ -449,11 +413,7 @@ export function ChatPanel({
           onStop={handleStop}
           isStreaming={isStreaming}
           projectPath={project ? normalizePath(project.path) : undefined}
-          placeholder={
-            mode === "ingest"
-              ? "Discuss the source or ask follow-up questions..."
-              : "Type a message..."
-          }
+          placeholder="Type a message..."
         />
       </div>
 

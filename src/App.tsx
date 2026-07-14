@@ -6,7 +6,7 @@ import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useChatStore } from "@/stores/chat-store"
 import { listDirectory, openProject } from "@/commands/fs"
-import { getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, saveBranchFolderMapping, loadBranchFolderMapping, loadGitRemoteUrl } from "@/lib/project-store"
+import { getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadEmbeddingConfig, loadOutputLanguage, loadProviderConfigs, loadActivePresetId, saveBranchFolderMapping, loadBranchFolderMapping, loadGitRemoteUrl, loadGitToken } from "@/lib/project-store"
 import { loadReviewItems, loadChatHistory } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
 import { startClipWatcher } from "@/lib/clip-watcher"
@@ -51,6 +51,7 @@ function App() {
   const [isLocalOnly, setIsLocalOnly] = useState(false)
   const [loading, setLoading] = useState(true)
   const [branchAutoLoading, setBranchAutoLoading] = useState(false)
+  const [syncRemoteUrl, setSyncRemoteUrl] = useState("")
 
   // Set up auto-save and clip watcher once on mount
   useEffect(() => {
@@ -258,7 +259,7 @@ function App() {
         }
         // No valid mapping — open folder picker directly
         debug("branch-auto-resolve: no mapping, opening folder picker")
-        const repoBaseUrl = (await loadGitRemoteUrl()) || import.meta.env.VITE_GIT_REPO_URL || ""
+        const repoBaseUrl = (await loadGitRemoteUrl()) || ""
 
         let selected: string | null = null
         let validSelection = false
@@ -297,6 +298,27 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranch, loading])
 
+  // Recompute the authenticated remote URL (per-project token) whenever the
+  // active project changes, for use by the sync-on-exit dialog.
+  useEffect(() => {
+    if (!project) {
+      setSyncRemoteUrl("")
+      return
+    }
+    const projectName = project.name
+    let cancelled = false
+    async function compute() {
+      const base = (await loadGitRemoteUrl()) || ""
+      const token = await loadGitToken(projectName)
+      if (cancelled) return
+      setSyncRemoteUrl(token ? `https://oauth2:${encodeURIComponent(token)}@${base}` : `https://${base}`)
+    }
+    void compute()
+    return () => {
+      cancelled = true
+    }
+  }, [project])
+
   // Try to open `folderPath` as a project. If it's not a valid project yet,
   // initialize it locally (no remote) or pull from remote if a URL is configured.
   // Returns true on success, false on unrecoverable failure.
@@ -309,7 +331,7 @@ function App() {
       debug("branch-auto-resolve: openProject failed, attempting init", { folderPath, branch })
     }
 
-    const repoBaseUrl = (await loadGitRemoteUrl()) || import.meta.env.VITE_GIT_REPO_URL || ""
+    const repoBaseUrl = (await loadGitRemoteUrl()) || ""
 
     const localInit = async () => {
       const { initProject } = await import("@/lib/project-init")
@@ -333,7 +355,7 @@ function App() {
     // If not, treat as local-only rather than failing with a git fetch error.
     try {
       const { gitLsRemote } = await import("@/commands/git")
-      const gitToken = import.meta.env.VITE_GIT_TOKEN
+      const gitToken = await loadGitToken(branch)
       const remoteUrl = gitToken
         ? `https://oauth2:${encodeURIComponent(gitToken)}@${repoBaseUrl}`
         : `https://${repoBaseUrl}`
@@ -499,15 +521,15 @@ function App() {
     await gitSyncCommit(project.path, "sync: update knowledge database")
 
     // Ensure remote origin is registered
-    const repoBaseUrl = import.meta.env.VITE_GIT_REPO_URL || ""
-    const gitToken = import.meta.env.VITE_GIT_TOKEN
+    const branch = useWikiStore.getState().selectedBranch || "main"
+    const repoBaseUrl = (await loadGitRemoteUrl()) || ""
+    const gitToken = await loadGitToken(branch)
     const remoteUrl = gitToken
       ? `https://oauth2:${encodeURIComponent(gitToken)}@${repoBaseUrl}`
       : `https://${repoBaseUrl}`
     await gitRemoteAdd(project.path, "origin", remoteUrl)
 
     // Pull --rebase so remote changes are integrated before push
-    const branch = useWikiStore.getState().selectedBranch || "main"
     const rebaseResult = await gitPullRebase(project.path, "origin", branch)
     if (!rebaseResult.success) {
       // Throw a typed error so the caller (dialog / sidebar button) can open
@@ -555,11 +577,7 @@ function App() {
         onExit={handleExit}
         isLocalOnly={isLocalOnly}
         projectPath={project?.path ?? ""}
-        remoteUrl={(() => {
-          const base = import.meta.env.VITE_GIT_REPO_URL || ""
-          const token = import.meta.env.VITE_GIT_TOKEN
-          return token ? `https://oauth2:${encodeURIComponent(token)}@${base}` : `https://${base}`
-        })()}
+        remoteUrl={syncRemoteUrl}
       />
     </>
   )

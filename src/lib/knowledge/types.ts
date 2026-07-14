@@ -44,6 +44,14 @@ export interface EntityRecord {
 
 export interface EntityAliasRecord { entityId: string; alias: string; normalizedAlias: string }
 export interface GraphRecord { graphId: string; graphName: string; purpose: string }
+
+/**
+ * The legacy catch-all graph. New projects no longer seed it; ingest names
+ * every graph for its domain instead. Hidden from graph pickers/lists so users
+ * never see or write into it, while any residue in older projects stays intact.
+ */
+export const HIDDEN_GRAPH_NAME = "main"
+export const isUserVisibleGraph = (graph: GraphRecord): boolean => graph.graphName !== HIDDEN_GRAPH_NAME
 export interface GraphNodeRecord { nodeId: string; graphId: string; entityId: string; role?: string }
 
 export interface RelationTypeRecord {
@@ -85,6 +93,13 @@ export interface PageTagRecord { pageId: string; tagId: string }
 export interface EntityMatch extends EntityRecord { matchedAlias?: string }
 export interface KnowledgeGraphSnapshot {
   graph: GraphRecord
+  nodes: Array<GraphNodeRecord & { entity: EntityRecord }>
+  assertions: Array<AssertionRecord & { evidenceState: EvidenceState; evidence: AssertionEvidenceRecord[] }>
+}
+
+/** Every graph an entity appears in, merged. `graphs` lists the distinct graphs touched. */
+export interface EntityNeighborhood {
+  graphs: GraphRecord[]
   nodes: Array<GraphNodeRecord & { entity: EntityRecord }>
   assertions: Array<AssertionRecord & { evidenceState: EvidenceState; evidence: AssertionEvidenceRecord[] }>
 }

@@ -135,6 +135,21 @@ export async function loadGitRemoteUrl(): Promise<string | null> {
   return (await store.get<string>(GIT_REMOTE_URL_KEY)) ?? null
 }
 
+const GIT_TOKEN_MAP_KEY = "gitTokenMap"
+
+export async function saveGitToken(branch: string, token: string): Promise<void> {
+  const store = await getStore()
+  const map = (await store.get<Record<string, string>>(GIT_TOKEN_MAP_KEY)) ?? {}
+  map[branch] = token
+  await store.set(GIT_TOKEN_MAP_KEY, map)
+}
+
+export async function loadGitToken(branch: string): Promise<string | null> {
+  const store = await getStore()
+  const map = await store.get<Record<string, string>>(GIT_TOKEN_MAP_KEY)
+  return map?.[branch] ?? null
+}
+
 const SELECTED_BRANCH_KEY = "selectedBranch"
 
 export async function saveSelectedBranch(branch: string | null): Promise<void> {

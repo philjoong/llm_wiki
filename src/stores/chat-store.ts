@@ -36,8 +36,6 @@ interface ChatState {
   messages: DisplayMessage[]
   isStreaming: boolean
   streamingContent: string
-  mode: "chat" | "ingest"
-  ingestSource: string | null
   maxHistoryMessages: number
 
   // Conversation management
@@ -53,8 +51,6 @@ interface ChatState {
   setStreaming: (streaming: boolean) => void
   appendStreamToken: (token: string) => void
   finalizeStream: (content: string, references?: StructuredCitation[]) => void
-  setMode: (mode: ChatState["mode"]) => void
-  setIngestSource: (path: string | null) => void
   clearMessages: () => void
   setMaxHistoryMessages: (n: number) => void
   removeLastAssistantMessage: () => void  // for regenerate: remove last assistant reply
@@ -87,8 +83,6 @@ export function createChatStore() {
   messages: [],
   isStreaming: false,
   streamingContent: "",
-  mode: "chat",
-  ingestSource: null,
   maxHistoryMessages: 10,
 
   createConversation: () => {
@@ -207,10 +201,6 @@ export function createChatStore() {
         ),
       }
     }),
-
-  setMode: (mode) => set({ mode }),
-
-  setIngestSource: (ingestSource) => set({ ingestSource }),
 
   clearMessages: () =>
     set((state) => ({

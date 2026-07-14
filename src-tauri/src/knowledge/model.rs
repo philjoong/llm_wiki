@@ -52,6 +52,12 @@ pub struct EntityAliasRecord {
 #[serde(rename_all = "camelCase")]
 pub struct EntityDetail { #[serde(flatten)] pub entity: EntityRecord, pub aliases: Vec<String>, pub node_ids: Vec<String> }
 
+/// A pair of entities that likely denote the same real-world thing. `score` is
+/// a 0..1 name-similarity heuristic; `reason` labels why they were paired.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityMergeSuggestion { pub a: EntityRecord, pub b: EntityRecord, pub score: f64, pub reason: String }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphRecord {
@@ -119,6 +125,12 @@ pub struct SnapshotAssertion { #[serde(flatten)] pub assertion: AssertionRecord,
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeGraphSnapshot { pub graph: GraphRecord, pub nodes: Vec<SnapshotNode>, pub assertions: Vec<SnapshotAssertion> }
 
+/// Every graph an entity appears in, merged into one view. `graphs` lists the
+/// distinct graphs touched so the UI can label edges by their source graph.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityNeighborhood { pub graphs: Vec<GraphRecord>, pub nodes: Vec<SnapshotNode>, pub assertions: Vec<SnapshotAssertion> }
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOrLinkGraphNodeResult { pub node: GraphNodeRecord, pub entity: EntityRecord }
@@ -165,15 +177,6 @@ pub struct PageTagRecord {
 
 /// Input DTOs are intentionally use-case shaped; raw table writes are not a
 /// frontend contract.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateEntityInput {
-    pub canonical_name: String,
-    pub entity_type: String,
-    pub description: Option<String>,
-    pub aliases: Option<Vec<String>>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAssertionInput {

@@ -293,6 +293,59 @@ pub fn get_knowledge_page(project_path:String,page_id:String)->Result<Option<Pag
 pub fn get_knowledge_section(project_path:String,section_id:String)->Result<Option<SectionRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;c.query_row("SELECT section_id,page_id,parent_id,heading_level,heading_text,section_type,ui_scope,ui_anchor,ui_layer,ui_aspect,content_entity_id,host_entity_id,ordinal,summary FROM sections WHERE section_id=?1",[section_id],|r|Ok(SectionRecord{section_id:r.get(0)?,page_id:r.get(1)?,parent_id:r.get(2)?,heading_level:r.get(3)?,heading_text:r.get(4)?,section_type:r.get(5)?,ui_scope:r.get(6)?,ui_anchor:r.get(7)?,ui_layer:r.get(8)?,ui_aspect:r.get(9)?,content_entity_id:r.get(10)?,host_entity_id:r.get(11)?,ordinal:r.get(12)?,summary:r.get(13)?})).optional().map_err(sql)}
 #[tauri::command]
 pub fn find_knowledge_entities(project_path:String,query:String)->Result<Vec<EntityRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;let needle=format!("%{}%",normalized_alias(&query));let mut s=c.prepare("SELECT DISTINCT e.entity_id,e.canonical_name,e.entity_type,e.description FROM entities e LEFT JOIN entity_aliases a ON a.entity_id=e.entity_id WHERE lower(e.canonical_name) LIKE ?1 OR a.normalized_alias LIKE ?1 ORDER BY e.canonical_name").map_err(sql)?;let rows=s.query_map([needle],|r|Ok(EntityRecord{entity_id:r.get(0)?,canonical_name:r.get(1)?,entity_type:r.get(2)?,description:r.get(3)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql);rows}
+/// Character-level Levenshtein distance over Unicode scalar values.
+fn edit_distance(a: &[char], b: &[char]) -> usize {
+    if a.is_empty() { return b.len(); }
+    if b.is_empty() { return a.len(); }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Propose likely-duplicate entity pairs by normalized-name similarity. Pairs
+/// are considered only within the same entity_type. A pair qualifies when one
+/// normalized name contains the other (substring, e.g. a missing qualifier) or
+/// when their normalized edit distance is small. Returns highest score first.
+#[tauri::command]
+pub fn suggest_entity_merges(project_path:String)->Result<Vec<EntityMergeSuggestion>,KnowledgeError>{
+    let c=db::open_project(&project_path,false)?;
+    let mut q=c.prepare("SELECT entity_id,canonical_name,entity_type,description FROM entities ORDER BY canonical_name").map_err(sql)?;
+    let entities=q.query_map([],|r|Ok(EntityRecord{entity_id:r.get(0)?,canonical_name:r.get(1)?,entity_type:r.get(2)?,description:r.get(3)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
+    let norms:Vec<Vec<char>>=entities.iter().map(|e|normalized_alias(&e.canonical_name).chars().collect()).collect();
+    let mut out:Vec<EntityMergeSuggestion>=Vec::new();
+    for i in 0..entities.len() {
+        for j in (i+1)..entities.len() {
+            if entities[i].entity_type!=entities[j].entity_type { continue; }
+            let (na,nb)=(&norms[i],&norms[j]);
+            if na.is_empty()||nb.is_empty() { continue; }
+            let (sa,sb):(String,String)=(na.iter().collect(),nb.iter().collect());
+            let (score,reason)=if sa==sb {
+                (1.0,"identical normalized name")
+            } else if sa.contains(&sb)||sb.contains(&sa) {
+                let (shorter,longer)=(na.len().min(nb.len()) as f64,na.len().max(nb.len()) as f64);
+                (0.9_f64.min(0.6+0.4*shorter/longer),"one name contains the other")
+            } else {
+                let dist=edit_distance(na,nb);
+                let longer=na.len().max(nb.len());
+                let sim=1.0-(dist as f64)/(longer as f64);
+                // Only near-matches: at most 2 edits and >= 0.7 similarity.
+                if dist<=2&&sim>=0.7 { (sim,"small edit distance") } else { continue }
+            };
+            out.push(EntityMergeSuggestion{a:entities[i].clone(),b:entities[j].clone(),score,reason:reason.into()});
+        }
+    }
+    out.sort_by(|x,y|y.score.partial_cmp(&x.score).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
 #[tauri::command]
 pub fn list_knowledge_entities(project_path:String)->Result<Vec<EntityDetail>,KnowledgeError>{let c=db::open_project(&project_path,false)?;let mut q=c.prepare("SELECT entity_id,canonical_name,entity_type,description FROM entities ORDER BY canonical_name").map_err(sql)?;let entities=q.query_map([],|r|Ok(EntityRecord{entity_id:r.get(0)?,canonical_name:r.get(1)?,entity_type:r.get(2)?,description:r.get(3)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;let mut out=Vec::new();for entity in entities{let mut aq=c.prepare("SELECT alias FROM entity_aliases WHERE entity_id=?1 AND normalized_alias<>?2 ORDER BY alias").map_err(sql)?;let aliases=aq.query_map(params![entity.entity_id,normalized_alias(&entity.canonical_name)],|r|r.get(0)).map_err(sql)?.collect::<Result<Vec<String>,_>>().map_err(sql)?;let mut nq=c.prepare("SELECT node_id FROM graph_nodes WHERE entity_id=?1 ORDER BY node_id").map_err(sql)?;let node_ids=nq.query_map([&entity.entity_id],|r|r.get(0)).map_err(sql)?.collect::<Result<Vec<String>,_>>().map_err(sql)?;out.push(EntityDetail{entity,aliases,node_ids});}Ok(out)}
 #[tauri::command]
@@ -328,6 +381,34 @@ pub fn list_allowed_relation_types(project_path:String,graph_id:String,source_en
 
 #[tauri::command]
 pub fn get_knowledge_graph_snapshot(project_path:String,graph_id:String)->Result<KnowledgeGraphSnapshot,KnowledgeError>{let c=db::open_project(&project_path,false)?;let graph=c.query_row("SELECT graph_id,graph_name,purpose FROM graphs WHERE graph_id=?1",[&graph_id],|r|Ok(GraphRecord{graph_id:r.get(0)?,graph_name:r.get(1)?,purpose:r.get(2)?})).optional().map_err(sql)?.ok_or_else(||fail(KnowledgeErrorCode::NotFound,"Graph does not exist"))?;let mut q=c.prepare("SELECT n.node_id,n.graph_id,n.entity_id,n.role,e.entity_id,e.canonical_name,e.entity_type,e.description FROM graph_nodes n JOIN entities e ON e.entity_id=n.entity_id WHERE n.graph_id=?1 ORDER BY e.canonical_name").map_err(sql)?;let nodes=q.query_map([&graph_id],|r|Ok(SnapshotNode{node:GraphNodeRecord{node_id:r.get(0)?,graph_id:r.get(1)?,entity_id:r.get(2)?,role:r.get(3)?},entity:EntityRecord{entity_id:r.get(4)?,canonical_name:r.get(5)?,entity_type:r.get(6)?,description:r.get(7)?}})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;let mut aq=c.prepare("SELECT assertion_id,graph_id,subject_entity_id,predicate,object_entity_id,origin,status,created_at FROM assertions WHERE graph_id=?1 AND status IN ('active','review') ORDER BY created_at").map_err(sql)?;let assertions=aq.query_map([&graph_id],|r|Ok(AssertionRecord{assertion_id:r.get(0)?,graph_id:r.get(1)?,subject_entity_id:r.get(2)?,predicate:r.get(3)?,object_entity_id:r.get(4)?,origin:r.get(5)?,status:r.get(6)?,created_at:r.get(7)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?.into_iter().map(|a|{let mut eq=c.prepare("SELECT evidence_id,assertion_id,page_id,section_id,evidence_type,quote,confidence FROM assertion_evidence WHERE assertion_id=?1").map_err(sql)?;let evidence=eq.query_map([&a.assertion_id],|r|Ok(AssertionEvidenceRecord{evidence_id:r.get(0)?,assertion_id:r.get(1)?,page_id:r.get(2)?,section_id:r.get(3)?,evidence_type:r.get(4)?,quote:r.get(5)?,confidence:r.get(6)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;let state=if evidence.iter().any(|e|e.evidence_type=="contradicts"){ "contradicted" }else if evidence.iter().any(|e|e.evidence_type=="supports"||e.evidence_type=="mentions"){ "documented" }else{ "manual" };Ok(SnapshotAssertion{assertion:a,evidence_state:state.into(),evidence})}).collect::<Result<Vec<_>,KnowledgeError>>()?;Ok(KnowledgeGraphSnapshot{graph,nodes,assertions})}
+
+/// Merge every graph an entity participates in into one neighborhood view.
+/// Returns the entity's direct assertions (subject or object, active/review)
+/// across all graphs, both endpoint nodes of each, and the distinct graphs
+/// touched — so the graph screen can open on a per-entity view rather than a
+/// single raw graph.
+#[tauri::command]
+pub fn get_entity_neighborhood(project_path:String,entity_id:String)->Result<EntityNeighborhood,KnowledgeError>{
+ let c=db::open_project(&project_path,false)?;
+ let mut aq=c.prepare("SELECT assertion_id,graph_id,subject_entity_id,predicate,object_entity_id,origin,status,created_at FROM assertions WHERE (subject_entity_id=?1 OR object_entity_id=?1) AND status IN ('active','review') ORDER BY created_at").map_err(sql)?;
+ let assertions=aq.query_map([&entity_id],|r|Ok(AssertionRecord{assertion_id:r.get(0)?,graph_id:r.get(1)?,subject_entity_id:r.get(2)?,predicate:r.get(3)?,object_entity_id:r.get(4)?,origin:r.get(5)?,status:r.get(6)?,created_at:r.get(7)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
+ let assertions=assertions.into_iter().map(|a|{let mut eq=c.prepare("SELECT evidence_id,assertion_id,page_id,section_id,evidence_type,quote,confidence FROM assertion_evidence WHERE assertion_id=?1").map_err(sql)?;let evidence=eq.query_map([&a.assertion_id],|r|Ok(AssertionEvidenceRecord{evidence_id:r.get(0)?,assertion_id:r.get(1)?,page_id:r.get(2)?,section_id:r.get(3)?,evidence_type:r.get(4)?,quote:r.get(5)?,confidence:r.get(6)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;let state=if evidence.iter().any(|e|e.evidence_type=="contradicts"){ "contradicted" }else if evidence.iter().any(|e|e.evidence_type=="supports"||e.evidence_type=="mentions"){ "documented" }else{ "manual" };Ok(SnapshotAssertion{assertion:a,evidence_state:state.into(),evidence})}).collect::<Result<Vec<_>,KnowledgeError>>()?;
+ // Collect the (graph_id, entity_id) node pairs both endpoints reference so the
+ // canvas can render each relationship's subject and object.
+ let mut node_keys:std::collections::HashSet<(String,String)>=std::collections::HashSet::new();
+ let mut graph_ids:std::collections::HashSet<String>=std::collections::HashSet::new();
+ for a in &assertions { graph_ids.insert(a.assertion.graph_id.clone()); node_keys.insert((a.assertion.graph_id.clone(),a.assertion.subject_entity_id.clone())); node_keys.insert((a.assertion.graph_id.clone(),a.assertion.object_entity_id.clone())); }
+ let mut nodes=Vec::new();
+ for (graph_id,eid) in &node_keys { if let Some(node)=c.query_row("SELECT n.node_id,n.graph_id,n.entity_id,n.role,e.entity_id,e.canonical_name,e.entity_type,e.description FROM graph_nodes n JOIN entities e ON e.entity_id=n.entity_id WHERE n.graph_id=?1 AND n.entity_id=?2 LIMIT 1",params![graph_id,eid],|r|Ok(SnapshotNode{node:GraphNodeRecord{node_id:r.get(0)?,graph_id:r.get(1)?,entity_id:r.get(2)?,role:r.get(3)?},entity:EntityRecord{entity_id:r.get(4)?,canonical_name:r.get(5)?,entity_type:r.get(6)?,description:r.get(7)?}})).optional().map_err(sql)? { nodes.push(node); } }
+ nodes.sort_by(|a,b|a.entity.canonical_name.cmp(&b.entity.canonical_name));
+ let mut graphs=Vec::new();
+ for graph_id in &graph_ids { if let Some(g)=c.query_row("SELECT graph_id,graph_name,purpose FROM graphs WHERE graph_id=?1",[graph_id],|r|Ok(GraphRecord{graph_id:r.get(0)?,graph_name:r.get(1)?,purpose:r.get(2)?})).optional().map_err(sql)? { graphs.push(g); } }
+ graphs.sort_by(|a,b|a.graph_name.cmp(&b.graph_name));
+ Ok(EntityNeighborhood{graphs,nodes,assertions})
+}
+
+#[tauri::command]
+pub fn list_graphs_for_page(project_path:String,page_path:String)->Result<Vec<GraphRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;let mut q=c.prepare("SELECT DISTINCT g.graph_id,g.graph_name,g.purpose FROM pages p JOIN assertion_evidence ev ON ev.page_id=p.page_id JOIN assertions a ON a.assertion_id=ev.assertion_id JOIN graphs g ON g.graph_id=a.graph_id WHERE p.page_path=?1 ORDER BY g.graph_name").map_err(sql)?;let rows=q.query_map([page_path],|r|Ok(GraphRecord{graph_id:r.get(0)?,graph_name:r.get(1)?,purpose:r.get(2)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;Ok(rows)}
 
 #[tauri::command]
 pub fn get_knowledge_delete_impact(project_path:String,input:DeleteImpactInput)->Result<DeleteImpact,KnowledgeError>{

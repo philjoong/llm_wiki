@@ -41,8 +41,6 @@ describe("resetProjectState — Zustand stores", () => {
       activeConversationId: "c1",
       isStreaming: true,
       streamingContent: "partial",
-      mode: "ingest",
-      ingestSource: "/some/file",
     })
 
     await resetProjectState()
@@ -53,8 +51,6 @@ describe("resetProjectState — Zustand stores", () => {
     expect(chat.activeConversationId).toBeNull()
     expect(chat.isStreaming).toBe(false)
     expect(chat.streamingContent).toBe("")
-    expect(chat.mode).toBe("chat")
-    expect(chat.ingestSource).toBeNull()
   })
 
   it("clears review store items", async () => {

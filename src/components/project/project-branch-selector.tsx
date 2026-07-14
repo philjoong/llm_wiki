@@ -1,20 +1,18 @@
 import { useEffect, useRef, useState } from "react"
 import { gitLsRemote, gitRemoteAdd, gitCreateBranch, gitPush } from "@/commands/git"
 import { useWikiStore } from "@/stores/wiki-store"
-import { getRecentProjects, saveSelectedBranch, saveGitRemoteUrl, loadGitRemoteUrl, removeFromRecentProjects } from "@/lib/project-store"
+import { getRecentProjects, saveSelectedBranch, saveGitRemoteUrl, loadGitRemoteUrl, removeFromRecentProjects, saveGitToken, loadGitToken } from "@/lib/project-store"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Loader2, GitBranch, HardDrive, RefreshCw, Upload, Trash2, Download, PackageOpen } from "lucide-react"
 import { exportProject, importProject } from "@/commands/project-transfer"
 import { openProject } from "@/commands/fs"
 
-const ENV_GIT_TOKEN = import.meta.env.VITE_GIT_TOKEN
-
-function buildRepoUrl(baseUrl: string): string {
+function buildRepoUrl(baseUrl: string, token?: string | null): string {
   const cleaned = baseUrl.replace(/^https?:\/\//, "")
   if (!cleaned) return ""
-  if (ENV_GIT_TOKEN) {
-    return `https://oauth2:${encodeURIComponent(ENV_GIT_TOKEN)}@${cleaned}`
+  if (token) {
+    return `https://oauth2:${encodeURIComponent(token)}@${cleaned}`
   }
   return `https://${cleaned}`
 }
@@ -33,6 +31,7 @@ export function ProjectBranchSelector() {
   const [pushingBranch, setPushingBranch] = useState<string | null>(null)
   const [pushError, setPushError] = useState<string | null>(null)
   const [newBranchName, setNewBranchName] = useState("")
+  const [newBranchToken, setNewBranchToken] = useState("")
   const [exportingBranch, setExportingBranch] = useState<string | null>(null)
   const [importingProject, setImportingProject] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
@@ -95,6 +94,10 @@ export function ProjectBranchSelector() {
   async function handleCreateBranch() {
     const name = newBranchName.trim()
     if (!name) return
+    const token = newBranchToken.trim()
+    if (token) {
+      await saveGitToken(name, token)
+    }
     await handleSelectBranch(name)
   }
 
@@ -140,7 +143,8 @@ export function ProjectBranchSelector() {
     setPushingBranch(item.name)
     setPushError(null)
     try {
-      const repoUrl = buildRepoUrl(remoteUrlInput.trim())
+      const token = await loadGitToken(item.name)
+      const repoUrl = buildRepoUrl(remoteUrlInput.trim(), token)
       const remoteBranches = await gitLsRemote(repoUrl)
       if (remoteBranches.includes(item.name)) {
         throw new Error(`Branch "${item.name}" already exists on remote`)
@@ -303,6 +307,14 @@ export function ProjectBranchSelector() {
               Create
             </Button>
           </div>
+          <Input
+            placeholder="Git token (optional, remote push용)"
+            value={newBranchToken}
+            onChange={(e) => setNewBranchToken(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleCreateBranch()}
+            type="password"
+            className="font-mono text-xs"
+          />
           <Button
             variant="outline"
             className="w-full gap-2"

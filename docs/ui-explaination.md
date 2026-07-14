@@ -30,8 +30,8 @@ App.tsx
 
 ## 3. Wiki / Chat 화면 (기본 화면)
 
-- **파일**: [chat-panel.tsx](../src/components/chat/chat-panel.tsx) (+ `chat-message.tsx`, `chat-input.tsx`, `chat-reference-panel.tsx`, `file-tree.tsx`)
-- **역할**: 질문 입력 → 검색·그래프 확장·LLM 답변 스트리밍. 좌측에 프로젝트 파일 트리 표시.
+- **파일**: [chat-panel.tsx](../src/components/chat/chat-panel.tsx) (+ `chat-message.tsx`, `chat-input.tsx`, `chat-reference-panel.tsx`)
+- **역할**: 질문 입력 → 검색·그래프 확장·LLM 답변 스트리밍. 좌측에는 대화 목록 사이드바(`ConversationSidebar`)만 있고 프로젝트 파일 트리는 없다. 생성된 문서를 파일 단위로 브라우징하려면 아래 5번 Graph 화면의 `files` 탭을 쓴다.
 - **연결 파이프라인**: 질의응답 전체 흐름(검색 → 그래프 확장 → Cypher 컨텍스트 → LLM 스트리밍) → **[answer-guide.md](answer-guide.md)** 참고
 
 ### Raw data injection (IconSidebar에서 트리거)
@@ -55,16 +55,18 @@ App.tsx
 
 ## 5. Graph 화면
 
-- **파일**: [graph-view.tsx](../src/components/graph/graph-view.tsx) (탭: `knowledge`, `graphs`, `entity` — `files` 탭은 없다)
+- **파일**: [graph-view.tsx](../src/components/graph/graph-view.tsx) (탭: `knowledge`, `graphs`, `entity`, `files`)
 - **역할**:
-  - `knowledge`: 그래프 시각화 캔버스([falkor-canvas.tsx](../src/components/graph/falkor-canvas.tsx), `@falkordb/canvas` 래퍼), 그래프 선택, 노드/수동 assertion 추가, 노드·엣지 클릭으로 상세/삭제, review 상태 assertion의 승인·거부, 근거(evidence) 페이지를 Wiki 화면에서 열기
+  - `knowledge`: 그래프 시각화 캔버스([falkor-canvas.tsx](../src/components/graph/falkor-canvas.tsx), `@falkordb/canvas` 래퍼). **기본 진입 시 Entity 모드**로, 엔티티를 선택하면 그 엔티티가 등장하는 **모든 그래프의 관계를 병합**해 하나의 캔버스로 보여준다(`get_entity_neighborhood` Rust 커맨드). Graph 모드로 토글하면 특정 그래프 하나만 골라 노드/수동 assertion 추가·삭제 등 편집이 가능하다(편집은 그래프 컨텍스트가 필요하므로 Graph 모드 전용). 우측 패널에는 relation type 리스트가 색상칩과 함께 뜨며, relation type을 클릭하면 해당 관계만 캔버스·Facts에 필터링된다. 노드·엣지 클릭으로 상세/삭제, review 상태 assertion의 승인·거부, 근거(evidence) 페이지를 Wiki 화면에서 열기도 지원한다. assertion은 `주어 predicate 목적어` 문장 형태로 표시하며 raw ID는 hover 툴팁으로만 노출한다. 사용하지 않는 디폴트 `main` 그래프는 셀렉터/목록에서 숨겨진다(`isUserVisibleGraph`)
   - `graphs`: 그래프 목록 등록/이름변경/삭제, 그래프별 relation type 관리([graphs-tab.tsx](../src/components/layout/graphs-tab.tsx)) — "Graph administration is deliberately backed by knowledge.sqlite only"
   - `entity`: 엔티티 관리([entity-view.tsx](../src/components/entity/entity-view.tsx)) — 검색/생성, canonical name rename, alias 추가/삭제, **merge**(엔티티 ID 입력 병합), **split**(신규 이름 + node-id 목록으로 분할), 삭제 시 영향받는 projection/assertion/page 개수 확인
+  - `files`: `db/` 하위 생성 문서 목록(`listDbFiles`) → 문서 선택 시 그 문서가 근거(evidence)로 쓰인 관련 그래프 목록(`listGraphsForPage` = Rust `list_graphs_for_page`, `page_path`로 `assertion_evidence→assertions→graphs` 역추적) → 그래프 선택 시 `getKnowledgeGraphSnapshot`을 `knowledge` 탭과 동일한 캔버스로 조회 표시(읽기 전용). `FilesTab` 컴포넌트가 담당
 - **연결 파이프라인**: [commands/knowledge.ts](../src/commands/knowledge.ts) (Tauri invoke 바인딩) → `src-tauri/src/knowledge/` 모듈(`commands.rs`, `db.rs`, `model.rs`, `queries.rs`, `schema.rs` 등, SQLite `knowledge.sqlite` 기반). 캔버스 데이터 변환은 [falkor-visualization.ts](../src/lib/falkor-visualization.ts)가 담당한다.
 - **미문서화**: Graph 화면 전체를 다루는 문서가 없다. 아래를 다루는 문서가 필요:
   - knowledge 탭의 그래프 스냅샷 조회/수동 편집/assertion review 승인 흐름
   - graphs 탭에서 등록한 그래프·relation type이 ingest 파이프라인의 graph assignment(§4, [ingest-current-state.md](ingest-current-state.md))가 쓰는 카탈로그와 어떻게 연결되는지 — `src/lib/graph-policy.ts`는 더 이상 존재하지 않으며, 그래프·relation type은 파일이 아니라 knowledge.sqlite 레코드로 관리된다
   - entity 탭의 merge/split이 ingest 쪽 엔티티 연동과 어떻게 대응하는지
+  - files 탭의 문서→관련 그래프 역추적(`list_graphs_for_page`)이 evidence 링크에 의존한다는 점 — 문서가 어떤 assertion의 근거로도 쓰이지 않았으면 "No related graphs"가 뜬다
 
 ---
 

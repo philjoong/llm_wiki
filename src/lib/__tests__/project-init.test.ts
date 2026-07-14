@@ -16,8 +16,6 @@ vi.mock("@/commands/git", () => ({
 vi.mock("@/commands/knowledge", () => ({
   bootstrapKnowledgeDb: vi.fn().mockResolvedValue({ schemaVersion: 1, foreignKeysEnabled: true, bootstrapped: true }),
   recoverIngestTransactions: vi.fn().mockResolvedValue(undefined),
-  listKnowledgeGraphs: vi.fn().mockResolvedValue([]),
-  registerGraph: vi.fn().mockResolvedValue({ graphId: "g", graphName: "main", purpose: "General project knowledge" }),
 }))
 
 import { createDirectory, fileExists, readFile, seedDataTypes, seedQuestionTypes, writeFile } from "@/commands/fs"

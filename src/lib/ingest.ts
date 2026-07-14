@@ -7,7 +7,6 @@ import { streamCodexCli } from "@/lib/codex-cli-transport"
 import type { ChatMessage } from "@/lib/llm-providers"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { useWikiStore } from "@/stores/wiki-store"
-import { useChatStore } from "@/stores/chat-store"
 import { useActivityStore } from "@/stores/activity-store"
 import { useReviewStore, type ReviewItem } from "@/stores/review-store"
 import { getFileName, normalizePath } from "@/lib/path-utils"
@@ -16,7 +15,7 @@ import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
 import { parseSourceRefs, SourceRefValidationError } from "@/lib/sources-merge"
-import { listKnowledgeGraphs, listKnowledgeRelationTypes, discardSectionAssertions } from "@/commands/knowledge"
+import { listKnowledgeGraphs, listKnowledgeRelationTypes, discardSectionAssertions, registerGraph } from "@/commands/knowledge"
 import {
   loadRejectionLog,
   findRelatedRejections,
@@ -1206,6 +1205,18 @@ async function writeFileBlocks(
   return { writtenPaths, warnings, hardFailures, proposals }
 }
 
+/**
+ * Normalize an LLM-produced entity name so the same real-world entity resolves
+ * to one string across independent chunk calls. Strips a single trailing
+ * parenthetical qualifier ("검(무기)" → "검"), collapses internal whitespace,
+ * and trims. Mirrors the intent of the Rust-side alias normalization (trim +
+ * NFKC + lowercase) but preserves the display casing the canonical_name keeps.
+ * Exported for tests.
+ */
+export function normalizeEntityName(name: string): string {
+  return name.normalize("NFKC").replace(/\s*[（(][^（()）]*[)）]\s*$/, "").replace(/\s+/g, " ").trim()
+}
+
 /** Decomposition output: a single meaningful section from the source document. */
 export interface DecomposedSection {
   source_range: string
@@ -1221,20 +1232,25 @@ export async function extractKnowledgeAssertionWrites(
   sectionIds?:string[],
 ):Promise<IngestAssertionWrite[]> {
   const graphs=await listKnowledgeGraphs(projectPath)
-  if(!graphs.length)return []
   const catalogs=await Promise.all(graphs.map(async(graph)=>({graph,relations:await listKnowledgeRelationTypes(projectPath,graph.graphId)})))
   const allTargets=documents.flatMap((document)=>{const parsed=parseMarkdownV2(document.content);return parsed.sections.map((section)=>({key:`${parsed.page.page_id}:${section.sectionId}`,pageId:parsed.page.page_id,sectionId:section.sectionId,text:section.body}))})
   const targets=sectionIds?allTargets.filter((target)=>sectionIds.includes(target.sectionId)):allTargets
   if(targets.length===0)return []
+  const purposePrefixes=Array.from(new Set(graphs.map((g)=>g.graphName.split("_")[0]).filter(Boolean)))
   const prompt=[
     "Extract factual graph assertions from the supplied Markdown v2 sections.",
-    "Use only graphId values listed in the catalog. Predicates must be uppercase snake case.",
-    "Reuse an existing predicate when it fits. A new predicate requires a precise relationDescription.",
+    "Assign each assertion to the graph whose domain best matches the relationship.",
+    "Prefer an existing graph from the catalog: set graphId to its id and leave newGraph unset.",
+    "If no catalog graph fits, propose a new graph: set newGraph=true, omit graphId, and set graphName.",
+    "graphName must be lower snake_case shaped as {purpose}_{subjectType}_{action}_{objectType} — e.g. combat_character_attacks_enemy, quest_npc_gives_item.",
+    purposePrefixes.length?`Reuse an existing purpose prefix when one fits: ${purposePrefixes.join(", ")}.`:"",
+    "Predicates must be uppercase snake case. Reuse an existing predicate when it fits; a new predicate requires a precise relationDescription.",
     `Entity types must be one of: ${ENTITY_TYPES.join(", ")}. Do not emit scalar values as entities.`,
-    "Return only JSON: {\"assertions\":[{\"targetKey\":\"page:section\",\"graphId\":\"...\",\"subjectName\":\"...\",\"subjectType\":\"concept\",\"predicate\":\"...\",\"relationDescription\":\"...\",\"objectName\":\"...\",\"objectType\":\"concept\",\"quote\":\"exact supporting text\"}]}",
+    "Entity names must be the canonical short name of the entity: strip parenthetical qualifiers, appositives, honorifics, and trailing particles; do not append descriptive modifiers. The SAME real-world entity must get the SAME exact string every time so it deduplicates across sections.",
+    "Return only JSON: {\"assertions\":[{\"targetKey\":\"page:section\",\"graphId\":\"...\",\"newGraph\":false,\"graphName\":\"...\",\"subjectName\":\"...\",\"subjectType\":\"concept\",\"predicate\":\"...\",\"relationDescription\":\"...\",\"objectName\":\"...\",\"objectType\":\"concept\",\"quote\":\"exact supporting text\"}]}",
     "Graph catalog:",JSON.stringify(catalogs.map(({graph,relations})=>({graphId:graph.graphId,name:graph.graphName,purpose:graph.purpose,relations:relations.map((r)=>({name:r.name,subjectTypes:r.subjectTypes,objectTypes:r.objectTypes}))}))),
     "Sections:",JSON.stringify(targets.map(({key,text})=>({targetKey:key,text}))),
-  ].join("\n")
+  ].filter(Boolean).join("\n")
   const raw=await callModel(llmConfig,"You produce validated knowledge graph write plans.",prompt,signal,projectPath,12000,true)
   let parsed:unknown
   try{parsed=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/, ""))}catch{throw new Error("VALIDATION_FAILED: graph assignment was not valid JSON")}
@@ -1242,7 +1258,37 @@ export async function extractKnowledgeAssertionWrites(
   if(!Array.isArray(values))throw new Error("VALIDATION_FAILED: graph assignment has no assertions array")
   const byKey=new Map(targets.map((target)=>[target.key,target]))
   const graphIds=new Set(graphs.map((graph)=>graph.graphId))
-  return values.map((rawValue)=>{const value=rawValue as Record<string,unknown>;const target=byKey.get(String(value.targetKey??""));const subjectType=String(value.subjectType??"") as EntityType;const objectType=String(value.objectType??"") as EntityType;const quote=String(value.quote??"");if(!target||!graphIds.has(String(value.graphId??""))||!ENTITY_TYPES.includes(subjectType)||!ENTITY_TYPES.includes(objectType)||!target.text.includes(quote))throw new Error("VALIDATION_FAILED: graph assignment references an invalid graph, section, type, or quote");return{graphId:String(value.graphId),subjectName:String(value.subjectName??"").trim(),subjectType,predicate:String(value.predicate??"").trim(),relationDescription:String(value.relationDescription??"").trim(),objectName:String(value.objectName??"").trim(),objectType,pageId:target.pageId,sectionId:target.sectionId,quote}})
+  const GRAPH_NAME=/^[a-z0-9]+(_[a-z0-9]+)+$/
+  // Register any newly proposed graph once, then resolve its name to a graphId.
+  // Kept out of the atomic commit deliberately: an orphaned empty graph from a
+  // later commit failure is harmless and removable from the graphs tab.
+  const newGraphIds=new Map<string,string>()
+  const drafts=values.map((rawValue)=>{
+    const value=rawValue as Record<string,unknown>
+    const target=byKey.get(String(value.targetKey??""))
+    const subjectType=String(value.subjectType??"") as EntityType
+    const objectType=String(value.objectType??"") as EntityType
+    const quote=String(value.quote??"")
+    const isNew=value.newGraph===true
+    const graphName=String(value.graphName??"").trim()
+    const graphId=String(value.graphId??"")
+    const validGraph=isNew?GRAPH_NAME.test(graphName):graphIds.has(graphId)
+    if(!target||!validGraph||!ENTITY_TYPES.includes(subjectType)||!ENTITY_TYPES.includes(objectType)||!target.text.includes(quote))throw new Error("VALIDATION_FAILED: graph assignment references an invalid graph, section, type, or quote")
+    return{isNew,graphName,graphId,subjectName:normalizeEntityName(String(value.subjectName??"")),subjectType,predicate:String(value.predicate??"").trim(),relationDescription:String(value.relationDescription??"").trim(),objectName:normalizeEntityName(String(value.objectName??"")),objectType,pageId:target.pageId,sectionId:target.sectionId,quote}
+  })
+  const resolveGraphId=async(draft:typeof drafts[number]):Promise<string>=>{
+    if(!draft.isNew)return draft.graphId
+    const existing=graphs.find((g)=>g.graphName===draft.graphName)
+    if(existing)return existing.graphId
+    const cached=newGraphIds.get(draft.graphName)
+    if(cached)return cached
+    const created=await registerGraph(projectPath,{graphId:`graph-${crypto.randomUUID()}`,graphName:draft.graphName,purpose:draft.relationDescription})
+    newGraphIds.set(draft.graphName,created.graphId)
+    return created.graphId
+  }
+  const writes:IngestAssertionWrite[]=[]
+  for(const draft of drafts){const graphId=await resolveGraphId(draft);writes.push({graphId,subjectName:draft.subjectName,subjectType:draft.subjectType,predicate:draft.predicate,relationDescription:draft.relationDescription,objectName:draft.objectName,objectType:draft.objectType,pageId:draft.pageId,sectionId:draft.sectionId,quote:draft.quote})}
+  return writes
 }
 
 export function buildDecompositionPrompt(dbIndex: string, sourceContent = "", dismissalContext = ""): string {
@@ -1367,194 +1413,10 @@ export function buildFileBlocksFromSections(
   return blocks.join("\n\n")
 }
 
-function getStore() {
-  return useChatStore.getState()
-}
-
 async function tryReadFile(path: string): Promise<string> {
   try {
     return await readFile(path)
   } catch {
     return ""
   }
-}
-
-export async function startIngest(
-  projectPath: string,
-  sourcePath: string,
-  llmConfig: LlmConfig,
-  signal?: AbortSignal,
-): Promise<void> {
-  const pp = normalizePath(projectPath)
-  const sp = normalizePath(sourcePath)
-  const store = getStore()
-  store.setMode("ingest")
-  store.setIngestSource(sp)
-  store.clearMessages()
-  store.setStreaming(false)
-
-  const [sourceContent, index, graphs] = await Promise.all([
-    tryReadFile(sp),
-    tryReadFile(`${pp}/db/index.md`),
-    listKnowledgeGraphs(pp),
-  ])
-  const graphCatalog = graphs.length ? `## Knowledge graphs\n${graphs.map((g)=>`- ${g.graphName}: ${g.purpose}`).join("\n")}` : ""
-
-  const fileName = getFileName(sp)
-
-  const systemPrompt = [
-    "You are a knowledgeable assistant helping to build a wiki from source documents.",
-    "",
-    languageRule(sourceContent),
-    "",
-    index ? `## Current Wiki Index\n${index}` : "",
-    graphCatalog,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-
-  const userMessage = [
-    `I'm ingesting the following source file into my wiki: **${fileName}**`,
-    "",
-    "Please read it carefully and present the key takeaways, important concepts, and information that would be valuable to capture in the wiki.",
-    "",
-    "---",
-    `**File: ${fileName}**`,
-    "```",
-    sourceContent || "(empty file)",
-    "```",
-  ].join("\n")
-
-  store.addMessage("user", userMessage)
-  store.setStreaming(true)
-
-  let accumulated = ""
-
-  await streamChat(
-    llmConfig,
-    [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ],
-    {
-      onToken: (token) => {
-        accumulated += token
-        getStore().appendStreamToken(token)
-      },
-      onDone: () => {
-        getStore().finalizeStream(accumulated)
-      },
-      onError: (err) => {
-        getStore().finalizeStream(`Error during ingest: ${err.message}`)
-      },
-    },
-    signal,
-  )
-}
-
-export async function executeIngestWrites(
-  projectPath: string,
-  llmConfig: LlmConfig,
-  userGuidance?: string,
-  signal?: AbortSignal,
-): Promise<string[]> {
-  const pp = normalizePath(projectPath)
-  const store = getStore()
-
-  const [index, graphs] = await Promise.all([
-    tryReadFile(`${pp}/db/index.md`),
-    listKnowledgeGraphs(pp),
-  ])
-  const relationCatalog = (await Promise.all(graphs.map(async(g)=>({g,types:await listKnowledgeRelationTypes(pp,g.graphId)})))).map(({g,types})=>`- ${g.graphName}: ${types.map((t)=>t.name).join(", ")}`).join("\n")
-
-  const conversationHistory = store.messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
-
-  const writePrompt = [
-    "Based on our discussion, please generate the wiki files that should be created or updated.",
-    "",
-    userGuidance ? `Additional guidance: ${userGuidance}` : "",
-    "",
-    index ? `## Current Wiki Index\n${index}` : "",
-    relationCatalog ? `## Knowledge graph relation types\n${relationCatalog}` : "",
-    "",
-    "Output ONLY the file contents in this exact format for each file:",
-    "```",
-    "---FILE: db/path/to/file.md---",
-    "---",
-    "schema: llm-wiki/page/v2",
-    "page_id: page-<stable ULID>",
-    "title: Page title",
-    "page_type: guide",
-    "sections:",
-    "  sec-<stable ULID>:",
-    "    section_type: overview",
-    "---",
-    "# Page title",
-    "## Section heading {#sec-<same stable ULID>}",
-    "(section content)",
-    "---END FILE---",
-    "```",
-    "",
-    "For db/log.md, include a log entry to append. For all other files, output the complete file content.",
-    "Use relative paths from the project root (e.g., db/sources/topic.md).",
-    "Do not include any other text outside the FILE blocks.",
-  ]
-    .filter((line) => line !== undefined)
-    .join("\n")
-
-  conversationHistory.push({ role: "user", content: writePrompt })
-
-  store.addMessage("user", writePrompt)
-  store.setStreaming(true)
-
-  let accumulated = ""
-
-  // In auto mode, fall back to detecting language from the chat history
-  // (user's discussion messages) rather than the empty string, which would
-  // default to English regardless of the source content.
-  const historyText = conversationHistory
-    .map((m) => m.content)
-    .join("\n")
-    .slice(0, 2000)
-
-  const systemPrompt = [
-    "You are a wiki generation assistant. Your task is to produce structured wiki file contents.",
-    "",
-    languageRule(historyText),
-    relationCatalog ? `## Knowledge graph relation types\n${relationCatalog}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-
-  await streamChat(
-    llmConfig,
-    [{ role: "system", content: systemPrompt }, ...conversationHistory],
-    {
-      onToken: (token) => {
-        accumulated += token
-        getStore().appendStreamToken(token)
-      },
-      onDone: () => {
-        getStore().finalizeStream(accumulated)
-      },
-      onError: (err) => {
-        getStore().finalizeStream(`Error generating wiki files: ${err.message}`)
-      },
-    },
-    signal,
-  )
-
-  const result = await writeFileBlocks(pp, accumulated, "interactive-ingest", llmConfig, signal)
-  const writtenPaths = result.writtenPaths.map((path) => `${pp}/${path}`)
-
-  if (writtenPaths.length > 0) {
-    const fileList = writtenPaths.map((p) => `- ${p}`).join("\n")
-    getStore().addMessage("system", `Files written to db:\n${fileList}`)
-  } else {
-    getStore().addMessage("system", "No files were written. The LLM response did not contain valid FILE blocks.")
-  }
-
-  return writtenPaths
 }

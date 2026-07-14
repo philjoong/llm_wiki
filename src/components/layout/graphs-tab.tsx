@@ -11,7 +11,7 @@ import {
   renameKnowledgeGraph,
   renameKnowledgeRelationType,
 } from "@/commands/knowledge"
-import type { GraphRecord, RelationTypeRecord } from "@/lib/knowledge/types"
+import { isUserVisibleGraph, type GraphRecord, type RelationTypeRecord } from "@/lib/knowledge/types"
 
 interface GraphsTabProps { onPolicySaved?: (graphNames: string[]) => void }
 const predicate = (value: string) => value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_")
@@ -33,7 +33,7 @@ export function GraphsTab({ onPolicySaved }: GraphsTabProps = {}) {
   const notify = (items: GraphRecord[]) => onPolicySaved?.(items.map((item) => item.graphName))
   const reload = async () => {
     if (!projectPath) return
-    const next = await listKnowledgeGraphs(projectPath)
+    const next = (await listKnowledgeGraphs(projectPath)).filter(isUserVisibleGraph)
     setGraphs(next); notify(next)
     const entries = await Promise.all(next.map(async (graph) => [graph.graphId, await listKnowledgeRelationTypes(projectPath, graph.graphId)] as const))
     setRelations(Object.fromEntries(entries))

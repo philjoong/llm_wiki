@@ -19,8 +19,6 @@ export async function resetProjectState(): Promise<void> {
     conversations: [],
     messages: [],
     activeConversationId: null,
-    mode: "chat",
-    ingestSource: null,
     isStreaming: false,
     streamingContent: "",
   })

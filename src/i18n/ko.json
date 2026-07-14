@@ -46,11 +46,9 @@
   },
   "chat": {
     "placeholder": "wiki에 질문해보세요...",
-    "ingestPlaceholder": "자료에 대해 토론하거나 추가 질문을 하세요...",
     "saveToWiki": "Wiki에 저장",
     "saving": "저장 중...",
     "saved": "저장됨!",
-    "writeToWiki": "Wiki에 쓰기",
     "emptyHint": "질문을 하거나 자료 ingest를 시작하세요.",
     "sources": "출처"
   },
@@ -313,8 +311,6 @@
     "clearCompleted": "완료 항목 정리"
   },
   "fileTree": {
-    "noProject": "열려 있는 프로젝트 없음",
-    "openInExplorer": "탐색기에서 열기",
     "inject": "지식 추출",
     "injecting": "지식 추출 중...",
     "injectDialogTitle": "지식 추출할 파일 선택",

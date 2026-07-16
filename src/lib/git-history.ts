@@ -1,6 +1,7 @@
 import {
   gitLog,
   gitShow,
+  gitShowFile,
   gitDiff,
   gitCheckoutPath,
   gitCommit,
@@ -9,6 +10,10 @@ import {
   type CommitDetail,
   type RevertResult,
 } from "@/commands/git"
+import { readFile } from "@/commands/fs"
+import { getKnowledgePage } from "@/commands/knowledge"
+import { parseMarkdownV2 } from "@/lib/markdown-v2"
+import { normalizePath } from "@/lib/path-utils"
 
 /** Page size for the history list. Tuned so the initial fetch covers a
  *  small project's full history without paginating, but doesn't pull
@@ -114,4 +119,173 @@ export async function revertCommit(
   hash: string,
 ): Promise<RevertResult> {
   return gitRevert(projectPath, hash)
+}
+
+// ── History context for Chat (Step 08/09) ─────────────────────────────
+
+/** Upper bound on file-touching commits the default-point walk inspects.
+ *  Each inspected commit costs one `git show` subprocess; in practice the
+ *  walk stops at the first or second commit. */
+const COMPARISON_WALK_LIMIT = 100
+
+/** A file's content as it was at one commit. */
+export interface HistoricalFileVersion {
+  commitHash: string
+  /** ISO 8601 author date of the commit. */
+  commitDate: string
+  /** false when the file did not exist at that commit. */
+  exists: boolean
+  content: string | null
+}
+
+/** Read `path`'s content at a specific commit (user-selected point, Step 09). */
+export async function loadFileVersionAtCommit(
+  projectPath: string,
+  commit: Pick<CommitInfo, "hash" | "date">,
+  path: string,
+): Promise<HistoricalFileVersion> {
+  const shown = await gitShowFile(projectPath, commit.hash, path)
+  return {
+    commitHash: commit.hash,
+    commitDate: commit.date,
+    exists: shown.exists,
+    content: shown.content,
+  }
+}
+
+/**
+ * Default comparison point for one file (Step 08 작업 2): the most recent
+ * commit whose version of `path` DIFFERS from the current working-tree
+ * content — never a fixed HEAD~1. A fixed HEAD~1 gives a false "no change"
+ * answer whenever the last commit only touched other pages; walking
+ * `git log -- <path>` newest-first and comparing content avoids that.
+ *
+ * Returns null when no commit touches the file (e.g. Sync never ran) —
+ * callers inject nothing and the prompt's "past unavailable" rule applies.
+ * When every recorded version equals the working tree (file never changed
+ * since it was added), the oldest version is returned so the model can
+ * honestly answer "no change since <date>" instead of "no past info".
+ */
+export async function findDefaultComparisonVersion(
+  projectPath: string,
+  path: string,
+  workingContent: string,
+): Promise<HistoricalFileVersion | null> {
+  const commits = await gitLog(projectPath, COMPARISON_WALK_LIMIT, path)
+  let oldest: HistoricalFileVersion | null = null
+  for (const commit of commits) {
+    const version = await loadFileVersionAtCommit(projectPath, commit, path)
+    const past = version.exists ? (version.content ?? "") : null
+    if (past !== workingContent) return version
+    oldest = version
+  }
+  return oldest
+}
+
+/** Past state of one cited section, keyed by its issued citation key. */
+export interface PreviousSectionVersion {
+  /** Citation key of the CURRENT section this past body corresponds to. */
+  key: string
+  title?: string
+  headingText?: string
+  /** ISO 8601 date of the comparison commit. */
+  commitDate: string
+  /** "present": body holds the section's past text. "file-absent": the page
+   *  file did not exist at that commit. "section-absent": the file existed
+   *  but this section (matched by its stable `{#sec-ULID}` id) did not. */
+  state: "present" | "file-absent" | "section-absent"
+  body: string | null
+}
+
+/**
+ * Collect past versions for the cited sections (Step 08 작업 3/4).
+ * The comparison "current" is the working tree. `selectedCommit` (Step 09)
+ * pins one repo-wide point; when null the per-file default point is used.
+ * Sections are matched across versions by their stable `{#sec-ULID}` id —
+ * rename/split tracking is out of scope (same-path assumption).
+ * Files with no history (Sync never ran) contribute no entries.
+ */
+export async function collectPreviousVersions(
+  projectPath: string,
+  entries: Array<{ key: string; pageId: string; sectionId: string; title?: string; headingText?: string }>,
+  selectedCommit: Pick<CommitInfo, "hash" | "date"> | null,
+): Promise<PreviousSectionVersion[]> {
+  const byPage = new Map<string, typeof entries>()
+  for (const entry of entries) {
+    const list = byPage.get(entry.pageId) ?? []
+    list.push(entry)
+    byPage.set(entry.pageId, list)
+  }
+
+  const out: PreviousSectionVersion[] = []
+  for (const [pageId, pageEntries] of byPage) {
+    let version: HistoricalFileVersion | null = null
+    let pagePath: string
+    try {
+      const page = await getKnowledgePage(projectPath, pageId)
+      if (!page) continue
+      pagePath = page.pagePath
+      if (selectedCommit) {
+        version = await loadFileVersionAtCommit(projectPath, selectedCommit, pagePath)
+      } else {
+        const workingContent = await readFile(normalizePath(`${projectPath}/${pagePath}`))
+        version = await findDefaultComparisonVersion(projectPath, pagePath, workingContent)
+      }
+    } catch {
+      continue // history is best-effort; a failing file just contributes nothing
+    }
+    if (!version) continue
+
+    if (!version.exists) {
+      for (const entry of pageEntries) {
+        out.push({ key: entry.key, title: entry.title, headingText: entry.headingText, commitDate: version.commitDate, state: "file-absent", body: null })
+      }
+      continue
+    }
+
+    let pastSections: Map<string, string>
+    try {
+      pastSections = new Map(parseMarkdownV2(version.content ?? "").sections.map((s) => [s.sectionId, s.body]))
+    } catch {
+      continue // a past version this app didn't write as v2 — skip honestly
+    }
+    for (const entry of pageEntries) {
+      const body = pastSections.get(entry.sectionId)
+      out.push(
+        body === undefined
+          ? { key: entry.key, title: entry.title, headingText: entry.headingText, commitDate: version.commitDate, state: "section-absent", body: null }
+          : { key: entry.key, title: entry.title, headingText: entry.headingText, commitDate: version.commitDate, state: "present", body },
+      )
+    }
+  }
+  return out
+}
+
+/**
+ * Serialize collected past versions into the "Previous Versions" prompt
+ * block — deliberately distinct from "Citation Sections" (which hold the
+ * CURRENT working-tree content) and labeled with each version's commit
+ * date. Returns "" when there is nothing to inject, so the caller keeps
+ * the existing "past unavailable" prompt rules.
+ */
+export function buildPreviousVersionsBlock(items: PreviousSectionVersion[]): string {
+  if (!items.length) return ""
+  const blocks = items.map((item) => {
+    const parts = [`[CIT:${item.key}]`]
+    if (item.title) parts.push(`title="${item.title}"`)
+    if (item.headingText) parts.push(`section="${item.headingText}"`)
+    parts.push(`as-of=${item.commitDate}`)
+    const header = parts.join(" ")
+    if (item.state === "file-absent") return `${header}\n(This page did not exist at that point in history.)`
+    if (item.state === "section-absent") return `${header}\n(The page existed, but this section did not exist at that point in history.)`
+    return `${header}\n${item.body ?? ""}`
+  })
+  return [
+    "## Previous Versions",
+    "PAST versions of the cited sections, read from the project's git history at the date shown per entry.",
+    "The Citation Sections above are the CURRENT state; use these entries only as the past side of the comparison.",
+    "Each entry starts with the [CIT:key] of the current section it corresponds to.",
+    "",
+    blocks.join("\n\n---\n\n"),
+  ].join("\n")
 }

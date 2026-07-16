@@ -13,10 +13,6 @@ import {
 import { generateScenarios } from "@/lib/persona/generate"
 import { exportScenario } from "@/lib/persona/export"
 import { createPersona, type Persona, type PlayScenario } from "@/lib/persona/types"
-import { ChatPanel } from "@/components/chat/chat-panel"
-import { createChatStore } from "@/stores/chat-store"
-
-const usePersonaAskStore = createChatStore()
 
 const inputCls =
   "rounded border bg-background px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
@@ -26,7 +22,7 @@ export function PersonaView() {
   const project = useWikiStore((s) => s.project)
   const projectPath = project ? normalizePath(project.path) : ""
 
-  const [tab, setTab] = useState<"manage" | "scenarios" | "ask">("manage")
+  const [tab, setTab] = useState<"scenarios" | "manage">("scenarios")
   const [personas, setPersonas] = useState<Persona[]>([])
   const [scenarios, setScenarios] = useState<PlayScenario[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -62,7 +58,7 @@ export function PersonaView() {
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-1 border-b px-4 py-2">
         <h2 className="mr-3 text-sm font-semibold">{t("persona.title")}</h2>
-        {(["manage", "scenarios", "ask"] as const).map((key) => (
+        {(["scenarios", "manage"] as const).map((key) => (
           <button
             key={key}
             onClick={() => setTab(key)}
@@ -74,9 +70,7 @@ export function PersonaView() {
           </button>
         ))}
       </div>
-      {tab === "manage" ? (
-        <ManageTab personas={personas} onChange={(next) => void persistPersonas(next)} />
-      ) : tab === "scenarios" ? (
+      {tab === "scenarios" ? (
         <ScenariosTab
           personas={personas}
           scenarios={scenarios}
@@ -84,7 +78,7 @@ export function PersonaView() {
           onChange={(next) => void persistScenarios(next)}
         />
       ) : (
-        <ChatPanel useStore={usePersonaAskStore} graphPrefixFilter="persona_" />
+        <ManageTab personas={personas} onChange={(next) => void persistPersonas(next)} />
       )}
     </div>
   )

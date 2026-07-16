@@ -1,6 +1,6 @@
 import type { EntityType, PageType, SectionType, UiAnchor, UiAspect, UiLayer, UiScope } from "./vocabularies"
 
-export type AssertionOrigin = "ingest" | "manual"
+export type AssertionOrigin = "ingest" | "manual" | "user_chat"
 export type AssertionStatus = "active" | "review" | "superseded"
 export type EvidenceType = "supports" | "contradicts" | "mentions"
 export type ObjectCardinality = "one" | "many"
@@ -106,6 +106,6 @@ export interface EntityNeighborhood {
 
 export interface DeleteImpact { nodeIds: string[]; assertionIds: string[]; evidenceIds: string[]; pageIds: string[]; revision: string }
 export interface CreateOrLinkGraphNodeInput { graphId: string; entityId?: string; canonicalName?: string; entityType?: EntityType; description?: string; aliases?: string[]; role?: string }
-export interface TraversalRequest { seedPageIds?: string[]; seedEntityIds?: string[]; allowedGraphIds?: string[]; maxCost?: number; maxGraphSwitches?: number }
+export interface TraversalRequest { seedPageIds?: string[]; seedEntityIds?: string[]; allowedGraphIds?: string[]; maxCost?: number; maxGraphSwitches?: number; allowedPredicates?: string[] }
 export interface TraversalStep { kind: "assertion" | "graph_switch"; graphId: string; entityId: string; assertionId?: string; predicate?: string; forward?: boolean }
 export interface TraversalHit { entityId: string; assertionId?: string; cost: number; graphSwitches: number; path: TraversalStep[] }

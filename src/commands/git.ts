@@ -60,12 +60,27 @@ export async function gitStatus(projectPath: string): Promise<StatusEntry[]> {
   return invoke<StatusEntry[]>("git_status", { projectPath })
 }
 
-export async function gitLog(projectPath: string, limit: number): Promise<CommitInfo[]> {
-  return invoke<CommitInfo[]>("git_log", { projectPath, limit })
+export async function gitLog(projectPath: string, limit: number, path?: string): Promise<CommitInfo[]> {
+  return invoke<CommitInfo[]>("git_log", { projectPath, limit, path: path ?? null })
 }
 
 export async function gitShow(projectPath: string, hash: string): Promise<CommitDetail> {
   return invoke<CommitDetail>("git_show", { projectPath, hash })
+}
+
+export interface ShowFileResult {
+  /** false when the path does not exist at that commit (not an error). */
+  exists: boolean
+  content: string | null
+}
+
+/** Read-only content of `path` at commit `hash` (`git show <hash>:<path>`). */
+export async function gitShowFile(
+  projectPath: string,
+  hash: string,
+  path: string,
+): Promise<ShowFileResult> {
+  return invoke<ShowFileResult>("git_show_file", { projectPath, hash, path })
 }
 
 export async function gitDiff(

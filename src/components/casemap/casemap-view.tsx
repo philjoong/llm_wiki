@@ -32,10 +32,6 @@ import {
   type TestCase,
   type TestPlan,
 } from "@/lib/casemap/types"
-import { ChatPanel } from "@/components/chat/chat-panel"
-import { createChatStore } from "@/stores/chat-store"
-
-const useCasemapAskStore = createChatStore()
 
 const STEP_COUNT = 7
 const RISK_ORDER: Record<RiskLevel, number> = { high: 0, medium: 1, low: 2 }
@@ -52,7 +48,6 @@ export function CasemapView() {
   const [plans, setPlans] = useState<TestPlan[]>([])
   const [loaded, setLoaded] = useState(false)
   const [plan, setPlan] = useState<TestPlan | null>(null)
-  const [view, setView] = useState<"list" | "ask">("list")
   const [rules, setRules] = useState<Rule[]>([])
   const [viewStep, setViewStep] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -143,54 +138,40 @@ export function CasemapView() {
       <div className="flex h-full flex-col overflow-hidden">
         <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2">
           <h2 className="flex-1 text-sm font-semibold">{t("casemap.title")}</h2>
-          {view === "list" ? (
-            <>
-              <input
-                value={newPlanName}
-                onChange={(e) => setNewPlanName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void handleCreatePlan() }}
-                placeholder={t("casemap.planNamePlaceholder")}
-                className={`w-56 ${inputCls}`}
-              />
-              <Button size="sm" onClick={() => void handleCreatePlan()} disabled={!newPlanName.trim()}>
-                {t("casemap.newPlan")}
-              </Button>
-            </>
-          ) : null}
-          <button
-            onClick={() => setView(view === "list" ? "ask" : "list")}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            {view === "list" ? t("casemap.tab.ask") : t("casemap.tab.list")}
-          </button>
+          <input
+            value={newPlanName}
+            onChange={(e) => setNewPlanName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleCreatePlan() }}
+            placeholder={t("casemap.planNamePlaceholder")}
+            className={`w-56 ${inputCls}`}
+          />
+          <Button size="sm" onClick={() => void handleCreatePlan()} disabled={!newPlanName.trim()}>
+            {t("casemap.newPlan")}
+          </Button>
         </div>
-        {view === "ask" ? (
-          <ChatPanel useStore={useCasemapAskStore} graphPrefixFilter="casemap_" />
-        ) : (
-          <div className="flex-1 overflow-y-auto">
-            {plans.length === 0 && (
-              <div className="p-4 text-sm text-muted-foreground">{t("casemap.noPlans")}</div>
-            )}
-            {plans.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 border-b px-4 py-2 hover:bg-muted/30">
-                <button className="flex-1 text-left" onClick={() => openPlan(p)}>
-                  <div className="text-sm font-medium">{p.name}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {t("casemap.stepBadge", { step: p.step, total: STEP_COUNT })}
-                    {p.finalized ? ` · ${t("casemap.finalized")}` : ""}
-                    {" · "}{new Date(p.updatedAt).toLocaleString()}
-                  </div>
-                </button>
-                <button
-                  onClick={() => void handleDeletePlan(p)}
-                  className="text-xs text-muted-foreground hover:text-destructive"
-                >
-                  {t("casemap.delete")}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="flex-1 overflow-y-auto">
+          {plans.length === 0 && (
+            <div className="p-4 text-sm text-muted-foreground">{t("casemap.noPlans")}</div>
+          )}
+          {plans.map((p) => (
+            <div key={p.id} className="flex items-center gap-3 border-b px-4 py-2 hover:bg-muted/30">
+              <button className="flex-1 text-left" onClick={() => openPlan(p)}>
+                <div className="text-sm font-medium">{p.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("casemap.stepBadge", { step: p.step, total: STEP_COUNT })}
+                  {p.finalized ? ` · ${t("casemap.finalized")}` : ""}
+                  {" · "}{new Date(p.updatedAt).toLocaleString()}
+                </div>
+              </button>
+              <button
+                onClick={() => void handleDeletePlan(p)}
+                className="text-xs text-muted-foreground hover:text-destructive"
+              >
+                {t("casemap.delete")}
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     )
   }

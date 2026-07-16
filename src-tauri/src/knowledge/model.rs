@@ -141,7 +141,7 @@ pub struct DeleteImpact { pub node_ids: Vec<String>, pub assertion_ids: Vec<Stri
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TraversalRequest { pub seed_page_ids: Option<Vec<String>>, pub seed_entity_ids: Option<Vec<String>>, pub allowed_graph_ids: Option<Vec<String>>, pub max_cost: Option<i32>, pub max_graph_switches: Option<i32> }
+pub struct TraversalRequest { pub seed_page_ids: Option<Vec<String>>, pub seed_entity_ids: Option<Vec<String>>, pub allowed_graph_ids: Option<Vec<String>>, pub max_cost: Option<i32>, pub max_graph_switches: Option<i32>, pub allowed_predicates: Option<Vec<String>> }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -245,6 +245,11 @@ pub struct CommitIngestPlanInput {
     pub pages: Vec<IngestPageDocument>,
     #[serde(default)]
     pub assertions: Vec<IngestAssertionWrite>,
+    /// Assertion origin for this commit (Step 12). Defaults to "ingest"; the
+    /// "위키에 저장" chat-answer path passes "user_chat" so those assertions
+    /// stay traceable. Validated against the schema CHECK before use.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

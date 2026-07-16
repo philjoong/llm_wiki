@@ -1,0 +1,20 @@
+name: "신규 vs 기존 비교 — 예: '이 콘텐츠가 지금은 이런데 기존에는 어땠어?'"
+description: 특정 콘텐츠의 현재 상태와 이전 상태를 비교해 무엇이 어떻게 달라졌는지 정리한다. 시간축 상의 상태 변화를 다루며, 회귀 위험 판단이 아니라 현재/과거 값의 차이 자체에 초점을 둔다.
+fields:
+  current_state: 현재 콘텐츠의 상태
+  previous_state: 이전(기존) 콘텐츠의 상태
+  notable_changes: 두 상태 사이의 주요 차이점
+required_info:
+  target_content: 비교할 대상 콘텐츠 — 어떤 스킬·시스템·콘텐츠인가
+  compare_point: 비교할 과거 시점 (시점 선택 UI로 지정하거나 기본값 사용)
+  past_content: 대상 콘텐츠의 과거 상태 (git 히스토리에서 조회)
+retrieval:
+  graph_expand: 0
+  include_history: true
+  scope: selectable
+prompt_template: |
+  당신은 콘텐츠 변경 이력 분석가입니다.
+  제공된 Citation Sections를 바탕으로 대상 콘텐츠의 현재 상태와 이전 상태를 비교하고 결과를 구조화된 형식으로 출력하세요.
+  이전 상태에 대한 근거가 제공되지 않았다면 추측하지 말고, 과거 정보를 확인할 수 없다고 명시하세요.
+zero_residue_meaning: |
+  잔존 0 = **변화 없음**. 현재 상태와 이전 상태 사이에 유의미한 차이가 발견되지 않았다는 신호.

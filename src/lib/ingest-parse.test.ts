@@ -18,7 +18,7 @@
  * to dropping pages without telling anyone.
  */
 import { describe, it, expect } from "vitest"
-import { parseFileBlocks, isSafeIngestPath, parseDecomposedSections } from "./ingest"
+import { parseFileBlocks, isSafeIngestPath, parseDecomposedSections, buildFileBlocksFromSections } from "./ingest"
 
 // ── Happy paths ─────────────────────────────────────────────────────
 
@@ -522,5 +522,81 @@ describe("parseDecomposedSections — delimiter format (Fix 25)", () => {
     expect(sections).toEqual([
       { source_range: "## Cut", source_text: "partial body before stream ended" },
     ])
+  })
+
+  it("parses title/summary/page_type/heading header lines before the body", () => {
+    const text = [
+      "---SECTION: 결과 모달 | db/ui/result-modal.md---",
+      "title: 결과 모달",
+      "summary: 전투 종료 후 보상을 보여주는 중앙 모달",
+      "page_type: ui_spec",
+      "heading: 결과 모달 - 레이아웃",
+      "",
+      "본문 텍스트가 여기 온다.",
+      "---END SECTION---",
+    ].join("\n")
+    const [section] = parseDecomposedSections(text)
+    expect(section).toEqual({
+      source_range: "결과 모달",
+      page_path: "db/ui/result-modal.md",
+      title: "결과 모달",
+      summary: "전투 종료 후 보상을 보여주는 중앙 모달",
+      page_type: "ui_spec",
+      heading: "결과 모달 - 레이아웃",
+      source_text: "본문 텍스트가 여기 온다.",
+    })
+  })
+
+  it("does not treat body lines shaped like key: value as headers", () => {
+    // No headers present → the first `title:`-looking line is body, not header.
+    const text = [
+      "---SECTION: ## X | db/x.md---",
+      "본문의 첫 줄",
+      "title: 이것은 본문이다",
+      "---END SECTION---",
+    ].join("\n")
+    const [section] = parseDecomposedSections(text)
+    expect(section.title).toBeUndefined()
+    expect(section.source_text).toBe("본문의 첫 줄\ntitle: 이것은 본문이다")
+  })
+})
+
+describe("buildFileBlocksFromSections — display metadata", () => {
+  it("uses the LLM title/summary/page_type/heading in the FILE block", () => {
+    const text = buildFileBlocksFromSections([{
+      source_range: "결과 모달",
+      source_text: "본문",
+      page_path: "db/ui/result-modal.md",
+      title: "결과 모달",
+      summary: "전투 종료 후 보상 모달",
+      page_type: "ui_spec",
+      heading: "결과 모달 - 레이아웃",
+    }], "raw/battle.md")
+    expect(text).toContain("title: 결과 모달")
+    expect(text).toContain("page_type: ui_spec")
+    expect(text).toContain("전투 종료 후 보상 모달")
+    expect(text).toMatch(/## 결과 모달 - 레이아웃 \{#sec-/)
+    expect(text).not.toContain("Generated from")
+  })
+
+  it("falls back to a readable source name (not the path) when title is missing", () => {
+    const text = buildFileBlocksFromSections([{
+      source_range: "## 캐릭터 스탯",
+      source_text: "본문",
+      page_path: "db/data/char.md",
+    }], "raw/char.md")
+    expect(text).toContain("title: 캐릭터 스탯")
+    expect(text).not.toContain("title: db/data/char.md")
+  })
+
+  it("rejects an out-of-vocabulary page_type and falls back to guide", () => {
+    const text = buildFileBlocksFromSections([{
+      source_range: "X",
+      source_text: "본문",
+      page_path: "db/x.md",
+      title: "X",
+      page_type: "not_a_real_type",
+    }], "raw/x.md")
+    expect(text).toContain("page_type: guide")
   })
 })

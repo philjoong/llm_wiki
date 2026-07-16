@@ -5,6 +5,8 @@ import { getFileCategory, isBinary } from "@/lib/file-types"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
 import { getFileName } from "@/lib/path-utils"
+import { usePageTitles, titleForPath } from "@/lib/use-page-titles"
+import { useWikiStore } from "@/stores/wiki-store"
 
 interface PreviewPanelProps {
   filePath: string
@@ -13,6 +15,8 @@ interface PreviewPanelProps {
 
 export function PreviewPanel({ filePath: selectedFile, onClose }: PreviewPanelProps) {
   const [fileContent, setFileContent] = useState("")
+  const project = useWikiStore((s) => s.project)
+  const pageTitles = usePageTitles()
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Snapshot of what was most recently loaded from disk. Milkdown re-emits
   // `markdownUpdated` on initial parse (before the user types anything),
@@ -69,13 +73,13 @@ export function PreviewPanel({ filePath: selectedFile, onClose }: PreviewPanelPr
   }, [])
 
   const category = getFileCategory(selectedFile)
-  const fileName = getFileName(selectedFile)
+  const displayName = project ? titleForPath(pageTitles, selectedFile, project.path) : getFileName(selectedFile)
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b px-3 py-1.5">
         <span className="truncate text-xs text-muted-foreground" title={selectedFile}>
-          {fileName}
+          {displayName}
         </span>
         <button
           onClick={onClose}

@@ -10,6 +10,15 @@ export interface SectionCitationCandidate {
   assertionIds?: string[]
   evidenceState?: "documented" | "manual" | "contradicted"
   graphPath?: string[]
+  /**
+   * Human-readable display fields shown to the model in place of opaque IDs.
+   * Optional so older/synthetic candidates without them still build a prompt.
+   */
+  title?: string
+  headingText?: string
+  sectionType?: string
+  pageSummary?: string
+  sectionSummary?: string
 }
 
 export interface CitationMapEntry extends SectionCitationCandidate {
@@ -40,9 +49,19 @@ function defaultKey(): string {
 
 export function citationPrompt(entries: CitationMapEntry[]): string {
   if (!entries.length) return "(No relevant wiki sections were found.)"
-  return entries.map((entry) =>
-    `[CIT:${entry.key}] page_id=${entry.pageId} section_id=${entry.sectionId} assertions=${(entry.assertionIds??[]).join(",")} evidence=${entry.evidenceState??"none"} graph_path=${(entry.graphPath??[]).join("->")}\n${entry.text}`,
-  ).join("\n\n---\n\n")
+  // Header carries human-readable meaning (title/section/type/evidence), never
+  // opaque page/section/assertion IDs — the model only needs the [CIT:key] to
+  // cite, and finalizeCitations maps that key back to IDs deterministically.
+  return entries.map((entry) => {
+    const parts = [`[CIT:${entry.key}]`]
+    if (entry.title) parts.push(`title="${entry.title}"`)
+    if (entry.headingText) parts.push(`section="${entry.headingText}"`)
+    if (entry.sectionType) parts.push(`type=${entry.sectionType}`)
+    if (entry.evidenceState) parts.push(`evidence=${entry.evidenceState}`)
+    const summary = entry.sectionSummary ?? entry.pageSummary
+    const summaryLine = summary ? `\nsummary: ${summary}` : ""
+    return `${parts.join(" ")}${summaryLine}\n${entry.text}`
+  }).join("\n\n---\n\n")
 }
 
 /** Only issued keys become persisted citations. Duplicate markers retain one anchor. */
@@ -75,6 +94,44 @@ export function finalizeCitations(answer: string, entries: CitationMapEntry[]): 
     })
   }
   return references
+}
+
+/**
+ * Direction- and predicate-preserving serialization of a single traversal edge.
+ * `forward:false` flips the arrow so the LLM reads the real influence direction:
+ *   forward  → `A --PRED--> B`
+ *   backward → `B <--PRED-- A`
+ */
+function serializeEdge(edge: { predicate: string; forward: boolean; fromName: string; toName: string }): string {
+  return edge.forward
+    ? `${edge.fromName} --${edge.predicate}--> ${edge.toName}`
+    : `${edge.fromName} <--${edge.predicate}-- ${edge.toName}`
+}
+
+/**
+ * Build the "Graph Paths" prompt block (Step 03). Each path line is annotated
+ * with the [CIT:key] of any evidence section that made it into the issued
+ * citation map — so the path is a citable source, not the "uncitable second
+ * source" the original chat-panel comment warned against. Returns "" when
+ * there are no paths, so the caller can keep the existing empty-state rules.
+ */
+export function buildGraphPathsBlock(
+  paths: Array<{ edges: Array<{ predicate: string; forward: boolean; fromName: string; toName: string; evidenceSectionIds: string[] }> }>,
+  entries: CitationMapEntry[],
+): string {
+  if (!paths.length) return ""
+  const keyBySection = new Map(entries.map((entry) => [entry.sectionId, entry.key]))
+  const lines = paths.flatMap((path) => {
+    if (!path.edges.length) return []
+    const chain = path.edges.map(serializeEdge).join("  ")
+    const keys = Array.from(new Set(
+      path.edges.flatMap((edge) => edge.evidenceSectionIds.map((id) => keyBySection.get(id)).filter((key): key is string => Boolean(key))),
+    ))
+    const cites = keys.map((key) => `[CIT:${key}]`).join(" ")
+    return [cites ? `- ${chain} ${cites}` : `- ${chain}`]
+  })
+  if (!lines.length) return ""
+  return ["## Graph Paths", "Relationship paths found in the knowledge graph (arrow shows influence direction):", ...lines].join("\n")
 }
 
 export function findMatchedRanges(text: string, query: string): Array<{ startOffset: number; endOffset: number }> {

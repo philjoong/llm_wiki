@@ -1,6 +1,6 @@
 use super::{db, error::{KnowledgeError, KnowledgeErrorCode}, integrity, model::*};
 use chrono::Utc;
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{params, params_from_iter, OptionalExtension, Transaction};
 use serde_json::json;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
@@ -68,6 +68,11 @@ pub fn recover_ingest_transactions(project_path: String) -> Result<(), Knowledge
 #[tauri::command]
 pub fn commit_ingest_plan(project_path: String, input: CommitIngestPlanInput) -> Result<(), KnowledgeError> {
     if input.operation_id.is_empty() || input.operation_id.contains('/') || input.pages.is_empty() { return Err(fail(KnowledgeErrorCode::ValidationFailed, "Invalid ingest operation")); }
+    // Assertion origin for this commit (Step 12). "ingest" is the default; the
+    // chat "위키에 저장" path passes "user_chat". Reject anything outside the
+    // schema CHECK set here so a bad value fails fast, not at INSERT time.
+    let origin = input.origin.as_deref().unwrap_or("ingest");
+    if !matches!(origin, "ingest" | "user_chat") { return Err(fail(KnowledgeErrorCode::ValidationFailed, "Invalid assertion origin")); }
     let dir = journal_dir(&project_path); fs::create_dir_all(&dir).map_err(|e| fail(KnowledgeErrorCode::ValidationFailed, e.to_string()))?;
     let mut entries = Vec::new();
     let mut paths = std::collections::HashSet::new();
@@ -115,7 +120,7 @@ pub fn commit_ingest_plan(project_path: String, input: CommitIngestPlanInput) ->
             let relation_exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM relation_types WHERE graph_id=?1 AND name=?2)",params![write.graph_id,write.predicate],|r|r.get(0)).map_err(sql)?;
             if !relation_exists { tx.execute("INSERT INTO relation_types VALUES(?1,?2,?3,?4,?5,NULL,0,'many')",params![write.graph_id,write.predicate,write.relation_description,json!([write.subject_type]).to_string(),json!([write.object_type]).to_string()]).map_err(sql)?; }
             tx.execute("INSERT OR IGNORE INTO graph_nodes(node_id,graph_id,entity_id,role) VALUES(?1,?2,?3,NULL)",params![id("node"),write.graph_id,subject.entity_id]).map_err(sql)?;tx.execute("INSERT OR IGNORE INTO graph_nodes(node_id,graph_id,entity_id,role) VALUES(?1,?2,?3,NULL)",params![id("node"),write.graph_id,object.entity_id]).map_err(sql)?;
-            let record=assertion(&tx,CreateAssertionInput{graph_id:write.graph_id.clone(),subject_entity_id:subject.entity_id,predicate:write.predicate.clone(),object_entity_id:object.entity_id,evidence:Some(vec![CreateEvidenceInput{page_id:Some(write.page_id.clone()),section_id:Some(write.section_id.clone()),quote:write.quote.clone(),confidence:Some(1.0)}])},"ingest")?;
+            let record=assertion(&tx,CreateAssertionInput{graph_id:write.graph_id.clone(),subject_entity_id:subject.entity_id,predicate:write.predicate.clone(),object_entity_id:object.entity_id,evidence:Some(vec![CreateEvidenceInput{page_id:Some(write.page_id.clone()),section_id:Some(write.section_id.clone()),quote:write.quote.clone(),confidence:Some(1.0)}])},origin)?;
             let _=record;
         }
         tx.commit().map_err(sql)?;
@@ -289,6 +294,8 @@ fn collect_orphan_write_files(path: &Path, issues: &mut Vec<IntegrityIssue>) -> 
 
 #[tauri::command]
 pub fn get_knowledge_page(project_path:String,page_id:String)->Result<Option<PageRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;c.query_row("SELECT page_id,page_path,title,page_type,summary,primary_entity_id,updated_at FROM pages WHERE page_id=?1",[page_id],|r|Ok(PageRecord{page_id:r.get(0)?,page_path:r.get(1)?,title:r.get(2)?,page_type:r.get(3)?,summary:r.get(4)?,primary_entity_id:r.get(5)?,updated_at:r.get(6)?})).optional().map_err(sql)}
+#[tauri::command]
+pub fn list_knowledge_pages(project_path:String)->Result<Vec<PageRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;let mut s=c.prepare("SELECT page_id,page_path,title,page_type,summary,primary_entity_id,updated_at FROM pages ORDER BY page_path").map_err(sql)?;let rows=s.query_map([],|r|Ok(PageRecord{page_id:r.get(0)?,page_path:r.get(1)?,title:r.get(2)?,page_type:r.get(3)?,summary:r.get(4)?,primary_entity_id:r.get(5)?,updated_at:r.get(6)?})).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql);rows}
 #[tauri::command]
 pub fn get_knowledge_section(project_path:String,section_id:String)->Result<Option<SectionRecord>,KnowledgeError>{let c=db::open_project(&project_path,false)?;c.query_row("SELECT section_id,page_id,parent_id,heading_level,heading_text,section_type,ui_scope,ui_anchor,ui_layer,ui_aspect,content_entity_id,host_entity_id,ordinal,summary FROM sections WHERE section_id=?1",[section_id],|r|Ok(SectionRecord{section_id:r.get(0)?,page_id:r.get(1)?,parent_id:r.get(2)?,heading_level:r.get(3)?,heading_text:r.get(4)?,section_type:r.get(5)?,ui_scope:r.get(6)?,ui_anchor:r.get(7)?,ui_layer:r.get(8)?,ui_aspect:r.get(9)?,content_entity_id:r.get(10)?,host_entity_id:r.get(11)?,ordinal:r.get(12)?,summary:r.get(13)?})).optional().map_err(sql)}
 #[tauri::command]
@@ -464,6 +471,10 @@ fn hit_is_better(candidate: &TraversalHit, current: &TraversalHit) -> bool {
 pub fn traverse_knowledge_graph(project_path:String, request:TraversalRequest)->Result<Vec<TraversalHit>,KnowledgeError>{
  let c=db::open_project(&project_path,false)?; let max_cost=request.max_cost.unwrap_or(3).max(0); let max_switches=request.max_graph_switches.unwrap_or(2).max(0);
  let allowed:Option<std::collections::HashSet<String>>=request.allowed_graph_ids.map(|v|v.into_iter().collect());
+ // Only the neighbour-assertion expansion honours this. When None or empty the
+ // query is byte-for-byte the unfiltered form, so unspecified traversals are
+ // unchanged. graph_switch steps carry no predicate and stay unaffected.
+ let allowed_predicates:Vec<String>=request.allowed_predicates.unwrap_or_default();
  let mut seeds:std::collections::HashSet<String>=request.seed_entity_ids.unwrap_or_default().into_iter().collect();
  for page in request.seed_page_ids.unwrap_or_default() {
    let mut q=c.prepare("SELECT entity_id FROM page_entities WHERE page_id=?1 UNION SELECT a.subject_entity_id FROM assertion_evidence e JOIN assertions a ON a.assertion_id=e.assertion_id WHERE e.page_id=?1 UNION SELECT a.object_entity_id FROM assertion_evidence e JOIN assertions a ON a.assertion_id=e.assertion_id WHERE e.page_id=?1").map_err(sql)?;
@@ -489,8 +500,12 @@ pub fn traverse_knowledge_graph(project_path:String, request:TraversalRequest)->
    let hit=TraversalHit{entity_id:state.entity_id.clone(),assertion_id:state.assertion_id.clone(),cost:state.cost,graph_switches:state.switches,path:state.path.clone()};
    match hits.get(&state.entity_id) { Some(current) if !hit_is_better(&hit,current) => {}, _ => { hits.insert(state.entity_id.clone(),hit); } }
    if state.cost>=max_cost { continue; }
-   let mut aq=c.prepare("SELECT assertion_id,subject_entity_id,predicate,object_entity_id FROM assertions WHERE graph_id=?1 AND status IN ('active','review') AND (subject_entity_id=?2 OR object_entity_id=?2) ORDER BY assertion_id").map_err(sql)?;
-   let rows=aq.query_map(params![state.graph_id,state.entity_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
+   let mut query=String::from("SELECT assertion_id,subject_entity_id,predicate,object_entity_id FROM assertions WHERE graph_id=?1 AND status IN ('active','review') AND (subject_entity_id=?2 OR object_entity_id=?2)");
+   if !allowed_predicates.is_empty() { let placeholders=(0..allowed_predicates.len()).map(|i|format!("?{}",i+3)).collect::<Vec<_>>().join(","); query.push_str(&format!(" AND predicate IN ({})",placeholders)); }
+   query.push_str(" ORDER BY assertion_id");
+   let mut aq=c.prepare(&query).map_err(sql)?;
+   let mut binds:Vec<String>=vec![state.graph_id.clone(),state.entity_id.clone()]; binds.extend(allowed_predicates.iter().cloned());
+   let rows=aq.query_map(params_from_iter(binds.iter()),|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).map_err(sql)?.collect::<Result<Vec<_>,_>>().map_err(sql)?;
    for (assertion,subject,predicate,object) in rows { let forward=subject==state.entity_id; let next=if forward {object}else{subject}; let mut path=state.path.clone(); path.push(TraversalStep{kind:"assertion".into(),graph_id:state.graph_id.clone(),entity_id:next.clone(),assertion_id:Some(assertion.clone()),predicate:Some(predicate),forward:Some(forward)}); pending.push(TraversalState{entity_id:next,graph_id:state.graph_id.clone(),cost:state.cost+1,switches:state.switches,assertion_id:Some(assertion),path}); }
    if state.switches<max_switches { let mut nq=c.prepare("SELECT graph_id FROM graph_nodes WHERE entity_id=?1 AND graph_id<>?2 ORDER BY graph_id").map_err(sql)?; for graph in nq.query_map(params![state.entity_id,state.graph_id],|r|r.get::<_,String>(0)).map_err(sql)? { let graph=graph.map_err(sql)?; if allowed.as_ref().is_some_and(|a|!a.contains(&graph)){continue;} let mut path=state.path.clone();path.push(TraversalStep{kind:"graph_switch".into(),graph_id:graph.clone(),entity_id:state.entity_id.clone(),assertion_id:None,predicate:None,forward:None});pending.push(TraversalState{entity_id:state.entity_id.clone(),graph_id:graph,cost:state.cost+1,switches:state.switches+1,assertion_id:None,path}); } }
  }

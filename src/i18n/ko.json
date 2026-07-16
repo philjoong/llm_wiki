@@ -50,7 +50,48 @@
     "saving": "저장 중...",
     "saved": "저장됨!",
     "emptyHint": "질문을 하거나 자료 ingest를 시작하세요.",
-    "sources": "출처"
+    "sources": "출처",
+    "scope": {
+      "title": "답변 범위를 선택한 시스템·페이지·엔티티로 한정",
+      "all": "전체 범위",
+      "selected": "{{count}}개 선택",
+      "graphs": "시스템(그래프)",
+      "pages": "페이지",
+      "entities": "엔티티",
+      "clear": "범위 해제"
+    },
+    "history": {
+      "title": "비교할 과거 시점 선택",
+      "default": "최근 변경 시점",
+      "defaultHint": "파일별로 내용이 달라진 가장 최근 커밋",
+      "empty": "커밋 이력이 없습니다"
+    },
+    "info": {
+      "title": "추가 정보가 필요합니다",
+      "textPlaceholder": "답변을 입력하세요...",
+      "otherOption": "기타(직접 입력)",
+      "linkPlaceholder": "https://...",
+      "chooseFile": "파일 선택",
+      "submit": "전송",
+      "unavailable": "없음 / 모름",
+      "answered": "답변함",
+      "markedUnavailable": "없음/모름으로 표시함",
+      "ingesting": "위키에 반영 중...",
+      "ingestDone": "반영 완료 — 다시 질문",
+      "resend": "다시 질문"
+    },
+    "save": {
+      "action": "위키에 저장",
+      "suggesting": "저장 위치 찾는 중...",
+      "locationLabel": "저장 위치",
+      "newPage": "새 페이지",
+      "existingPage": "기존 페이지",
+      "approve": "여기에 저장",
+      "cancel": "취소",
+      "saving": "저장 중...",
+      "saved": "위키에 저장됨",
+      "error": "저장 실패"
+    }
   },
   "review": {
     "title": "수정 요청",
@@ -79,10 +120,6 @@
     "noProject": "열린 프로젝트가 없습니다.",
     "loading": "로딩 중...",
     "title": "경우의 수 맵핑 — 테스트 플랜",
-    "tab": {
-      "ask": "질의",
-      "list": "플랜 목록"
-    },
     "planNamePlaceholder": "새 플랜 이름 (예: 파이어볼 스킬)",
     "newPlan": "새 플랜",
     "noPlans": "테스트 플랜이 없습니다. 위에 이름을 입력해 생성하세요.",
@@ -157,8 +194,7 @@
     "title": "페르소나 플레이 시나리오",
     "tab": {
       "manage": "페르소나 관리",
-      "scenarios": "시나리오",
-      "ask": "질의"
+      "scenarios": "시나리오"
     },
     "searchPlaceholder": "페르소나 검색",
     "addPersona": "신규 페르소나",

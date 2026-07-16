@@ -15,7 +15,7 @@ export function ChatReferencePanel() {
   const setPendingOpenFile = useWikiStore((s) => s.setPendingOpenFile)
   const setActiveView = useWikiStore((s) => s.setActiveView)
   const project = useWikiStore((s) => s.project)
-  const [state, setState] = useState<{ path: string; heading: string; text: string; range: { startOffset: number; endOffset: number } | null } | null>(null)
+  const [state, setState] = useState<{ path: string; title: string; heading: string; text: string; range: { startOffset: number; endOffset: number } | null } | null>(null)
 
   useEffect(() => {
     if (!preview || !project) { setState(null); return }
@@ -29,17 +29,19 @@ export function ChatReferencePanel() {
         if (parsed.page.page_id !== citation.pageId) throw new Error("page identity changed")
         const section = parsed.sections.find((item) => item.sectionId === citation.sectionId)
         if (!section) throw new Error("section missing")
-        if (!cancelled) setState({ path, heading: section.headingText, text: section.body, range: locateCitation(section.body, citation) })
+        // Prefer the page's display title over the file name; fall back to it.
+        const title = page.title?.trim() || getFileName(path).replace(/\.md$/, "")
+        if (!cancelled) setState({ path, title, heading: section.headingText, text: section.body, range: locateCitation(section.body, citation) })
       })
       .catch(() => { if (!cancelled) setState(null) })
     return () => { cancelled = true }
   }, [preview, project])
 
   if (!preview) return null
-  const fileName = state ? getFileName(state.path) : "Reference"
+  const displayName = state ? state.title : "Reference"
   return <div className="flex h-full w-[380px] flex-shrink-0 flex-col border-l bg-background">
     <div className="flex items-center gap-2 border-b px-3 py-2">
-      <span className="flex-1 truncate text-sm font-medium" title={fileName}>{fileName.replace(/\.md$/, "")}</span>
+      <span className="flex-1 truncate text-sm font-medium" title={displayName}>{displayName}</span>
       <button type="button" title="그래프에서 열기" disabled={!state} onClick={() => { if (state) { setPendingOpenFile(state.path); setActiveView("graph") } }} className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"><ExternalLink className="h-3.5 w-3.5" /></button>
       <button type="button" title="닫기" onClick={() => setChatReferencePreview(null)} className="rounded p-1 text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
     </div>

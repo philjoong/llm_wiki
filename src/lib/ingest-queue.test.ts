@@ -537,11 +537,22 @@ describe("ingest-queue — pauseQueue & switch-project survival", () => {
 
 // ── cleanupWrittenFiles — file delete + LanceDB chunk cascade ──────
 describe("cleanupWrittenFiles — embedding cascade", () => {
-  it("deletes each file AND drops its embedding chunks (relative paths)", async () => {
+  // Step 13: the embedding cascade is keyed by each file's v2 ULID
+  // page_id, read from frontmatter — not the filename stem. These
+  // helpers build distinct v2 docs and route readFile by path.
+  const v2ById = (pageId: string) =>
+    `---\nschema: llm-wiki/page/v2\npage_id: ${pageId}\ntitle: T\npage_type: guide\nsummary: s\nsections:\n  sec-01ARZ3NDEKTSV4RRFFQ69G5FAW:\n    section_type: overview\n---\n# T\n## Facts {#sec-01ARZ3NDEKTSV4RRFFQ69G5FAW}\nbody\n`
+  const ULID_ROPE = "page-01ARZ3NDEKTSV4RRFFQ69G5F01"
+  const ULID_TRANSFORMER = "page-01ARZ3NDEKTSV4RRFFQ69G5F02"
+
+  it("deletes each file AND drops its embedding chunks keyed by v2 ULID (relative paths)", async () => {
     const { deleteFile } = await import("@/commands/fs")
     const mockDeleteFile = vi.mocked(deleteFile)
     mockDeleteFile.mockReset()
     mockDeleteFile.mockResolvedValue(undefined)
+    mockReadFile.mockImplementation(async (path: string) =>
+      path.includes("rope") ? v2ById(ULID_ROPE) : v2ById(ULID_TRANSFORMER),
+    )
 
     await cleanupWrittenFiles("/proj", [
       "db/concepts/rope.md",
@@ -553,10 +564,10 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     expect(mockDeleteFile).toHaveBeenNthCalledWith(1, "/proj/db/concepts/rope.md")
     expect(mockDeleteFile).toHaveBeenNthCalledWith(2, "/proj/db/entities/transformer.md")
 
-    // Embedding cascade uses page slugs (basename minus .md).
+    // Embedding cascade uses the v2 ULID from each file's frontmatter.
     expect(removePageEmbeddingMock).toHaveBeenCalledTimes(2)
-    expect(removePageEmbeddingMock).toHaveBeenNthCalledWith(1, "/proj", "rope")
-    expect(removePageEmbeddingMock).toHaveBeenNthCalledWith(2, "/proj", "transformer")
+    expect(removePageEmbeddingMock).toHaveBeenNthCalledWith(1, "/proj", ULID_ROPE)
+    expect(removePageEmbeddingMock).toHaveBeenNthCalledWith(2, "/proj", ULID_TRANSFORMER)
   })
 
   it("uses absolute paths verbatim (doesn't double-prefix the project path)", async () => {
@@ -564,12 +575,13 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     const mockDeleteFile = vi.mocked(deleteFile)
     mockDeleteFile.mockReset()
     mockDeleteFile.mockResolvedValue(undefined)
+    mockReadFile.mockResolvedValue(v2ById(ULID_ROPE))
 
     await cleanupWrittenFiles("/proj", ["/abs/elsewhere/db/concepts/foo.md"])
 
     expect(mockDeleteFile).toHaveBeenCalledWith("/abs/elsewhere/db/concepts/foo.md")
-    // Slug derivation still works on absolute paths.
-    expect(removePageEmbeddingMock).toHaveBeenCalledWith("/proj", "foo")
+    // ULID from content drives the cascade, regardless of the path shape.
+    expect(removePageEmbeddingMock).toHaveBeenCalledWith("/proj", ULID_ROPE)
   })
 
   it("continues to subsequent files when one delete throws", async () => {
@@ -580,6 +592,9 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     mockDeleteFile
       .mockRejectedValueOnce(new Error("ENOENT"))
       .mockResolvedValueOnce(undefined)
+    mockReadFile.mockImplementation(async (path: string) =>
+      path.includes("present") ? v2ById(ULID_TRANSFORMER) : v2ById(ULID_ROPE),
+    )
 
     await cleanupWrittenFiles("/proj", [
       "db/concepts/missing.md",
@@ -591,7 +606,7 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     // First file's embedding cascade was skipped (deleteFile threw),
     // second file's cascade still ran.
     expect(removePageEmbeddingMock).toHaveBeenCalledTimes(1)
-    expect(removePageEmbeddingMock).toHaveBeenCalledWith("/proj", "present")
+    expect(removePageEmbeddingMock).toHaveBeenCalledWith("/proj", ULID_TRANSFORMER)
   })
 
   it("swallows removePageEmbedding errors so a LanceDB issue doesn't abort cleanup", async () => {
@@ -599,6 +614,9 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     const mockDeleteFile = vi.mocked(deleteFile)
     mockDeleteFile.mockReset()
     mockDeleteFile.mockResolvedValue(undefined)
+    mockReadFile.mockImplementation(async (path: string) =>
+      path.includes("/a.md") ? v2ById(ULID_ROPE) : v2ById(ULID_TRANSFORMER),
+    )
 
     // First page's embedding cascade throws; second succeeds.
     removePageEmbeddingMock
@@ -616,17 +634,32 @@ describe("cleanupWrittenFiles — embedding cascade", () => {
     expect(removePageEmbeddingMock).toHaveBeenCalledTimes(2)
   })
 
-  it("handles Windows backslash paths via getFileStem", async () => {
+  it("passes backslash paths verbatim to deleteFile and keys the cascade off the ULID", async () => {
     const { deleteFile } = await import("@/commands/fs")
     const mockDeleteFile = vi.mocked(deleteFile)
     mockDeleteFile.mockReset()
     mockDeleteFile.mockResolvedValue(undefined)
+    mockReadFile.mockResolvedValue(v2ById(ULID_ROPE))
 
     // A path that's been rewritten with backslashes (Windows ingest
-    // pipeline output before normalize). getFileStem must still
-    // pull "rope" out cleanly so the cascade hits the right page.
+    // pipeline output before normalize). The disk delete uses it
+    // verbatim; the embedding key comes from the file's ULID.
     await cleanupWrittenFiles("C:/proj", ["wiki\\concepts\\rope.md"])
 
-    expect(removePageEmbeddingMock).toHaveBeenCalledWith("C:/proj", "rope")
+    expect(mockDeleteFile).toHaveBeenCalledWith("C:/proj/wiki\\concepts\\rope.md")
+    expect(removePageEmbeddingMock).toHaveBeenCalledWith("C:/proj", ULID_ROPE)
+  })
+
+  it("skips the embedding cascade when a written file is not valid v2", async () => {
+    const { deleteFile } = await import("@/commands/fs")
+    const mockDeleteFile = vi.mocked(deleteFile)
+    mockDeleteFile.mockReset()
+    mockDeleteFile.mockResolvedValue(undefined)
+    mockReadFile.mockResolvedValue("not a v2 doc")
+
+    await cleanupWrittenFiles("/proj", ["db/concepts/legacy.md"])
+
+    expect(mockDeleteFile).toHaveBeenCalledTimes(1)
+    expect(removePageEmbeddingMock).not.toHaveBeenCalled()
   })
 })

@@ -64,4 +64,42 @@ describe("knowledge graph Q&A", () => {
     expect(formatGraphContextBlocks([{ graphName: "g", reasoning: "selected", lines: ["- A --P--> B"], truncated: false }])).toContain("### Graph: g")
     expect(formatGraphContextBlocks([])).toBe("")
   })
+
+  describe("content scope (Step 07)", () => {
+    // Two assertions: assert-1 touches ent-a/ent-b (page-1); assert-2 touches
+    // ent-c/ent-d (page-2). Scope should keep only the matching assertion.
+    const scopedSnapshot = {
+      graph,
+      nodes: [
+        ...snapshot.nodes,
+        { nodeId: "node-c", graphId: graph.graphId, entityId: "ent-c", entity: { entityId: "ent-c", canonicalName: "Skill C", entityType: "concept" as const } },
+        { nodeId: "node-d", graphId: graph.graphId, entityId: "ent-d", entity: { entityId: "ent-d", canonicalName: "Range", entityType: "concept" as const } },
+      ],
+      assertions: [
+        snapshot.assertions[0],
+        { assertionId: "assert-2", graphId: graph.graphId, subjectEntityId: "ent-c", predicate: "HAS_COOLDOWN", objectEntityId: "ent-d", origin: "ingest" as const, status: "active" as const, createdAt: "2026-01-01", evidenceState: "documented" as const, evidence: [{ evidenceId: "evidence-2", assertionId: "assert-2", pageId: "page-2", sectionId: "sec-2", evidenceType: "supports" as const }] },
+      ],
+    }
+
+    beforeEach(() => {
+      vi.mocked(listKnowledgeGraphs).mockResolvedValue([graph])
+      vi.mocked(getKnowledgeGraphSnapshot).mockResolvedValue(scopedSnapshot)
+      selection({ selections: [{ graph: graph.graphName, relationTypes: ["HAS_COOLDOWN"], entities: [] }] })
+    })
+
+    it("keeps only assertions touching an allowed entity", async () => {
+      const blocks = await getGraphContext("q", "/project", "ignored", llm, undefined, { allowedEntityIds: ["ent-a"] })
+      expect(blocks[0].lines).toEqual(["- Skill A --HAS_COOLDOWN--> Cooldown"])
+    })
+
+    it("keeps only assertions whose evidence cites an allowed page", async () => {
+      const blocks = await getGraphContext("q", "/project", "ignored", llm, undefined, { allowedPageIds: ["page-2"] })
+      expect(blocks[0].lines).toEqual(["- Skill C --HAS_COOLDOWN--> Range"])
+    })
+
+    it("applies no filter when scope is empty (regression)", async () => {
+      const blocks = await getGraphContext("q", "/project", "ignored", llm, undefined, { allowedPageIds: [], allowedEntityIds: [] })
+      expect(blocks[0].lines).toHaveLength(2)
+    })
+  })
 })

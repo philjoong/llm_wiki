@@ -323,26 +323,31 @@ pub async fn git_status(project_path: String) -> Result<Vec<StatusEntry>, String
 }
 
 /// Return up to `limit` most-recent commits, newest first. Empty repo
-/// (no commits yet) returns an empty list rather than an error.
+/// (no commits yet) returns an empty list rather than an error. When
+/// `path` is given, only commits that touched that path are listed
+/// (`git log -- <path>`) — used to walk a single file's history when
+/// picking the default comparison point.
 #[tauri::command]
 pub async fn git_log(
     project_path: String,
     limit: u32,
+    path: Option<String>,
 ) -> Result<Vec<CommitInfo>, String> {
     let limit_str = limit.to_string();
     // Tab is a safe separator: commit hash, author name, ISO date, and
     // subject can't contain literal tabs in a normal git workflow. %x09
     // is a literal tab in pretty-format.
-    let out = run_git(
-        &project_path,
-        &[
-            "log",
-            "--pretty=format:%H%x09%an%x09%aI%x09%s",
-            "-n",
-            &limit_str,
-        ],
-    )
-    .await?;
+    let mut args = vec![
+        "log",
+        "--pretty=format:%H%x09%an%x09%aI%x09%s",
+        "-n",
+        &limit_str,
+    ];
+    if let Some(p) = path.as_ref() {
+        args.push("--");
+        args.push(p);
+    }
+    let out = run_git(&project_path, &args).await?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         // Empty repository — git exits non-zero with this message. Treat
@@ -496,6 +501,43 @@ pub async fn git_show(
         message,
         files,
     })
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ShowFileResult {
+    /// false when the path does not exist at that commit — a distinct,
+    /// non-error outcome ("did not exist at that time").
+    pub exists: bool,
+    pub content: Option<String>,
+}
+
+/// Return the content of `path` as it was at commit `hash`
+/// (`git show <hash>:<path>`). Read-only — never touches the working
+/// tree. A path missing from that commit yields `{ exists: false }`
+/// rather than an error; a bad commit hash is still an error.
+#[tauri::command]
+pub async fn git_show_file(
+    project_path: String,
+    hash: String,
+    path: String,
+) -> Result<ShowFileResult, String> {
+    let spec = format!("{}:{}", hash, path);
+    let out = run_git(&project_path, &["show", &spec]).await?;
+    if out.status.success() {
+        return Ok(ShowFileResult {
+            exists: true,
+            content: Some(String::from_utf8_lossy(&out.stdout).to_string()),
+        });
+    }
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    // git reports a missing path with one of these messages depending on
+    // whether the file exists in the working tree; both mean "not in that
+    // commit". Anything else (invalid object, not a repo, ...) is an error.
+    if err.contains("does not exist in") || err.contains("exists on disk, but not in") {
+        return Ok(ShowFileResult { exists: false, content: None });
+    }
+    Err(format!("git show 실패: {}", err.trim()))
 }
 
 /// Return unified diff text between `ref_a` and `ref_b`. If `path` is
@@ -920,7 +962,7 @@ mod tests {
         git_init(p.clone()).await.expect("git_init");
 
         // Initial commit should exist.
-        let log1 = git_log(p.clone(), 10).await.expect("git_log 1");
+        let log1 = git_log(p.clone(), 10, None).await.expect("git_log 1");
         assert_eq!(log1.len(), 1, "expected 1 commit after init, got {:?}", log1);
         assert_eq!(log1[0].message, "init: bootstrap project");
 
@@ -937,7 +979,7 @@ mod tests {
         assert!(commit.committed, "expected committed=true");
         assert!(commit.commit_hash.is_some(), "expected hash on real commit");
 
-        let log2 = git_log(p.clone(), 10).await.expect("git_log 2");
+        let log2 = git_log(p.clone(), 10, None).await.expect("git_log 2");
         assert_eq!(log2.len(), 2, "expected 2 commits, got {:?}", log2);
         assert_eq!(log2[0].message, "ingest: bar.md → 1 page");
 
@@ -953,7 +995,7 @@ mod tests {
         assert!(noop.commit_hash.is_none());
 
         // git_log should still show 2 commits.
-        let log3 = git_log(p.clone(), 10).await.expect("git_log 3");
+        let log3 = git_log(p.clone(), 10, None).await.expect("git_log 3");
         assert_eq!(log3.len(), 2);
 
         // git_status on a clean tree should be empty.
@@ -1001,11 +1043,11 @@ mod tests {
         fs::write(dir.join("db/.gitkeep"), "# bootstrap").unwrap();
 
         git_init(p.clone()).await.expect("first init");
-        let log1 = git_log(p.clone(), 10).await.unwrap();
+        let log1 = git_log(p.clone(), 10, None).await.unwrap();
         assert_eq!(log1.len(), 1);
 
         git_init(p.clone()).await.expect("second init");
-        let log2 = git_log(p.clone(), 10).await.unwrap();
+        let log2 = git_log(p.clone(), 10, None).await.unwrap();
         assert_eq!(log2.len(), 1, "second init should not create a new commit");
 
         cleanup(&dir);
@@ -1036,7 +1078,7 @@ mod tests {
         .await
         .expect("commit");
 
-        let log = git_log(p.clone(), 10).await.unwrap();
+        let log = git_log(p.clone(), 10, None).await.unwrap();
         assert_eq!(log.len(), 2);
         let head_hash = log[0].hash.clone();
         assert_eq!(log[0].message, "second commit");
@@ -1093,6 +1135,61 @@ mod tests {
         cleanup(&dir);
     }
 
+    /// `git_show_file` reads a file's content at a past commit without
+    /// touching the working tree, and flags a path missing from that
+    /// commit as `exists: false` instead of erroring. Path-scoped
+    /// `git_log` lists only commits that touched the path.
+    #[tokio::test]
+    async fn git_show_file_reads_past_content_and_flags_missing() {
+        if which::which("git").is_err() {
+            return;
+        }
+        let dir = make_tmpdir("showfile");
+        let p = dir.to_string_lossy().to_string();
+
+        fs::write(dir.join("a.md"), "v1\n").unwrap();
+        git_init(p.clone()).await.expect("git_init");
+
+        fs::write(dir.join("a.md"), "v2\n").unwrap();
+        fs::write(dir.join("b.md"), "new\n").unwrap();
+        git_commit(
+            p.clone(),
+            "second".to_string(),
+            vec!["a.md".to_string(), "b.md".to_string()],
+        )
+        .await
+        .expect("commit");
+
+        let log = git_log(p.clone(), 10, None).await.unwrap();
+        assert_eq!(log.len(), 2);
+        let head = log[0].hash.clone();
+        let first = log[1].hash.clone();
+
+        // Past content of a.md at the first commit.
+        let v1 = git_show_file(p.clone(), first.clone(), "a.md".to_string())
+            .await
+            .expect("show v1");
+        assert!(v1.exists);
+        assert_eq!(v1.content.as_deref(), Some("v1\n"));
+
+        // b.md did not exist at the first commit — exists=false, not Err.
+        let missing = git_show_file(p.clone(), first.clone(), "b.md".to_string())
+            .await
+            .expect("show missing");
+        assert!(!missing.exists);
+        assert!(missing.content.is_none());
+
+        // Read-only: working tree still has v2 after the reads.
+        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "v2\n");
+
+        // Path-scoped log lists only commits that touched b.md.
+        let blog = git_log(p.clone(), 10, Some("b.md".to_string())).await.unwrap();
+        assert_eq!(blog.len(), 1, "expected only the commit touching b.md");
+        assert_eq!(blog[0].hash, head);
+
+        cleanup(&dir);
+    }
+
     /// `git_checkout_path` restores the working tree copy of a file from
     /// an older commit. It does NOT create a new commit on its own.
     #[tokio::test]
@@ -1123,11 +1220,13 @@ mod tests {
         )
         .await
         .expect("git_checkout_path");
-        let restored = fs::read_to_string(dir.join("a.md")).unwrap();
+        // Normalize line endings: with core.autocrlf=true (git default on
+        // Windows) checkout rewrites "\n" to "\r\n", so compare newline-agnostic.
+        let restored = fs::read_to_string(dir.join("a.md")).unwrap().replace("\r\n", "\n");
         assert_eq!(restored, "v1\n", "working tree should be back at v1");
 
         // No new commit was created — log still has 2 entries.
-        let log = git_log(p.clone(), 10).await.unwrap();
+        let log = git_log(p.clone(), 10, None).await.unwrap();
         assert_eq!(log.len(), 2);
 
         cleanup(&dir);
@@ -1151,13 +1250,13 @@ mod tests {
             .await
             .expect("commit");
 
-        let head = git_log(p.clone(), 1).await.unwrap()[0].hash.clone();
+        let head = git_log(p.clone(), 1, None).await.unwrap()[0].hash.clone();
         let res = git_revert(p.clone(), head).await.expect("git_revert");
         assert!(res.committed, "expected revert to commit cleanly");
         assert!(res.conflicts.is_empty());
         assert!(res.commit_hash.is_some());
 
-        let log = git_log(p.clone(), 10).await.unwrap();
+        let log = git_log(p.clone(), 10, None).await.unwrap();
         assert_eq!(log.len(), 3, "expected 3 commits after revert");
         assert!(
             log[0].message.starts_with("Revert"),
@@ -1165,8 +1264,9 @@ mod tests {
             log[0].message
         );
 
-        // Working tree should be back at v1.
-        let restored = fs::read_to_string(dir.join("a.md")).unwrap();
+        // Working tree should be back at v1. Normalize line endings for
+        // core.autocrlf=true (git default on Windows) which rewrites "\n".
+        let restored = fs::read_to_string(dir.join("a.md")).unwrap().replace("\r\n", "\n");
         assert_eq!(restored, "v1\n");
 
         cleanup(&dir);

@@ -87,15 +87,15 @@ async function readQueueFile(): Promise<string> {
 describe("ingest-queue persistence — write", () => {
   it("writes .llm-wiki/ingest-queue.json after enqueue", async () => {
     await enqueueIngest(TEST_ID_A, "raw/sources/a.md")
+    let parsed: Array<{ sourcePath: string }> = []
     await waitFor(async () => {
       try {
-        const c = await readQueueFile()
-        return JSON.parse(c).length === 1
+        parsed = JSON.parse(await readQueueFile())
+        return parsed.length === 1
       } catch {
         return false
       }
     })
-    const parsed = JSON.parse(await readQueueFile())
     expect(parsed[0].sourcePath).toBe("raw/sources/a.md")
   })
 
@@ -104,15 +104,18 @@ describe("ingest-queue persistence — write", () => {
       { sourcePath: "raw/sources/注意力机制.pdf", folderContext: "AI研究 > 论文" },
       { sourcePath: "raw/日本語.md", folderContext: "" },
     ])
+    // Capture the parsed content from within the guard: a concurrent
+    // saveQueue can truncate-then-write the file mid-read, so a second
+    // bare read+parse here would flake with "Unexpected end of JSON input".
+    let parsed: Array<{ sourcePath: string; folderContext: string }> = []
     await waitFor(async () => {
       try {
-        const c = await readQueueFile()
-        return JSON.parse(c).length === 2
+        parsed = JSON.parse(await readQueueFile())
+        return parsed.length === 2
       } catch {
         return false
       }
     })
-    const parsed = JSON.parse(await readQueueFile()) as Array<{ sourcePath: string; folderContext: string }>
     const paths = parsed.map((p) => p.sourcePath)
     expect(paths).toContain("raw/sources/注意力机制.pdf")
     expect(paths).toContain("raw/日本語.md")
@@ -136,15 +139,16 @@ describe("ingest-queue persistence — write", () => {
     })
 
     await enqueueIngest(TEST_ID_A, "second.md")
+    let arr: Array<{ sourcePath: string }> = []
     await waitFor(async () => {
       try {
-        return JSON.parse(await readQueueFile()).length === 2
+        arr = JSON.parse(await readQueueFile())
+        return arr.length === 2
       } catch {
         return false
       }
     })
 
-    const arr = JSON.parse(await readQueueFile()) as Array<{ sourcePath: string }>
     expect(arr.map((t) => t.sourcePath)).toEqual(
       expect.arrayContaining(["first.md", "second.md"]),
     )
@@ -170,8 +174,16 @@ describe("ingest-queue persistence — restore round-trip", () => {
     clearQueueState()
     expect(getQueue()).toHaveLength(0)
 
-    await restoreQueue(TEST_ID_A, tmp.path)
-    const restored = getQueue()
+    // The enqueue's fire-and-forget processNext writes the file again
+    // (task → "processing"); that write can still be mid-flight here, and
+    // loadQueue swallows a truncated read as an empty queue. Retry the
+    // restore until the tasks land so the round-trip is stable.
+    let restored = getQueue()
+    await waitFor(async () => {
+      await restoreQueue(TEST_ID_A, tmp.path)
+      restored = getQueue()
+      return restored.length === 2
+    })
     expect(restored).toHaveLength(2)
     expect(restored.map((t) => t.sourcePath).sort()).toEqual(["a.md", "b.md"])
   })
@@ -245,22 +257,31 @@ describe("ingest-queue persistence — restore round-trip", () => {
     await enqueueBatch(TEST_ID_A, [
       { sourcePath: "raw/sources/注意力.pdf", folderContext: "研究 > 深度学习" },
     ])
+    // Verify on-disk state before we blow away memory. Capture inside the
+    // guard so a concurrent truncate-then-write can't flake the parse.
+    let onDisk: Array<{ sourcePath: string; folderContext: string }> = []
     await waitFor(async () => {
       try {
-        return JSON.parse(await readQueueFile()).length === 1
+        onDisk = JSON.parse(await readQueueFile())
+        return onDisk.length === 1
       } catch {
         return false
       }
     })
-    // Verify on-disk state before we blow away memory
-    const onDisk = JSON.parse(await readQueueFile()) as Array<{ sourcePath: string; folderContext: string }>
     expect(onDisk[0].sourcePath).toBe("raw/sources/注意力.pdf")
     expect(onDisk[0].folderContext).toBe("研究 > 深度学习")
 
     clearQueueState()
-    await restoreQueue(TEST_ID_A, tmp.path)
-
-    const restored = getQueue()
+    // The enqueue's fire-and-forget processNext writes the file again
+    // (task → "processing"); that write can still be mid-flight here, and
+    // loadQueue swallows a truncated read as an empty queue. Retry the
+    // restore until the task lands so the round-trip assertion is stable.
+    let restored = getQueue()
+    await waitFor(async () => {
+      await restoreQueue(TEST_ID_A, tmp.path)
+      restored = getQueue()
+      return restored.length === 1
+    })
     expect(restored).toHaveLength(1)
     expect(restored[0].sourcePath).toBe("raw/sources/注意力.pdf")
     expect(restored[0].folderContext).toBe("研究 > 深度学习")

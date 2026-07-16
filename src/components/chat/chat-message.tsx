@@ -13,6 +13,10 @@ import type { FileNode } from "@/types/wiki"
 import { convertLatexToUnicode } from "@/lib/latex-to-unicode"
 import { normalizePath } from "@/lib/path-utils"
 import { makeQueryFileName } from "@/lib/wiki-filename"
+import { parseJsonAnswer } from "@/lib/json-answer"
+import { useTranslation } from "react-i18next"
+import { parseInfoAnswer } from "@/lib/chat-info-injection"
+import { suggestSaveLocation, saveChatAnswerToWiki, type SaveLocation } from "@/lib/chat-save"
 
 // Module-level cache of source file names
 let cachedSourceFiles: string[] = []
@@ -90,6 +94,7 @@ export function ChatMessage({ message, isLastAssistant, onRegenerate }: ChatMess
             <MarkdownContent content={message.content} />
           )}
         </div>
+        {isUser && <SaveAnswerToWiki content={message.content} />}
         {isAssistant && <CitedReferencesPanel content={message.content} savedReferences={message.references} />}
         {isAssistant && hovered && (
           <div className="flex items-center gap-1">
@@ -253,6 +258,120 @@ function SaveToWikiButton({ content, visible }: { content: string; visible: bool
   )
 }
 
+/**
+ * "위키에 저장" action on a user's back-question answer (Step 12). Shown only
+ * on messages tagged by formatInfoAnswer (an actual info answer, not the
+ * "없음/모름" marker). Click → LLM suggests a location → user approves or edits
+ * the path (location-only approval, no content review) → commit via the
+ * existing v2 ingest pipeline with origin:user_chat.
+ */
+function SaveAnswerToWiki({ content }: { content: string }) {
+  const { t } = useTranslation()
+  const project = useWikiStore((s) => s.project)
+  const llmConfig = useWikiStore((s) => s.llmConfig)
+  const setFileTree = useWikiStore((s) => s.setFileTree)
+
+  const parsed = parseInfoAnswer(content)
+  const [phase, setPhase] = useState<"idle" | "suggesting" | "review" | "saving" | "saved" | "error">("idle")
+  const [location, setLocation] = useState<SaveLocation | null>(null)
+
+  // Only savable when it's a real answer (skip the unavailable marker).
+  const answer = parsed && !/이 정보는 없음\/모름$/.test(parsed.answer.trim()) ? parsed.answer : null
+  if (!parsed || !answer) return null
+
+  const handleStart = async () => {
+    if (!project) return
+    setPhase("suggesting")
+    try {
+      const pp = normalizePath(project.path)
+      const suggested = await suggestSaveLocation(pp, content, answer, llmConfig)
+      setLocation(suggested)
+      setPhase("review")
+    } catch (err) {
+      console.error("[chat] save location suggestion failed:", err)
+      setPhase("error")
+    }
+  }
+
+  const handleApprove = async () => {
+    if (!project || !location) return
+    setPhase("saving")
+    try {
+      const pp = normalizePath(project.path)
+      await saveChatAnswerToWiki(pp, location, answer, llmConfig)
+      const tree = await listDirectory(pp)
+      setFileTree(tree)
+      useWikiStore.getState().bumpDataVersion()
+      setPhase("saved")
+    } catch (err) {
+      console.error("[chat] save to wiki failed:", err)
+      setPhase("error")
+    }
+  }
+
+  if (phase === "saved") {
+    return (
+      <div className="self-end inline-flex items-center gap-1 text-[11px] text-emerald-600">
+        <Check className="h-3 w-3" /> {t("chat.save.saved")}
+      </div>
+    )
+  }
+
+  if (phase === "review" && location) {
+    return (
+      <div className="self-end w-full max-w-sm rounded-md border border-border/60 bg-background/60 p-2 text-xs space-y-1.5">
+        <div className="flex items-center gap-1.5 font-medium">
+          <BookmarkPlus className="h-3 w-3" /> {t("chat.save.locationLabel")}
+          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {location.isNew ? t("chat.save.newPage") : t("chat.save.existingPage")}
+          </span>
+        </div>
+        <input
+          type="text"
+          value={location.pagePath}
+          onChange={(e) => setLocation({ ...location, pagePath: e.target.value, isNew: location.isNew })}
+          className="w-full rounded border bg-background px-2 py-1 text-xs"
+        />
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => setPhase("idle")}
+            className="rounded px-2 py-0.5 text-muted-foreground hover:bg-accent"
+          >
+            {t("chat.save.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={handleApprove}
+            className="rounded bg-primary px-2 py-0.5 text-primary-foreground hover:bg-primary/90"
+          >
+            {t("chat.save.approve")}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleStart}
+      disabled={phase === "suggesting" || phase === "saving"}
+      className="self-end inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+      title={t("chat.save.action")}
+    >
+      <BookmarkPlus className="h-3 w-3" />
+      {phase === "suggesting"
+        ? t("chat.save.suggesting")
+        : phase === "saving"
+          ? t("chat.save.saving")
+          : phase === "error"
+            ? t("chat.save.error")
+            : t("chat.save.action")}
+    </button>
+  )
+}
+
 function CitedReferencesPanel({ savedReferences }: { content: string; savedReferences?: StructuredCitation[] }) {
   const setChatReferencePreview = useWikiStore((s) => s.setChatReferencePreview)
   const [expanded, setExpanded] = useState(false)
@@ -349,18 +468,10 @@ function MarkdownContent({ content }: { content: string }) {
   const { thinking, answer } = useMemo(() => separateThinking(cleaned), [cleaned])
   const processed = useMemo(() => processContent(answer), [answer])
 
-  // Detect if answer is JSON
-  const jsonContent = useMemo(() => {
-    const trimmed = answer.trim()
-    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-      try {
-        return JSON.parse(trimmed)
-      } catch {
-        return null
-      }
-    }
-    return null
-  }, [answer])
+  // Detect a structured JSON answer (Step 05 §3.4). Parsing happens on every
+  // render (not a one-time onDone rewrite), so field cards survive a
+  // conversation reload; a parse miss falls back to the raw markdown below.
+  const jsonContent = useMemo(() => parseJsonAnswer(answer), [answer])
 
   return (
     <div className="space-y-3">

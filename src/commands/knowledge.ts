@@ -27,6 +27,7 @@ export const resolveCardinalityConflict = (projectPath: string, assertionId: str
 export const deleteKnowledgePage = (projectPath: string, pageId: string) => invoke<void>("delete_page", { ...args(projectPath), pageId })
 export const runKnowledgeIntegrityCheck = (projectPath: string) => invoke<IntegrityIssue[]>("run_knowledge_integrity_check", args(projectPath))
 export const getKnowledgePage = (projectPath: string, pageId: string) => invoke<PageRecord | null>("get_knowledge_page", { ...args(projectPath), pageId })
+export const listKnowledgePages = (projectPath: string) => invoke<PageRecord[]>("list_knowledge_pages", args(projectPath))
 export const getKnowledgeSection = (projectPath: string, sectionId: string) => invoke<SectionRecord | null>("get_knowledge_section", { ...args(projectPath), sectionId })
 export const findKnowledgeEntities = (projectPath: string, query: string) => invoke<EntityRecord[]>("find_knowledge_entities", { ...args(projectPath), query })
 export interface EntityDetail extends EntityRecord { aliases: string[]; nodeIds: string[] }
@@ -52,5 +53,8 @@ export const discardSectionAssertions = (projectPath: string, sectionId: string)
 export const traverseKnowledgeGraph = (projectPath: string, request: TraversalRequest) => invoke<TraversalHit[]>("traverse_knowledge_graph", { ...args(projectPath), request })
 export interface IngestPageDocument { relativePath: string; content: string; page: PageRecord; sections: SectionRecord[] }
 export interface IngestAssertionWrite { graphId:string;subjectName:string;subjectType:string;predicate:string;relationDescription:string;objectName:string;objectType:string;pageId:string;sectionId:string;quote?:string }
-export const commitIngestPlan = (projectPath: string, operationId: string, pages: IngestPageDocument[], assertions: IngestAssertionWrite[] = []) => invoke<void>("commit_ingest_plan", { ...args(projectPath), input: { operationId, pages, assertions } })
+/** Assertion origin recorded for a commit (Step 12). Defaults to "ingest"; the
+ * chat "위키에 저장" path passes "user_chat". */
+export type IngestOrigin = "ingest" | "user_chat"
+export const commitIngestPlan = (projectPath: string, operationId: string, pages: IngestPageDocument[], assertions: IngestAssertionWrite[] = [], origin: IngestOrigin = "ingest") => invoke<void>("commit_ingest_plan", { ...args(projectPath), input: { operationId, pages, assertions, origin } })
 export const recoverIngestTransactions = (projectPath: string) => invoke<void>("recover_ingest_transactions", args(projectPath))

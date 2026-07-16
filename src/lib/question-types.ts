@@ -11,6 +11,25 @@ import yaml from "js-yaml"
 import { listDirectory, readFile } from "@/commands/fs"
 import type { FileNode } from "@/types/wiki"
 
+/**
+ * Retrieval strategy hints declared per question type (§3.1). A closed set of
+ * flags — unknown keys are ignored; an omitted block means "current behavior".
+ * UI flags (`scope`, `includeHistory`) are parsed here but consumed in later
+ * Steps (07 / 08-09).
+ */
+export interface RetrievalHints {
+  /** YAML: graph_expand — promotion hop budget (0 = no promotion). */
+  graphExpand?: number
+  /** YAML: predicate_axes — axis names expanded to predicates via PREDICATE_AXES. */
+  predicateAxes?: string[]
+  /** YAML: seed — seed strategy. */
+  seed?: "llm_entities"
+  /** YAML: include_history — Phase 3 (Step 08/09). */
+  includeHistory?: boolean
+  /** YAML: scope — Phase 2 (Step 07). */
+  scope?: "selectable"
+}
+
 export interface QuestionType {
   /** Filename stem — stable id used by the classifier and exclusion map. */
   id: string
@@ -20,8 +39,17 @@ export interface QuestionType {
   description: string
   /** Keys the LLM should fill in its structured response. Map of key -> description. */
   fields?: Record<string, string>
+  /**
+   * Input contract (Step 10, §6): information the type needs to answer, as
+   * `info_key -> description`. The model judges which items the context does
+   * not cover and asks for only those via the `information_requests` reserved
+   * key. An omitted block means the type declares no required inputs.
+   */
+  requiredInfo?: Record<string, string>
   /** Prompt template for execution. */
   promptTemplate?: string
+  /** Retrieval strategy hints (§3.1). */
+  retrieval?: RetrievalHints
   /** Legacy markdown shape description used by older tests and docs. */
   inputShape?: string
   /** Legacy markdown output description used by older tests and docs. */
@@ -87,9 +115,42 @@ function parseYamlQuestionType(id: string, content: string): Omit<QuestionType, 
     name: raw.name || id,
     description: raw.description || "",
     fields: raw.fields || {},
+    requiredInfo: parseRequiredInfo(raw.required_info ?? raw.requiredInfo),
     promptTemplate: raw.prompt_template || raw.promptTemplate || "",
     zeroResidueMeaning: raw.zero_residue_meaning || raw.zeroResidueMeaning,
+    retrieval: parseRetrievalHints(raw.retrieval),
   }
+}
+
+/**
+ * Parse the `required_info:` block into an `info_key -> description` map
+ * (Step 10). Non-string values are dropped; a missing/empty block yields
+ * undefined so unflagged types declare no input contract.
+ */
+function parseRequiredInfo(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string" && value.trim()) out[key] = value.trim()
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/**
+ * Parse the `retrieval:` block into the closed RetrievalHints set. Unknown keys
+ * are dropped; a missing/empty block yields undefined so unflagged types keep
+ * current behavior (regression-safe).
+ */
+function parseRetrievalHints(raw: unknown): RetrievalHints | undefined {
+  if (!raw || typeof raw !== "object") return undefined
+  const source = raw as Record<string, unknown>
+  const hints: RetrievalHints = {}
+  if (typeof source.graph_expand === "number") hints.graphExpand = source.graph_expand
+  if (Array.isArray(source.predicate_axes)) hints.predicateAxes = source.predicate_axes.filter((v): v is string => typeof v === "string")
+  if (source.seed === "llm_entities") hints.seed = "llm_entities"
+  if (typeof source.include_history === "boolean") hints.includeHistory = source.include_history
+  if (source.scope === "selectable") hints.scope = "selectable"
+  return Object.keys(hints).length ? hints : undefined
 }
 
 function parseMdQuestionType(id: string, content: string): Omit<QuestionType, "_filePath"> {

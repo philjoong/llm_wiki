@@ -1,5 +1,6 @@
 import { loadKnowledgeGraphContexts } from "@/lib/knowledge"
 import { resolveAllowedGraphIds } from "@/lib/knowledge/graph-scope"
+import type { KnowledgeGraphSnapshot } from "@/lib/knowledge/types"
 import type { LlmConfig } from "@/stores/wiki-store"
 import { streamChat } from "./llm-client"
 import { extractJsonObject } from "./sweep-reviews"
@@ -34,26 +35,70 @@ interface GraphSelectionResponse {
  * allowlist to every retrieval path. The string form remains for isolated
  * non-Chat callers and is resolved before snapshots are loaded.
  */
+/**
+ * Content-scope allowlist (Step 07). When provided, graph context assertions
+ * are filtered to those whose subject/object entity is allowed OR whose evidence
+ * cites an allowed page — mirroring section-search's filter so graph context
+ * never references content outside the user-chosen scope. Empty/undefined → no
+ * content filter.
+ */
+export interface GraphContentScope {
+  allowedPageIds?: string[]
+  allowedEntityIds?: string[]
+}
+
 export async function getGraphContext(
   question: string,
   projectPath: string,
   projectName: string,
   llmConfig: LlmConfig,
   graphScope?: readonly string[] | string,
+  contentScope?: GraphContentScope,
 ): Promise<GraphContextBlock[]> {
+  return (await getGraphContextWithEntities(question, projectPath, projectName, llmConfig, graphScope, contentScope)).blocks
+}
+
+/** Result of graph context selection: the formatted blocks plus the entity
+ * names the relevance prompt extracted (Step 04 `seed: llm_entities` reuses
+ * these as traversal seeds instead of making a second LLM call). */
+export interface GraphContextResult {
+  blocks: GraphContextBlock[]
+  /** LLM-extracted entity names mentioned in the question, deduped. */
+  entities: string[]
+}
+
+export async function getGraphContextWithEntities(
+  question: string,
+  projectPath: string,
+  projectName: string,
+  llmConfig: LlmConfig,
+  graphScope?: readonly string[] | string,
+  contentScope?: GraphContentScope,
+): Promise<GraphContextResult> {
   void projectName
   const allowedGraphIds = typeof graphScope === "string"
     ? await resolveAllowedGraphIds(projectPath, graphScope)
     : graphScope
   const contexts = await loadKnowledgeGraphContexts(projectPath, allowedGraphIds)
-  if (contexts.length === 0) return []
+  if (contexts.length === 0) return { blocks: [], entities: [] }
   const scopedPolicy = {
     managedGraphs: contexts.map((context) => context.graph.graphName),
     graphRelationTypes: Object.fromEntries(contexts.map((context) => [context.graph.graphName, context.relationTypes])),
   }
 
   const selections = await selectRelevantGraphs(question, scopedPolicy, llmConfig)
-  if (selections.length === 0) return []
+  const extractedEntities = Array.from(new Set(selections.flatMap((selection) => selection.entities).filter((name) => name.trim())))
+  if (selections.length === 0) return { blocks: [], entities: [] }
+
+  const allowedPageIds = contentScope?.allowedPageIds?.length ? new Set(contentScope.allowedPageIds) : undefined
+  const allowedEntityIds = contentScope?.allowedEntityIds?.length ? new Set(contentScope.allowedEntityIds) : undefined
+  const contentFilterActive = Boolean(allowedPageIds || allowedEntityIds)
+  const assertionInScope = (assertion: KnowledgeGraphSnapshot["assertions"][number]): boolean => {
+    if (!contentFilterActive) return true
+    if (allowedEntityIds && (allowedEntityIds.has(assertion.subjectEntityId) || allowedEntityIds.has(assertion.objectEntityId))) return true
+    if (allowedPageIds && assertion.evidence.some((e) => e.pageId && allowedPageIds.has(e.pageId))) return true
+    return false
+  }
 
   const blocks: GraphContextBlock[] = []
 
@@ -66,6 +111,7 @@ export async function getGraphContext(
     const requestedRelations = new Set(selection.relationTypes)
     const requestedEntities = selection.entities.map((value) => value.toLocaleLowerCase())
     const assertions = context.snapshot.assertions.filter((assertion) => {
+      if (!assertionInScope(assertion)) return false
       if (requestedRelations.size && requestedRelations.has(assertion.predicate)) return true
       if (!requestedEntities.length) return requestedRelations.size === 0
       const subject = context.snapshot.nodes.find((node) => node.entity.entityId === assertion.subjectEntityId)?.entity.canonicalName ?? ""
@@ -92,7 +138,7 @@ export async function getGraphContext(
     })
   }
 
-  return blocks
+  return { blocks, entities: extractedEntities }
 }
 
 /** Join GraphContextBlock[] into a single "## Knowledge Graph Context" section for an LLM prompt. Empty input yields "". */

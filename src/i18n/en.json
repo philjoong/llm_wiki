@@ -50,7 +50,48 @@
     "saving": "Saving...",
     "saved": "Saved!",
     "emptyHint": "Ask a question or start an ingest to begin.",
-    "sources": "Sources"
+    "sources": "Sources",
+    "scope": {
+      "title": "Limit the answer to selected systems, pages, or entities",
+      "all": "All scope",
+      "selected": "{{count}} selected",
+      "graphs": "Systems (graphs)",
+      "pages": "Pages",
+      "entities": "Entities",
+      "clear": "Clear scope"
+    },
+    "history": {
+      "title": "Pick the past point to compare against",
+      "default": "Latest change",
+      "defaultHint": "Most recent commit that changed each file",
+      "empty": "No history yet"
+    },
+    "info": {
+      "title": "More information needed",
+      "textPlaceholder": "Type your answer...",
+      "otherOption": "Other (type it in)",
+      "linkPlaceholder": "https://...",
+      "chooseFile": "Choose file(s)",
+      "submit": "Send",
+      "unavailable": "No / don't know",
+      "answered": "Answered",
+      "markedUnavailable": "Marked unavailable",
+      "ingesting": "Adding to wiki...",
+      "ingestDone": "Added — ask again",
+      "resend": "Ask again"
+    },
+    "save": {
+      "action": "Save to Wiki",
+      "suggesting": "Finding a location...",
+      "locationLabel": "Save location",
+      "newPage": "New page",
+      "existingPage": "Existing page",
+      "approve": "Save here",
+      "cancel": "Cancel",
+      "saving": "Saving...",
+      "saved": "Saved to wiki",
+      "error": "Save failed"
+    }
   },
   "review": {
     "title": "Modifications",
@@ -79,10 +120,6 @@
     "noProject": "No project open.",
     "loading": "Loading...",
     "title": "Case Mapping — Test Plans",
-    "tab": {
-      "ask": "Ask",
-      "list": "Plan List"
-    },
     "planNamePlaceholder": "New plan name (e.g. Fireball skill)",
     "newPlan": "New Plan",
     "noPlans": "No test plans yet. Enter a name above to create one.",
@@ -157,8 +194,7 @@
     "title": "Persona Play Scenarios",
     "tab": {
       "manage": "Personas",
-      "scenarios": "Scenarios",
-      "ask": "Ask"
+      "scenarios": "Scenarios"
     },
     "searchPlaceholder": "Search personas",
     "addPersona": "New persona",

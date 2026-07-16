@@ -8,13 +8,21 @@ import { useChatStore, chatMessagesToLLM, type ChatStoreHook } from "@/stores/ch
 import { useWikiStore } from "@/stores/wiki-store"
 import { streamChat, type ChatMessage as LLMMessage } from "@/lib/llm-client"
 import { deleteFile } from "@/commands/fs"
-import { getGraphContext } from "@/lib/graph-qna"
+import { getQueue } from "@/lib/ingest-queue"
+import { getGraphContextWithEntities } from "@/lib/graph-qna"
+import { findKnowledgeEntities } from "@/commands/knowledge"
 import { normalizePath } from "@/lib/path-utils"
 import { getOutputLanguage, buildLanguageReminder } from "@/lib/output-language"
 import { isGreeting } from "@/lib/greeting-detector"
-import { loadQuestionTypes } from "@/lib/question-types"
-import { citationPrompt, finalizeCitations, issueCitationMap } from "@/lib/chat-citations"
-import { resolveAllowedGraphIds, searchSectionCandidates, type SectionCandidate } from "@/lib/knowledge"
+import { loadQuestionTypes, type QuestionType } from "@/lib/question-types"
+import { buildRequiredInfoPrompt, parseJsonAnswer, parseInformationRequests } from "@/lib/json-answer"
+import { formatInfoAnswer, parseInfoAnswer, injectLinkAnswer, injectFileAnswers } from "@/lib/chat-info-injection"
+import { ChatInfoForms, type InfoRequestResolution } from "./chat-info-forms"
+import { buildGraphPathsBlock, citationPrompt, finalizeCitations, issueCitationMap } from "@/lib/chat-citations"
+import { predicatesForAxes, resolveAllowedGraphIds, searchSectionCandidatesWithPaths, type GraphPath, type SectionCandidate } from "@/lib/knowledge"
+import { EMPTY_SCOPE, type ChatScopeSelection } from "./chat-scope-selector"
+import { type HistoryPointSelection } from "./chat-history-picker"
+import { buildPreviousVersionsBlock, collectPreviousVersions } from "@/lib/git-history"
 
 
 function formatDate(timestamp: number): string {
@@ -151,6 +159,116 @@ export function ChatPanel({
 
   const project = useWikiStore((s) => s.project)
   const llmConfig = useWikiStore((s) => s.llmConfig)
+  const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
+
+  // Question type selection is owned here so the empty-state picker and the
+  // ChatInput dropdown share one value.
+  const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([])
+  const [selectedTypeId, setSelectedTypeId] = useState<string>("")
+
+  // Answer-scope selection is kept per conversation (Step 07): switching
+  // conversations restores that conversation's scope; a fresh conversation
+  // starts unrestricted. Held in-memory for the session (durability deferred).
+  const [scopeByConversation, setScopeByConversation] = useState<Record<string, ChatScopeSelection>>({})
+  const activeScope = (activeConversationId && scopeByConversation[activeConversationId]) || EMPTY_SCOPE
+  const setActiveScope = useCallback((next: ChatScopeSelection) => {
+    const convId = useStore.getState().activeConversationId
+    if (!convId) return
+    setScopeByConversation((prev) => ({ ...prev, [convId]: next }))
+  }, [useStore])
+
+  // The scope selector is shown only when the selected type opts in via
+  // `retrieval.scope === "selectable"` — no question-type id hardcoding.
+  const scopeSelectable = questionTypes.find((t) => t.id === selectedTypeId)?.retrieval?.scope === "selectable"
+
+  // Comparison-point selection is kept per conversation (Step 09), sharing
+  // the Step 07 scope-state pattern: in-memory for the session, restored on
+  // conversation switch; null means "use the Step 08 per-file default".
+  const [historyPointByConversation, setHistoryPointByConversation] = useState<Record<string, HistoryPointSelection>>({})
+  const activeHistoryPoint = (activeConversationId && historyPointByConversation[activeConversationId]) || null
+  const setActiveHistoryPoint = useCallback((next: HistoryPointSelection) => {
+    const convId = useStore.getState().activeConversationId
+    if (!convId) return
+    setHistoryPointByConversation((prev) => ({ ...prev, [convId]: next }))
+  }, [useStore])
+
+  // The history picker is shown only when the selected type opts in via
+  // `retrieval.include_history: true` — no question-type id hardcoding.
+  const historySelectable = questionTypes.find((t) => t.id === selectedTypeId)?.retrieval?.includeHistory === true
+
+  // Info items the user marked "unavailable" via an inline back-question form
+  // (Step 11 §4). Kept per conversation AND per question type, in-memory only:
+  // never persisted, so a later wiki update lets a fresh conversation re-ask.
+  // Feeds the Step 10 prompt so the model does not re-ask a marked item, and
+  // marking every open request closes the ask-loop.
+  const [unavailableInfoByConversation, setUnavailableInfoByConversation] =
+    useState<Record<string, Record<string, string[]>>>({})
+  const markInfoUnavailable = useCallback((questionTypeId: string, infoKey: string) => {
+    const convId = useStore.getState().activeConversationId
+    if (!convId) return
+    setUnavailableInfoByConversation((prev) => {
+      const forConv = prev[convId] ?? {}
+      const forType = forConv[questionTypeId] ?? []
+      if (forType.includes(infoKey)) return prev
+      return { ...prev, [convId]: { ...forConv, [questionTypeId]: [...forType, infoKey] } }
+    })
+  }, [useStore])
+
+  // The question type each conversation last asked with, so the last answer's
+  // information_requests can be re-parsed against that type's required_info
+  // keys at render time, and a resend re-asks with the same type (Step 11).
+  const [lastTypeByConversation, setLastTypeByConversation] = useState<Record<string, string>>({})
+  // The original question text per conversation, replayed by the resend button
+  // after a file/link answer's ingest completes (Step 11 §5).
+  const [lastQuestionByConversation, setLastQuestionByConversation] = useState<Record<string, string>>({})
+  // Resolution state for each open back-question, conversation-scoped and
+  // keyed by info_key (Step 11). Not persisted.
+  const [infoResolutions, setInfoResolutions] = useState<Record<string, Record<string, InfoRequestResolution>>>({})
+  const setInfoResolution = useCallback((convId: string, infoKey: string, resolution: InfoRequestResolution | null) => {
+    setInfoResolutions((prev) => {
+      const forConv = { ...(prev[convId] ?? {}) }
+      if (resolution) forConv[infoKey] = resolution
+      else delete forConv[infoKey]
+      return { ...prev, [convId]: forConv }
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!project) return
+    loadQuestionTypes(normalizePath(project.path)).then(setQuestionTypes).catch(() => {})
+  }, [project])
+
+  // Watch file/link answers whose ingest is in flight (Step 11 §5). A task
+  // leaves the queue on success (kept on failure); "no longer present" flips
+  // the resolution to ingestDone, surfacing the badge + resend button. Polls
+  // the queue the same way activity-panel does.
+  const hasIngesting = Object.values(infoResolutions).some((forConv) =>
+    Object.values(forConv).some((r) => r.state === "ingesting" && r.taskIds?.length),
+  )
+  useEffect(() => {
+    if (!hasIngesting) return
+    const interval = setInterval(() => {
+      const present = new Set(getQueue().map((task) => task.id))
+      setInfoResolutions((prev) => {
+        let changed = false
+        const next: typeof prev = {}
+        for (const [convId, forConv] of Object.entries(prev)) {
+          const nextConv: Record<string, InfoRequestResolution> = {}
+          for (const [infoKey, res] of Object.entries(forConv)) {
+            if (res.state === "ingesting" && res.taskIds?.length && !res.taskIds.some((id) => present.has(id))) {
+              nextConv[infoKey] = { state: "ingestDone" }
+              changed = true
+            } else {
+              nextConv[infoKey] = res
+            }
+          }
+          next[convId] = nextConv
+        }
+        return changed ? next : prev
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [hasIngesting])
 
   const abortRef = useRef<AbortController | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -166,14 +284,24 @@ export function ChatPanel({
 
   const handleSend = useCallback(
     async (text: string, questionTypeId?: string, useEmbedding?: boolean) => {
-      // The v2 section provider currently has deterministic lexical retrieval;
-      // retain this argument for the ChatInput contract until its embedding
-      // provider is added without resurrecting file-search fallback.
-      void useEmbedding
+      // Step 13: `useEmbedding` (the ChatInput toggle) gates the section
+      // provider's embedding merge. It does NOT resurrect the retired
+      // file-search path — it only hands section-search the embedding config.
       // Auto-create a conversation if none is active
       let convId = useStore.getState().activeConversationId
       if (!convId) {
         convId = createConversation()
+      }
+
+      // Remember the question + type so the last answer's back-questions can be
+      // parsed against this type's keys and a resend can replay them (Step 11).
+      // An info-answer send (a tagged form submission) is NOT the original
+      // question — keep the recorded question so a later file/link resend still
+      // replays the real question, not the answer.
+      const convIdForRecord = convId
+      setLastTypeByConversation((prev) => ({ ...prev, [convIdForRecord]: questionTypeId ?? "" }))
+      if (!parseInfoAnswer(text)) {
+        setLastQuestionByConversation((prev) => ({ ...prev, [convIdForRecord]: text }))
       }
 
       addMessage("user", text)
@@ -205,20 +333,78 @@ export function ChatPanel({
         const pp = normalizePath(project.path)
 
         // Section retrieval is the sole document input for Chat. `useEmbedding`
-        // is deliberately not used to re-enable the retired file-search path.
+        // only toggles the embedding merge inside section-search (Step 13); it
+        // never re-enables the retired file-search path.
         // Prefixes are UI-only; resolve them once to stable graph IDs and
         // give the exact same allowlist to document traversal and graph context.
         const allowedGraphIds = await resolveAllowedGraphIds(pp, graphPrefixFilter)
-        const sectionCandidates = await searchSectionCandidates(pp, text, allowedGraphIds)
 
-        // Preserve graph empty-state behavior, but do not inject graph output
-        // as a second, uncitable document source.
-        const graphBlocks = await getGraphContext(text, pp, project.name, llmConfig, allowedGraphIds)
+        // Resolve the selected question type's retrieval hints (§3.1). Absent
+        // block / unselected type → no hints → prior lexical-only behavior.
+        const qt = questionTypeId ? (await loadQuestionTypes(pp)).find((t) => t.id === questionTypeId) : undefined
+        const hints = qt?.retrieval
+        const graphExpand = hints?.graphExpand ?? 0
+        const allowedPredicates = hints?.predicateAxes ? predicatesForAxes(hints.predicateAxes) : undefined
+
+        // Answer-scope content filter (Step 07). Only applies when the type
+        // opts in AND the user picked a scope for this conversation; otherwise
+        // undefined so retrieval keeps its whole-graph behavior. Enforced as a
+        // retrieval filter (below), not a prompt request.
+        const scope = hints?.scope === "selectable" ? scopeByConversation[convId] : undefined
+        const allowedPageIds = scope?.pageIds.length ? scope.pageIds : undefined
+        const allowedEntityIds = scope?.entityIds.length ? scope.entityIds : undefined
+        // Graph-unit scope narrows the resolved graph allowlist directly.
+        const scopedGraphIds = scope?.graphIds.length
+          ? allowedGraphIds.filter((id) => scope.graphIds.includes(id))
+          : allowedGraphIds
+
+        // Graph context is fetched first so `seed: llm_entities` can reuse the
+        // entities the relevance prompt already extracted (no extra LLM call).
+        const graphContext = await getGraphContextWithEntities(text, pp, project.name, llmConfig, scopedGraphIds, { allowedPageIds, allowedEntityIds })
+        const graphBlocks = graphContext.blocks
         const noGraphContext = graphBlocks.length === 0
+
+        // seed: llm_entities — resolve extracted entity names to entity IDs via
+        // alias exact-match and hand them to traversal as seeds.
+        let seedEntityIds: string[] | undefined
+        if (hints?.seed === "llm_entities" && graphContext.entities.length > 0) {
+          const resolved = await Promise.all(graphContext.entities.map((name) => findKnowledgeEntities(pp, name)))
+          const ids = new Set<string>()
+          for (let i = 0; i < resolved.length; i++) {
+            const wanted = graphContext.entities[i].trim().toLocaleLowerCase()
+            for (const match of resolved[i]) {
+              if (match.canonicalName.trim().toLocaleLowerCase() === wanted) ids.add(match.entityId)
+            }
+          }
+          if (ids.size > 0) seedEntityIds = Array.from(ids)
+        }
+
+        const { candidates: sectionCandidates, graphPaths } = await searchSectionCandidatesWithPaths(pp, text, scopedGraphIds, { graphExpand, allowedPredicates, seedEntityIds, allowedPageIds, allowedEntityIds, embeddingConfig: useEmbedding ? embeddingConfig : undefined })
+        void (graphPaths satisfies GraphPath[])
+
         citationEntries = issueCitationMap(sectionCandidates as SectionCandidate[])
         const noRelevantDocs = citationEntries.length === 0
 
         const outLang = getOutputLanguage(text)
+
+        // Graph Paths block (Step 03/04). graphPaths is only populated when the
+        // question type declares graphExpand > 0; empty otherwise, so the
+        // existing noGraphContext empty-state rules still apply unchanged.
+        const graphPathsBlock = buildGraphPathsBlock(graphPaths, citationEntries)
+
+        // Previous Versions block (Step 08) — gated ONLY by the type's
+        // `include_history` flag. The "current" side of the comparison is the
+        // working tree (Citation Sections above); the past side is read at the
+        // conversation's selected commit (Step 09) or, absent a selection, at
+        // each file's most recent content-changing commit. No commits (Sync
+        // never ran) → empty block → the prompt's "past unavailable" rule.
+        let previousVersionsBlock = ""
+        if (hints?.includeHistory && citationEntries.length > 0) {
+          try {
+            const previous = await collectPreviousVersions(pp, citationEntries, historyPointByConversation[convId] ?? null)
+            previousVersionsBlock = buildPreviousVersionsBlock(previous)
+          } catch { /* history is best-effort; the current-state answer still works */ }
+        }
 
         systemMessages.push({
             role: "system",
@@ -237,9 +423,14 @@ export function ChatPanel({
               "- If the user's message contains multiple distinct questions, answer each one separately and clearly (e.g. numbered or with a short heading per question) rather than blending them into a single combined answer.",
               "- Cite only with the exact marker syntax [[CIT:key]] for an issued key. Never invent a key, page ID, path, or quote.",
               "",
-              "Use markdown formatting for clarity.",
+              // When a question type is selected the answer must be JSON (see the
+              // Answer Format section below); the free-form markdown instruction
+              // would conflict, so it is emitted only for general questions.
+              qt ? "" : "Use markdown formatting for clarity.",
               "",
               `## Citation Sections\n\n${citationPrompt(citationEntries)}`,
+              graphPathsBlock,
+              previousVersionsBlock,
               "",
               "---",
               "",
@@ -257,24 +448,31 @@ export function ChatPanel({
         // (after history so it's the last system instruction the LLM sees).
         langReminder = buildLanguageReminder(text)
 
-        // Inject Answer Format section if a question type is selected
-        if (questionTypeId) {
-          const allTypes = await loadQuestionTypes(pp)
-          const qt = allTypes.find((t) => t.id === questionTypeId)
-          if (qt) {
+        // Inject Answer Format section if a question type is selected. The
+        // answer is forced to a single JSON object keyed by the type's fields
+        // (Step 05 §3.4) — no markdown answer, no {{...}} placeholder templating.
+        if (qt) {
+          {
             const formatLines: string[] = ["", "## Answer Format"]
-            if (qt.fields && Object.keys(qt.fields).length > 0) {
-              formatLines.push("Your answer must include each of the following fields:")
-              for (const [key, desc] of Object.entries(qt.fields)) {
-                formatLines.push(`- **${key}**: ${desc}`)
+            const keys = qt.fields ? Object.keys(qt.fields) : []
+            if (keys.length > 0) {
+              formatLines.push("Return ONLY a single JSON object with these keys (no prose before or after, no code fence):")
+              for (const [key, desc] of Object.entries(qt.fields!)) {
+                formatLines.push(`- "${key}": ${desc}`)
               }
+              formatLines.push("Each value is a markdown string. Put [[CIT:key]] citation markers inside the relevant field values.")
             }
             if (qt.promptTemplate) {
               formatLines.push("", qt.promptTemplate)
             }
+            // Input contract (Step 10): required_info judgment + information_requests
+            // schema, plus the keys the user already marked unavailable (Step 11)
+            // so the model does not re-ask them.
+            const unavailableKeys = unavailableInfoByConversation[convId]?.[questionTypeId!] ?? []
+            const requiredInfoPrompt = buildRequiredInfoPrompt(qt.requiredInfo, unavailableKeys)
             const sysMsg = systemMessages[systemMessages.length - 1]
             if (sysMsg) {
-              sysMsg.content = sysMsg.content + formatLines.join("\n")
+              sysMsg.content = sysMsg.content + formatLines.join("\n") + requiredInfoPrompt
             }
           }
         }
@@ -335,7 +533,7 @@ export function ChatPanel({
         controller.signal,
       )
     },
-    [llmConfig, addMessage, setStreaming, appendStreamToken, finalizeStream, createConversation, maxHistoryMessages, useStore, graphPrefixFilter],
+    [llmConfig, embeddingConfig, addMessage, setStreaming, appendStreamToken, finalizeStream, createConversation, maxHistoryMessages, useStore, graphPrefixFilter, scopeByConversation, historyPointByConversation, unavailableInfoByConversation],
   )
 
   const handleStop = useCallback(() => {
@@ -368,17 +566,125 @@ export function ChatPanel({
     handleSend(lastUserMsg.content)
   }, [isStreaming, removeLastAssistantMessage, handleSend, useStore])
 
+  // ── Inline back-question form handlers (Step 11) ──────────────────────────
+  // A text/choice answer becomes a tagged user message and drives the next
+  // turn; the LLM sees its own question + this answer in history (§2/§3).
+  const handleInfoAnswer = useCallback((infoKey: string, answer: string) => {
+    const convId = useStore.getState().activeConversationId
+    if (!convId) return
+    setInfoResolution(convId, infoKey, { state: "answered" })
+    handleSend(formatInfoAnswer(infoKey, answer), lastTypeByConversation[convId] || undefined)
+  }, [useStore, handleSend, lastTypeByConversation, setInfoResolution])
+
+  // Marking every open request unavailable closes the ask-loop: the tagged
+  // message + the Step 10 prompt's "don't re-ask" rule let the next turn
+  // answer within what it has and state the limitation (§4).
+  const handleInfoUnavailable = useCallback((infoKey: string) => {
+    const convId = useStore.getState().activeConversationId
+    if (!convId) return
+    const typeId = lastTypeByConversation[convId] || ""
+    if (typeId) markInfoUnavailable(typeId, infoKey)
+    setInfoResolution(convId, infoKey, { state: "unavailable" })
+    handleSend(formatInfoAnswer(infoKey, "", true), typeId || undefined)
+  }, [useStore, handleSend, lastTypeByConversation, markInfoUnavailable, setInfoResolution])
+
+  // file/link answers reuse the existing raw-injection queue and DON'T re-run
+  // the question automatically (§5) — resolution goes to "ingesting", then the
+  // completion watcher flips it to "ingestDone" (badge + resend).
+  const handleInfoLink = useCallback(async (infoKey: string, url: string) => {
+    const proj = useWikiStore.getState().project
+    const convId = useStore.getState().activeConversationId
+    if (!proj || !convId) return
+    setInfoResolution(convId, infoKey, { state: "ingesting" })
+    try {
+      const taskId = await injectLinkAnswer(normalizePath(proj.path), proj.id, url)
+      setInfoResolution(convId, infoKey, { state: "ingesting", taskIds: [taskId] })
+    } catch (err) {
+      console.error("[chat] link answer injection failed:", err)
+      setInfoResolution(convId, infoKey, null)
+    }
+  }, [useStore, setInfoResolution])
+
+  const handleInfoFile = useCallback(async (infoKey: string, paths: string[]) => {
+    const proj = useWikiStore.getState().project
+    const convId = useStore.getState().activeConversationId
+    if (!proj || !convId) return
+    setInfoResolution(convId, infoKey, { state: "ingesting" })
+    try {
+      const taskIds = await injectFileAnswers(normalizePath(proj.path), proj.id, paths)
+      setInfoResolution(convId, infoKey, { state: "ingesting", taskIds })
+    } catch (err) {
+      console.error("[chat] file answer injection failed:", err)
+      setInfoResolution(convId, infoKey, null)
+    }
+  }, [useStore, setInfoResolution])
+
+  // Resend replays the original question with the same type once ingest is in
+  // (§5). The freshly ingested content is now retrievable, so it can surface
+  // as a citation this turn.
+  const handleInfoResend = useCallback(() => {
+    const convId = useStore.getState().activeConversationId
+    if (!convId) return
+    const question = lastQuestionByConversation[convId]
+    if (!question) return
+    handleSend(question, lastTypeByConversation[convId] || undefined)
+  }, [useStore, handleSend, lastQuestionByConversation, lastTypeByConversation])
+
+  // Parse the last assistant message's information_requests against the type
+  // this conversation asked with, so the forms render below that answer card.
+  const lastAssistant = [...activeMessages].reverse().find((m) => m.role === "assistant")
+  const activeType = activeConversationId ? questionTypes.find((t) => t.id === lastTypeByConversation[activeConversationId]) : undefined
+  const activeRequests = lastAssistant && activeType?.requiredInfo
+    ? parseInformationRequests(parseJsonAnswer(lastAssistant.content), Object.keys(activeType.requiredInfo))
+    : []
+  const activeResolutions = activeConversationId ? (infoResolutions[activeConversationId] ?? {}) : {}
+
   return (
     <div className="flex h-full flex-row overflow-hidden">
       <ConversationSidebar useStore={useStore} />
 
       <div className="flex flex-1 flex-col overflow-hidden min-w-0">
         {!activeConversationId ? (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground">
-            <div className="text-center">
+          <div className="flex flex-1 items-center justify-center overflow-y-auto p-6 text-muted-foreground">
+            <div className="w-full max-w-2xl text-center">
               <MessageSquare className="mx-auto mb-3 h-8 w-8 opacity-30" />
               <p className="text-sm">Start a new conversation</p>
-              <p className="mt-1 text-xs opacity-60">Click "New Chat" to begin</p>
+              <p className="mt-1 text-xs opacity-60">Type below, or pick a question type to focus the answer</p>
+
+              {questionTypes.length > 0 && (
+                <div className="mt-6 grid grid-cols-1 gap-2 text-left sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTypeId("")}
+                    className={`rounded-lg border p-3 text-xs transition-colors ${
+                      selectedTypeId === ""
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border hover:bg-accent"
+                    }`}
+                  >
+                    <div className="font-medium">General question</div>
+                    <div className="mt-0.5 opacity-60">No specific answer format</div>
+                  </button>
+                  {questionTypes.map((qt) => (
+                    <button
+                      key={qt.id}
+                      type="button"
+                      onClick={() => setSelectedTypeId(qt.id)}
+                      title={qt.description}
+                      className={`rounded-lg border p-3 text-xs transition-colors ${
+                        selectedTypeId === qt.id
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:bg-accent"
+                      }`}
+                    >
+                      <div className="font-medium line-clamp-2">{qt.name}</div>
+                      {qt.description && (
+                        <div className="mt-0.5 line-clamp-2 opacity-60">{qt.description}</div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -402,6 +708,19 @@ export function ChatPanel({
                   )
                 })}
                 {isStreaming && <StreamingMessage content={streamingContent} />}
+                {!isStreaming && activeRequests.length > 0 && (
+                  <ChatInfoForms
+                    requests={activeRequests}
+                    resolutions={activeResolutions}
+                    onAnswer={handleInfoAnswer}
+                    onUnavailable={handleInfoUnavailable}
+                    onLink={handleInfoLink}
+                    onFile={handleInfoFile}
+                    onResend={handleInfoResend}
+                    projectPath={project ? normalizePath(project.path) : undefined}
+                    disabled={isStreaming}
+                  />
+                )}
                 <div ref={bottomRef} />
               </div>
             </div>
@@ -414,6 +733,15 @@ export function ChatPanel({
           isStreaming={isStreaming}
           projectPath={project ? normalizePath(project.path) : undefined}
           placeholder="Type a message..."
+          questionTypes={questionTypes}
+          selectedTypeId={selectedTypeId}
+          onSelectType={setSelectedTypeId}
+          scopeSelectable={scopeSelectable}
+          scopeSelection={activeScope}
+          onScopeChange={setActiveScope}
+          historySelectable={historySelectable}
+          historyPoint={activeHistoryPoint}
+          onHistoryPointChange={setActiveHistoryPoint}
         />
       </div>
 

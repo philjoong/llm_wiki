@@ -15,6 +15,8 @@ import { withProjectLock } from "@/lib/project-mutex"
 import { buildLanguageDirective } from "@/lib/output-language"
 import { detectLanguage } from "@/lib/detect-language"
 import { parseSourceRefs, SourceRefValidationError } from "@/lib/sources-merge"
+import { stripCodeFence } from "@/lib/json-answer"
+import { PREDICATE_AXES } from "@/lib/knowledge/predicate-axes"
 import { listKnowledgeGraphs, listKnowledgeRelationTypes, discardSectionAssertions, registerGraph } from "@/commands/knowledge"
 import {
   loadRejectionLog,
@@ -28,7 +30,7 @@ import { createPageId, createSectionId } from "@/lib/knowledge/ids"
 import { parseMarkdownV2, reconcileMarkdownV2, serializeMarkdownV2 } from "@/lib/markdown-v2"
 import { commitMarkdownV2Page, commitMarkdownV2Pages } from "@/lib/ingest-v2"
 import type { IngestAssertionWrite } from "@/commands/knowledge"
-import { ENTITY_TYPES, type EntityType } from "@/lib/knowledge/vocabularies"
+import { ENTITY_TYPES, PAGE_TYPES, type EntityType, type PageType } from "@/lib/knowledge/vocabularies"
 
 // Legacy export kept for backward compatibility with existing diagnostic
 // tests. The live pipeline goes through parseFileBlocks() below, which
@@ -321,6 +323,21 @@ export function parseDecomposedSections(text: string): DecomposedSection[] {
     }
     i++ // consume opener
 
+    // Optional header lines directly after the opener: `key: value` pairs
+    // (title/summary/page_type/heading), terminated by the first blank line.
+    // The blank line separates metadata from the VERBATIM body below it.
+    // Absent headers → all undefined, preserving the legacy shape.
+    const header: Record<string, string> = {}
+    let sawHeader = false
+    while (i < lines.length) {
+      const line = lines[i]
+      if (SECTION_CLOSER_LINE.test(line)) break
+      const match = /^(title|summary|page_type|heading):\s*(.*)$/i.exec(line)
+      if (match) { header[match[1].toLowerCase()] = match[2].trim(); sawHeader = true; i++; continue }
+      if (sawHeader && line.trim() === "") { i++ } // consume the one blank separator
+      break
+    }
+
     const bodyLines: string[] = []
     while (i < lines.length) {
       if (SECTION_CLOSER_LINE.test(lines[i])) {
@@ -333,7 +350,15 @@ export function parseDecomposedSections(text: string): DecomposedSection[] {
 
     const sourceText = bodyLines.join("\n").trim()
     if (sourceText.length === 0) continue // too thin to be meaningful
-    sections.push({ source_range: sourceRange, source_text: sourceText, page_path: pagePath })
+    sections.push({
+      source_range: sourceRange,
+      source_text: sourceText,
+      page_path: pagePath,
+      ...(header.title ? { title: header.title } : {}),
+      ...(header.summary ? { summary: header.summary } : {}),
+      ...(header.page_type ? { page_type: header.page_type } : {}),
+      ...(header.heading ? { heading: header.heading } : {}),
+    })
   }
 
   return sections
@@ -492,7 +517,7 @@ export async function autoIngest(
  *    their own devices, so we spawn them with tools disabled and lean on
  *    the prompt's explicit "JSON only" instruction instead.
  */
-async function callModel(
+export async function callModel(
   llmConfig: LlmConfig,
   systemPrompt: string,
   userContent: string,
@@ -698,8 +723,21 @@ export async function autoIngestImpl(
         // would fail this chunk instead of writing a file — this branch fixes
         // the path up front so exactly one document is produced per
         // (data type, source file), instead of relying on the LLM to assign one.
+        // Data type is a single-document guarantee, so we set the display
+        // metadata deterministically from the data-type definition (data_spec:
+        // subject + attribute) rather than asking the LLM to name it.
         const dataTypePagePath = `db/${dataTypeId}/${slugifyForPagePath(fileName)}.md`
-        decompositionRaw = `---SECTION: ${fileName} | ${dataTypePagePath}---\n${decompositionRaw}\n---END SECTION---`
+        const dataSubject = getFileName(fileName).replace(/\.[^.]+$/, "").trim() || dataType.name
+        const dataTitle = `${dataSubject} - ${dataType.name}`.slice(0, 40)
+        decompositionRaw = [
+          `---SECTION: ${fileName} | ${dataTypePagePath}---`,
+          `title: ${dataTitle}`,
+          `summary: ${dataType.name} data extracted from ${getFileName(fileName)}`,
+          `page_type: data_spec`,
+          ``,
+          decompositionRaw,
+          `---END SECTION---`,
+        ].join("\n")
       } else {
         const msg = `Data type "${dataTypeId}" not found. Ingest stopped instead of falling back to standard decomposition.`
         console.warn(`[ingest] ${msg}`)
@@ -896,7 +934,7 @@ export async function autoIngestImpl(
   const embCfg = useWikiStore.getState().embeddingConfig
   if (embCfg.enabled && embCfg.model && allWrittenPaths.length > 0) {
     try {
-      const { embedPage, pageIdFromRelPath } = await import("@/lib/embedding")
+      const { embedPage } = await import("@/lib/embedding")
       for (const wpath of allWrittenPaths) {
         // Only db/ pages are indexed. Pending proposal drafts and any
         // other non-db paths are skipped — they aren't retrieval targets.
@@ -907,9 +945,13 @@ export async function autoIngestImpl(
           wpath === "db/log.md" ||
           wpath === "db/overview.md"
         if (!stem || isStructural) continue
-        const pageId = pageIdFromRelPath(wpath)
         try {
           const content = await readFile(`${pp}/${wpath}`)
+          // Step 13: index under the v2 ULID page_id so retrieval can map an
+          // embedding hit straight back to its knowledge page. Non-v2 files
+          // can't become a Chat citation candidate anyway, so skip them.
+          const parsed = parseMarkdownV2(content)
+          const pageId = parsed.page.page_id
           const titleMatch = content.match(/^---\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m)
           const title = titleMatch ? titleMatch[1].trim() : pageId
           await embedPage(pp, pageId, title, content, embCfg)
@@ -1222,6 +1264,16 @@ export interface DecomposedSection {
   source_range: string
   source_text: string
   page_path?: string
+  /**
+   * Display-quality metadata the decomposer generates alongside the verbatim
+   * body (see the naming rules in `buildDecompositionPrompt`). All optional:
+   * an older/truncated response without them falls back deterministically in
+   * `buildFileBlocksFromSections`.
+   */
+  title?: string
+  summary?: string
+  page_type?: string
+  heading?: string
 }
 
 export async function extractKnowledgeAssertionWrites(
@@ -1245,6 +1297,7 @@ export async function extractKnowledgeAssertionWrites(
     "graphName must be lower snake_case shaped as {purpose}_{subjectType}_{action}_{objectType} — e.g. combat_character_attacks_enemy, quest_npc_gives_item.",
     purposePrefixes.length?`Reuse an existing purpose prefix when one fits: ${purposePrefixes.join(", ")}.`:"",
     "Predicates must be uppercase snake case. Reuse an existing predicate when it fits; a new predicate requires a precise relationDescription.",
+    `When elements have a dependency or impact relationship, extract it with one of these dependency-axis predicates: ${PREDICATE_AXES.dependency.join(" / ")}. This is in addition to (not a replacement for) the naming rules above.`,
     `Entity types must be one of: ${ENTITY_TYPES.join(", ")}. Do not emit scalar values as entities.`,
     "Entity names must be the canonical short name of the entity: strip parenthetical qualifiers, appositives, honorifics, and trailing particles; do not append descriptive modifiers. The SAME real-world entity must get the SAME exact string every time so it deduplicates across sections.",
     "Return only JSON: {\"assertions\":[{\"targetKey\":\"page:section\",\"graphId\":\"...\",\"newGraph\":false,\"graphName\":\"...\",\"subjectName\":\"...\",\"subjectType\":\"concept\",\"predicate\":\"...\",\"relationDescription\":\"...\",\"objectName\":\"...\",\"objectType\":\"concept\",\"quote\":\"exact supporting text\"}]}",
@@ -1253,7 +1306,7 @@ export async function extractKnowledgeAssertionWrites(
   ].filter(Boolean).join("\n")
   const raw=await callModel(llmConfig,"You produce validated knowledge graph write plans.",prompt,signal,projectPath,12000,true)
   let parsed:unknown
-  try{parsed=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,"").replace(/```\s*$/, ""))}catch{throw new Error("VALIDATION_FAILED: graph assignment was not valid JSON")}
+  try{parsed=JSON.parse(stripCodeFence(raw))}catch{throw new Error("VALIDATION_FAILED: graph assignment was not valid JSON")}
   const values=(parsed as {assertions?:unknown[]}).assertions
   if(!Array.isArray(values))throw new Error("VALIDATION_FAILED: graph assignment has no assertions array")
   const byKey=new Map(targets.map((target)=>[target.key,target]))
@@ -1297,9 +1350,31 @@ export function buildDecompositionPrompt(dbIndex: string, sourceContent = "", di
     "Do not infer stable IDs; IDs are generated and reconciled by the Markdown v2 pipeline.",
     languageRule(sourceContent),
     "Output only blocks shaped as:",
-    "---SECTION: heading range | db/category/page.md---",
-    "<verbatim source text>",
-    "---END SECTION---",
+    [
+      "---SECTION: source range | db/category/page.md---",
+      "title: <page display name>",
+      "summary: <one sentence describing the page>",
+      "page_type: <one of: ui_spec, feature_spec, system_spec, data_spec, guide, reference>",
+      "heading: <section display name>",
+      "",
+      "<verbatim source text>",
+      "---END SECTION---",
+    ].join("\n"),
+    // Naming rules — title/heading are DISPLAY strings, not IDs. Their job is
+    // "understand the content from the name alone", not machine identity.
+    [
+      "## title rule (adaptive, at most 4 elements)",
+      "Order when all used: `subject - occurrence - role - attribute` joined by ` - ` (space-hyphen-space).",
+      "- subject: the primary thing the page is about (e.g. 결과 모달, 캐릭터 스탯).",
+      "- occurrence: the situation/context it appears in (e.g. 전투 종료 시).",
+      "- role: the function it serves there (e.g. 보상 표시).",
+      "- attribute: one main characteristic (e.g. 중앙 모달, 정수 필드).",
+      "4 elements is the MAX, not the default. Use the subject alone when it already identifies the page; add later elements left-to-right ONLY to disambiguate similar pages. Keep titles under ~40 chars; drop from the right if longer. Do not pack two meanings into one element.",
+      "Defaults per page_type: ui_spec/feature_spec/system_spec/guide/reference → subject alone (extend only when ambiguous); data_spec → subject (+ attribute to distinguish schemas of the same subject).",
+      "## heading rule",
+      "heading is the section's LOCAL topic. Do NOT repeat the page title and do NOT write the section_type literally. Shape: `대상 - 다루는 측면` (e.g. 결과 모달 - 레이아웃, 확인 버튼 - 전환 동작). For a single-section page or when the subject IS the page, the aspect alone is fine (개요, 레이아웃).",
+      "title and heading follow the source language, same as the body.",
+    ].join("\n"),
     dbIndex ? `## Current db/ index\n${dbIndex}` : "## Current db/ index\n(empty)",
     dismissalContext,
   ].filter(Boolean).join("\n\n")
@@ -1361,6 +1436,37 @@ export async function reIngestDocument(
  * page_path are merged into one FILE block (first section wins for
  * frontmatter; subsequent source_text is appended).
  */
+/** Max title length before we drop trailing ` - ` elements (naming rule). */
+const MAX_TITLE_CHARS = 40
+
+/**
+ * Validate/coerce an LLM-provided display title. Rejects empty/overlong values
+ * and trims stray separators; returns null so the caller can fall back to a
+ * readable source-derived name rather than a file path.
+ */
+function validateTitle(raw: string | undefined): string | null {
+  const title = (raw ?? "").trim().replace(/\s*-\s*$/, "").replace(/^\s*-\s*/, "")
+  if (!title) return null
+  if (title.length <= MAX_TITLE_CHARS) return title
+  // Over length: drop ` - ` elements from the right until it fits.
+  const parts = title.split(" - ")
+  while (parts.length > 1 && parts.join(" - ").length > MAX_TITLE_CHARS) parts.pop()
+  return parts.join(" - ").slice(0, MAX_TITLE_CHARS).trim() || null
+}
+
+/** Human-readable fallback name from a source heading range or the file name. */
+function fallbackTitle(sourceRange: string, fileName: string): string {
+  const fromRange = (sourceRange || "").replace(/^#+\s*/, "").trim()
+  if (fromRange) return fromRange.slice(0, MAX_TITLE_CHARS)
+  return getFileName(fileName).replace(/\.[^.]+$/, "").trim() || "Untitled"
+}
+
+/** LLM page_type or `guide` fallback when it is missing/outside the vocabulary. */
+function validatePageType(raw: string | undefined): PageType {
+  const value = (raw ?? "").trim()
+  return (PAGE_TYPES as readonly string[]).includes(value) ? (value as PageType) : "guide"
+}
+
 export function buildFileBlocksFromSections(
   sections: DecomposedSection[],
   fileName: string,
@@ -1380,10 +1486,14 @@ export function buildFileBlocksFromSections(
   const blocks: string[] = []
   for (const [pagePath, group] of groups) {
     const first = group[0]
-    const title = first.source_range || pagePath
+    // Prefer the LLM's validated display name; fall back to a readable source
+    // heading / file name (never the raw page path or source_range locator).
+    const title = validateTitle(first.title) ?? fallbackTitle(first.source_range, fileName)
+    const summary = first.summary?.trim() || `Generated from ${fileName}`
+    const pageType = validatePageType(first.page_type)
     const sections = group.map((section, ordinal) => ({
       sectionId: createSectionId(),
-      headingText: `Section ${ordinal + 1}`,
+      headingText: section.heading?.trim() || `Section ${ordinal + 1}`,
       headingLevel: 2 as const,
       ordinal,
       metadata: { section_type: "overview" as const },
@@ -1398,8 +1508,8 @@ export function buildFileBlocksFromSections(
         schema: "llm-wiki/page/v2",
         page_id: createPageId(),
         title,
-        page_type: "guide",
-        summary: `Generated from ${fileName}`,
+        page_type: pageType,
+        summary,
         sections: Object.fromEntries(sections.map((section) => [section.sectionId, section.metadata])),
       },
       h1: title,

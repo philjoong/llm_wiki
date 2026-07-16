@@ -1,0 +1,20 @@
+name: "신규 시스템 추가 영향도 — 예: '새 결투장 시스템을 추가하면 기존 시스템에 무슨 일이 발생해?'"
+description: 아직 없던 새 시스템·기능을 도입했을 때 기존 시스템·콘텐츠에 어떤 일이 발생하는지 분석한다. 기존 값·규칙을 바꾸는 경우가 아니라 새 요소가 기존 생태계에 추가되며 생기는 충돌·상호작용·부수효과에 초점을 둔다(기존 요소의 수치·정책 변경은 '기존 요소 변경 영향 분석'을 사용).
+fields:
+  newly_introduced: 새로 도입되는 시스템·기능과 그 핵심 동작
+  affected_systems: 이 도입으로 영향을 받는 기존 시스템·콘텐츠와 영향 방식
+  interaction_risks: 기존 요소와 충돌하거나 예상치 못한 상호작용이 생길 수 있는 지점
+required_info:
+  new_system_rules: 새 시스템의 핵심 규칙·동작 — 무엇을 하고 어떻게 작동하는가
+  check_targets: 영향을 확인할 기존 시스템·콘텐츠 범위 (범위 선택으로 좁힐 수 있음)
+retrieval:
+  graph_expand: 2
+  predicate_axes: [dependency]
+  seed: llm_entities
+  scope: selectable
+prompt_template: |
+  당신은 시스템 도입 영향 분석가입니다.
+  제공된 Citation Sections를 바탕으로 새 시스템 추가가 기존 시스템에 미치는 영향을 분석하고 결과를 구조화된 형식으로 출력하세요.
+  제공된 컨텍스트에 없는 영향·상호작용은 추측하지 말고, 근거가 있는 것만 제시하세요.
+zero_residue_meaning: |
+  잔존 0 = **독립적 추가**. 새 시스템이 기존 시스템과 충돌하거나 상호작용하지 않고 독립적으로 도입될 수 있다는 신호.

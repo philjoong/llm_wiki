@@ -140,6 +140,66 @@ describe("loadQuestionTypes", () => {
   })
 })
 
+describe("retrieval hints parsing (§3.1)", () => {
+  it("parses the closed flag set from a YAML retrieval block", async () => {
+    mockProjectDir([makeFile("new_system_impact.yaml")])
+    mockReadFile.mockResolvedValueOnce(
+      [
+        "name: 신규 시스템 추가 영향도",
+        "description: d",
+        "fields:",
+        "  newly_introduced: x",
+        "retrieval:",
+        "  graph_expand: 2",
+        "  predicate_axes: [dependency]",
+        "  seed: llm_entities",
+        "  scope: selectable",
+      ].join("\n"),
+    )
+    const qt = (await loadQuestionTypes("/proj")).find((q) => q.id === "new_system_impact")!
+    expect(qt.retrieval).toEqual({ graphExpand: 2, predicateAxes: ["dependency"], seed: "llm_entities", scope: "selectable" })
+  })
+
+  it("ignores unknown keys and yields undefined for types without a retrieval block", async () => {
+    mockProjectDir([makeFile("change_impact.yaml"), makeFile("plain.yaml")])
+    mockReadFile.mockResolvedValueOnce(
+      ["name: 변경 영향", "description: d", "retrieval:", "  graph_expand: 2", "  bogus_key: 9"].join("\n"),
+    )
+    mockReadFile.mockResolvedValueOnce(["name: 그냥", "description: d"].join("\n"))
+    const out = await loadQuestionTypes("/proj")
+    expect(out.find((q) => q.id === "change_impact")?.retrieval).toEqual({ graphExpand: 2 })
+    expect(out.find((q) => q.id === "plain")?.retrieval).toBeUndefined()
+  })
+})
+
+describe("required_info parsing (Step 10)", () => {
+  it("loads the required_info block as an info_key -> description map", async () => {
+    mockProjectDir([makeFile("change_impact.yaml")])
+    mockReadFile.mockResolvedValueOnce(
+      [
+        "name: 변경 영향",
+        "description: d",
+        "required_info:",
+        "  change_target: 무엇을 변경하는가",
+        "  change_detail: 어떻게 변경하는가",
+      ].join("\n"),
+    )
+    const qt = (await loadQuestionTypes("/proj")).find((q) => q.id === "change_impact")!
+    expect(qt.requiredInfo).toEqual({ change_target: "무엇을 변경하는가", change_detail: "어떻게 변경하는가" })
+  })
+
+  it("drops non-string values and yields undefined for a missing block", async () => {
+    mockProjectDir([makeFile("with_bad.yaml"), makeFile("plain.yaml")])
+    mockReadFile.mockResolvedValueOnce(
+      ["name: x", "description: d", "required_info:", "  good: 설명", "  bad: 123"].join("\n"),
+    )
+    mockReadFile.mockResolvedValueOnce(["name: 그냥", "description: d"].join("\n"))
+    const out = await loadQuestionTypes("/proj")
+    expect(out.find((q) => q.id === "with_bad")?.requiredInfo).toEqual({ good: "설명" })
+    expect(out.find((q) => q.id === "plain")?.requiredInfo).toBeUndefined()
+  })
+})
+
 describe("parseFrontmatter", () => {
   it("returns empty fm + raw body when no frontmatter is present", () => {
     const { fm, body } = parseFrontmatter("# Hello\nbody")

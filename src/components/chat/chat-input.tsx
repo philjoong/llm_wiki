@@ -1,8 +1,10 @@
 import { useRef, useState, useCallback, useEffect } from "react"
 import { Send, Square, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { loadQuestionTypes, type QuestionType } from "@/lib/question-types"
+import { type QuestionType } from "@/lib/question-types"
 import { useWikiStore } from "@/stores/wiki-store"
+import { ChatScopeSelector, type ChatScopeSelection } from "./chat-scope-selector"
+import { ChatHistoryPicker, type HistoryPointSelection } from "./chat-history-picker"
 
 interface ChatInputProps {
   onSend: (text: string, questionTypeId?: string, useEmbedding?: boolean) => void
@@ -10,12 +12,30 @@ interface ChatInputProps {
   isStreaming: boolean
   placeholder?: string
   projectPath?: string
+  /** Available question types (loaded once by the parent so the empty-state
+   * panel and this dropdown stay in sync). */
+  questionTypes: QuestionType[]
+  /** Controlled selected question type id, shared with the empty-state panel. */
+  selectedTypeId: string
+  onSelectType: (id: string) => void
+  /** Whether the selected type opts into answer-scope selection
+   * (`retrieval.scope === "selectable"`, Step 07). Gated by the parent so no
+   * type id is hardcoded here. */
+  scopeSelectable: boolean
+  /** Per-conversation scope selection and setter (owned by the parent). */
+  scopeSelection: ChatScopeSelection
+  onScopeChange: (next: ChatScopeSelection) => void
+  /** Whether the selected type opts into history comparison
+   * (`retrieval.include_history === true`, Step 09). Gated by the parent so
+   * no type id is hardcoded here. */
+  historySelectable: boolean
+  /** Per-conversation comparison point and setter (owned by the parent). */
+  historyPoint: HistoryPointSelection
+  onHistoryPointChange: (next: HistoryPointSelection) => void
 }
 
-export function ChatInput({ onSend, onStop, isStreaming, placeholder, projectPath }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isStreaming, placeholder, projectPath, questionTypes, selectedTypeId, onSelectType, scopeSelectable, scopeSelection, onScopeChange, historySelectable, historyPoint, onHistoryPointChange }: ChatInputProps) {
   const [value, setValue] = useState("")
-  const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([])
-  const [selectedTypeId, setSelectedTypeId] = useState<string>("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const embeddingConfig = useWikiStore((s) => s.embeddingConfig)
@@ -28,11 +48,6 @@ export function ChatInput({ onSend, onStop, isStreaming, placeholder, projectPat
   useEffect(() => {
     setUseEmbedding(embeddingAvailable)
   }, [embeddingAvailable])
-
-  useEffect(() => {
-    if (!projectPath) return
-    loadQuestionTypes(projectPath).then(setQuestionTypes).catch(() => {})
-  }, [projectPath])
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value)
@@ -99,6 +114,22 @@ export function ChatInput({ onSend, onStop, isStreaming, placeholder, projectPat
       </div>
       {projectPath && (
         <div className="flex items-center justify-end gap-2 px-3 pb-2">
+          {historySelectable && (
+            <ChatHistoryPicker
+              projectPath={projectPath}
+              value={historyPoint}
+              onChange={onHistoryPointChange}
+              disabled={isStreaming}
+            />
+          )}
+          {scopeSelectable && (
+            <ChatScopeSelector
+              projectPath={projectPath}
+              value={scopeSelection}
+              onChange={onScopeChange}
+              disabled={isStreaming}
+            />
+          )}
           <button
             type="button"
             onClick={() => embeddingAvailable && setUseEmbedding((v) => !v)}
@@ -119,7 +150,7 @@ export function ChatInput({ onSend, onStop, isStreaming, placeholder, projectPat
           </button>
           <select
             value={selectedTypeId}
-            onChange={(e) => setSelectedTypeId(e.target.value)}
+            onChange={(e) => onSelectType(e.target.value)}
             disabled={isStreaming}
             className="w-36 rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           >

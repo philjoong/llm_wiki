@@ -8,6 +8,7 @@ import { confirm } from "@tauri-apps/plugin-dialog"
 import { useActivityStore, type ActivityItem } from "@/stores/activity-store"
 import { useWikiStore } from "@/stores/wiki-store"
 import { normalizePath, getFileName, isAbsolutePath } from "@/lib/path-utils"
+import { usePageTitles, titleForPath } from "@/lib/use-page-titles"
 import { getQueue, getQueueSummary, retryTask, cancelTask, cancelAllTasks, type IngestTask } from "@/lib/ingest-queue"
 
 const FILE_TYPE_ICONS: Record<string, typeof FileText> = {
@@ -250,6 +251,7 @@ function QueueRow({ task, onRetry, onCancel }: { task: IngestTask; onRetry: (id:
 function ActivityRow({ item, onCancel }: { item: ActivityItem; onCancel?: () => void }) {
   const setSelectedFile = useWikiStore((s) => s.setSelectedFile)
   const project = useWikiStore((s) => s.project)
+  const pageTitles = usePageTitles()
 
   function handleFileClick(filePath: string) {
     if (!project) return
@@ -288,7 +290,8 @@ function ActivityRow({ item, onCancel }: { item: ActivityItem; onCancel?: () => 
         <div className="mt-1.5 ml-5 flex flex-col gap-0.5">
           {item.filesWritten.map((filePath) => {
             const { icon: Icon, type } = getFileTypeInfo(filePath)
-            const fileName = getFileName(filePath)
+            const absPath = isAbsolutePath(filePath) || !project ? filePath : `${normalizePath(project.path)}/${filePath}`
+            const displayName = project ? titleForPath(pageTitles, absPath, project.path) : getFileName(filePath)
             return (
               <button
                 key={filePath}
@@ -298,7 +301,7 @@ function ActivityRow({ item, onCancel }: { item: ActivityItem; onCancel?: () => 
               >
                 <Icon className="h-3 w-3 shrink-0" />
                 <span className="text-[10px] font-medium text-muted-foreground/70 w-14 shrink-0">{type}</span>
-                <span className="truncate">{fileName}</span>
+                <span className="truncate" title={displayName}>{displayName}</span>
               </button>
             )
           })}

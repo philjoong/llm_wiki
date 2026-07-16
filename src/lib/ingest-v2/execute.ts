@@ -1,10 +1,10 @@
-import { commitIngestPlan } from "@/commands/knowledge"
+import { commitIngestPlan, type IngestOrigin } from "@/commands/knowledge"
 import { parseMarkdownV2 } from "@/lib/markdown-v2"
 import { hydratePageDocument } from "./hydrate"
 import type { IngestPlan } from "./plan"
 import { validateIngestPlan } from "./validate"
 
-export async function executeIngestPlan(projectPath: string, plan: IngestPlan): Promise<void> {
+export async function executeIngestPlan(projectPath: string, plan: IngestPlan, origin: IngestOrigin = "ingest"): Promise<void> {
   validateIngestPlan(plan)
   // A final parser pass makes execution incapable of accepting a mutated or
   // hand-built document that did not go through the v2 parser.
@@ -20,14 +20,17 @@ export async function executeIngestPlan(projectPath: string, plan: IngestPlan): 
       throw new Error("VALIDATION_FAILED: plan rows do not match parser-validated Markdown v2")
     }
   }
-  await commitIngestPlan(projectPath, plan.operationId, plan.pages, plan.assertions)
+  await commitIngestPlan(projectPath, plan.operationId, plan.pages, plan.assertions, origin)
 }
 
-/** Build and commit several page replacements as one crash-recoverable unit. */
+/** Build and commit several page replacements as one crash-recoverable unit.
+ * `origin` (Step 12) tags the extracted assertions — "user_chat" for the chat
+ * save path, "ingest" (default) for every existing caller. */
 export async function commitMarkdownV2Pages(
   projectPath: string,
   documents: Array<{ relativePath: string; content: string }>,
   assertions: IngestPlan["assertions"] = [],
+  origin: IngestOrigin = "ingest",
 ): Promise<IngestPlan> {
   if (documents.length === 0) throw new Error("VALIDATION_FAILED: ingest plan has no pages")
   const pages = documents.map(({ relativePath, content }) =>
@@ -40,7 +43,7 @@ export async function commitMarkdownV2Pages(
     assertions,
     embeddingJobs: pages.map((page) => ({ pageId: page.page.pageId, pagePath: page.relativePath })),
   }
-  await executeIngestPlan(projectPath, plan)
+  await executeIngestPlan(projectPath, plan, origin)
   return plan
 }
 
